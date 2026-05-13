@@ -1,0 +1,149 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index bef75f0..afe7ac0 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -11,7 +11,11 @@ file(GLOB SRCS
+      )
+ set(COMPONENT_SRCS ${SRCS})
+ 
+-if (IDF_VERSION_MAJOR GREATER_EQUAL 5)
++if (IDF_VERSION_MAJOR GREATER_EQUAL 6)
++    set(COMPONENT_REQUIRES M5GFX esp_adc driver
++        esp_driver_i2c esp_driver_gpio esp_driver_i2s esp_driver_ledc
++        esp_driver_rmt)
++elseif (IDF_VERSION_MAJOR GREATER_EQUAL 5)
+     set(COMPONENT_REQUIRES M5GFX esp_adc driver)
+ else()
+     set(COMPONENT_REQUIRES M5GFX esp_adc_cal)
+diff --git a/src/utility/Mic_Class.cpp b/src/utility/Mic_Class.cpp
+index a3bcedb..9654a2c 100644
+--- a/src/utility/Mic_Class.cpp
++++ b/src/utility/Mic_Class.cpp
+@@ -448,11 +448,11 @@ if (_cfg.pin_bck < 0 || _cfg.pin_ws < 0) {
+ 
+     auto dev = &I2S0;
+ #if SOC_I2S_NUM >= 2
+-    if (self->_cfg.i2s_port == i2s_port_t::I2S_NUM_1) { dev = &I2S1; }
++    if (self->_cfg.i2s_port == (i2s_port_t)I2S_NUM_1) { dev = &I2S1; }
+ #if SOC_I2S_NUM >= 3
+-    else if (self->_cfg.i2s_port == i2s_port_t::I2S_NUM_2) { dev = &I2S2; }
++    else if (self->_cfg.i2s_port == (i2s_port_t)I2S_NUM_2) { dev = &I2S2; }
+ #if SOC_I2S_NUM >= 4
+-    else if (self->_cfg.i2s_port == i2s_port_t::I2S_NUM_3) { dev = &I2S3; }
++    else if (self->_cfg.i2s_port == (i2s_port_t)I2S_NUM_3) { dev = &I2S3; }
+ #endif
+ #endif
+ #endif
+diff --git a/src/utility/Mic_Class.hpp b/src/utility/Mic_Class.hpp
+index b784410..d071eeb 100644
+--- a/src/utility/Mic_Class.hpp
++++ b/src/utility/Mic_Class.hpp
+@@ -20,6 +20,25 @@
+  #include <driver/i2s.h>
+ #endif
+ 
++// IDF 6.0 dropped i2s_port_t / SOC_I2S_NUM / I2S_NUM_MAX. See Speaker_Class.hpp.
++#include <esp_idf_version.h>
++#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
++typedef int i2s_port_t;
++#include <sdkconfig.h>
++#ifndef SOC_I2S_NUM
++ #if defined(CONFIG_IDF_TARGET_ESP32P4)
++  #define SOC_I2S_NUM 3
++ #elif defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32S3)
++  #define SOC_I2S_NUM 2
++ #else
++  #define SOC_I2S_NUM 1
++ #endif
++#endif
++#ifndef I2S_NUM_MAX
++ #define I2S_NUM_MAX SOC_I2S_NUM
++#endif
++#endif
++
+ #endif
+ 
+ #include <stdint.h>
+@@ -92,7 +111,7 @@ namespace m5
+     uint8_t task_pinned_core = -1;
+ 
+     /// I2S port
+-    i2s_port_t i2s_port = i2s_port_t::I2S_NUM_0;
++    i2s_port_t i2s_port = (i2s_port_t)I2S_NUM_0;
+   };
+ 
+   class Mic_Class
+diff --git a/src/utility/Speaker_Class.cpp b/src/utility/Speaker_Class.cpp
+index e4094b9..098a415 100644
+--- a/src/utility/Speaker_Class.cpp
++++ b/src/utility/Speaker_Class.cpp
+@@ -401,11 +401,11 @@ namespace m5
+ 
+     auto dev = &I2S0;
+ #if SOC_I2S_NUM >= 2
+-    if (i2s_port == i2s_port_t::I2S_NUM_1) { dev = &I2S1; }
++    if (i2s_port == (i2s_port_t)I2S_NUM_1) { dev = &I2S1; }
+ #if SOC_I2S_NUM >= 3
+-    else if (i2s_port == i2s_port_t::I2S_NUM_2) { dev = &I2S2; }
++    else if (i2s_port == (i2s_port_t)I2S_NUM_2) { dev = &I2S2; }
+ #if SOC_I2S_NUM >= 4
+-    else if (i2s_port == i2s_port_t::I2S_NUM_3) { dev = &I2S3; }
++    else if (i2s_port == (i2s_port_t)I2S_NUM_3) { dev = &I2S3; }
+ #endif
+ #endif
+ #endif
+diff --git a/src/utility/Speaker_Class.hpp b/src/utility/Speaker_Class.hpp
+index d8c7681..6fafadf 100644
+--- a/src/utility/Speaker_Class.hpp
++++ b/src/utility/Speaker_Class.hpp
+@@ -18,6 +18,28 @@
+  #include <driver/i2s.h>
+ #endif
+ 
++// IDF 6.0 dropped the legacy i2s_port_t enum (I2S_NUM_x are still macros)
++// and removed SOC_I2S_NUM / I2S_NUM_MAX. Provide minimal compat for sources
++// that still reference them (Speaker/Mic). Per-target SOC_I2S_NUM is taken
++// from soc_caps in IDF 5.x; for IDF 6 we hard-code based on chip.
++#include <esp_idf_version.h>
++#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
++typedef int i2s_port_t;
++#include <sdkconfig.h>
++#ifndef SOC_I2S_NUM
++ #if defined(CONFIG_IDF_TARGET_ESP32P4)
++  #define SOC_I2S_NUM 3
++ #elif defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32S3)
++  #define SOC_I2S_NUM 2
++ #else
++  #define SOC_I2S_NUM 1
++ #endif
++#endif
++#ifndef I2S_NUM_MAX
++ #define I2S_NUM_MAX SOC_I2S_NUM
++#endif
++#endif
++
+ #endif
+ 
+ #include <atomic>
+@@ -76,7 +98,7 @@ namespace m5
+     uint8_t task_pinned_core = ~0;
+ 
+     /// I2S port
+-    i2s_port_t i2s_port = i2s_port_t::I2S_NUM_0;
++    i2s_port_t i2s_port = (i2s_port_t)I2S_NUM_0;
+   };
+ 
+   class Speaker_Class
+diff --git a/src/utility/rtc/RTC_PowerHub_Class.cpp b/src/utility/rtc/RTC_PowerHub_Class.cpp
+index 37ec1ab..821e4f8 100644
+--- a/src/utility/rtc/RTC_PowerHub_Class.cpp
++++ b/src/utility/rtc/RTC_PowerHub_Class.cpp
+@@ -92,7 +92,7 @@ namespace m5
+   int RTC_PowerHub_Class::setAlarmIRQ(const rtc_date_t *date, const rtc_time_t *time)
+   {
+ 
+-    std::uint8_t buf[3];
++    std::uint8_t buf[3] = {0, 0, 0};
+     bool irq_enable = false;
+ 
+     if (time) {

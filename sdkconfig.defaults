@@ -1,0 +1,23 @@
+# Common defaults for stackchan-idf (target-independent).
+# Per-target overrides live in sdkconfig.defaults.<target>.
+
+# OTA-friendly partition layout (see partitions.csv).
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_TWO_OTA=n
+CONFIG_PARTITION_TABLE_SINGLE_APP=n
+
+# Bootloader rollback.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# Avatar renders at 30 fps from a PSRAM canvas — favour speed over size.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# Logging.
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# Two pinned tasks (render @ core 1, servo @ core 0) — keep the app task small.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Millisecond-granularity scheduling for the 33 ms / 20 ms task loops.
+CONFIG_FREERTOS_HZ=1000

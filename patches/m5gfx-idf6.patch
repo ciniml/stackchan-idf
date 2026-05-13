@@ -1,0 +1,626 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index eee0332..8f59dbe 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -19,7 +19,13 @@ file(GLOB SRCS
+      )
+ set(COMPONENT_SRCS ${SRCS})
+ 
+-if (IDF_VERSION_MAJOR GREATER_EQUAL 5)
++if (IDF_VERSION_MAJOR GREATER_EQUAL 6)
++    # IDF 6.0 split out per-peripheral driver components and removed the
++    # legacy driver/i2s.h shim. Pick up the new homes explicitly.
++    set(COMPONENT_REQUIRES nvs_flash efuse driver esp_timer esp_lcd esp_mm
++        esp_driver_ledc esp_driver_i2s esp_driver_gpio esp_driver_spi
++        esp_driver_i2c esp_psram esp_rom)
++elseif (IDF_VERSION_MAJOR GREATER_EQUAL 5)
+     set(COMPONENT_REQUIRES nvs_flash efuse driver esp_timer esp_lcd esp_mm)
+ elseif ((IDF_VERSION_MAJOR EQUAL 4) AND (IDF_VERSION_MINOR GREATER 3) OR IDF_VERSION_MAJOR GREATER 4)
+     set(COMPONENT_REQUIRES nvs_flash efuse esp_lcd)
+diff --git a/src/M5GFX.cpp b/src/M5GFX.cpp
+index 0a5d290..9bf4410 100644
+--- a/src/M5GFX.cpp
++++ b/src/M5GFX.cpp
+@@ -12,6 +12,7 @@
+ #include <driver/i2c.h>
+ #include <soc/efuse_reg.h>
+ #include <soc/gpio_reg.h>
++#include <soc/gpio_sig_map.h>
+ 
+ #include "lgfx/v1/panel/Panel_ILI9342.hpp"
+ #include "lgfx/v1/panel/Panel_SSD1306.hpp"
+@@ -430,6 +431,8 @@ namespace m5gfx
+ 
+   struct Panel_M5StackCoreS3 : public lgfx::Panel_ILI9342
+   {
++    static constexpr uint8_t lcd_rst_bit = 1 << 1; // AW9523B P1_1
++
+     Panel_M5StackCoreS3(void)
+     {
+       _cfg.pin_cs = GPIO_NUM_3;
+@@ -439,11 +442,115 @@ namespace m5gfx
+       _rotation = 1; // default rotation
+     }
+ 
++    const uint8_t* getInitCommands(uint8_t listno) const override
++    {
++      static constexpr uint8_t list0[] =
++      {
++          CMD_SLPOUT, 0 + CMD_INIT_DELAY, 120,
++          CMD_DISPON, 0 + CMD_INIT_DELAY, 20,
++          CMD_INVON , 0,
++          CMD_COLMOD, 1, 0x55,
++          0xFF, 0xFF,
++      };
++      return listno ? nullptr : list0;
++    }
++
++    void writeCommand(uint32_t data, uint_fast8_t length) override
++    {
++      if (_cfg.dlen_16bit)
++      {
++        if (_has_align_data)
++        {
++          _has_align_data = false;
++          cs_control(false);
++          _bus->writeData(0, 8);
++          _bus->wait();
++          cs_control(true);
++        }
++        if (length == 1) { length = 2; data <<= 8; }
++      }
++      cs_control(false);
++      _bus->writeCommand(data, length << 3);
++      _bus->wait();
++      cs_control(true);
++    }
++
++    void writeData(uint32_t data, uint_fast8_t length) override
++    {
++      cs_control(false);
++      if (!_cfg.dlen_16bit)
++      {
++        _bus->writeData(data, length << 3);
++      }
++      else if (length == 1)
++      {
++        _bus->writeData(data << 8, 16);
++      }
++      else
++      {
++        _bus->writeData(data, length << 3);
++      }
++      _bus->wait();
++      cs_control(true);
++    }
++
++    void writeFillRectPreclipped(uint_fast16_t x, uint_fast16_t y, uint_fast16_t w, uint_fast16_t h, uint32_t rawcolor) override
++    {
++      uint32_t len = w * h;
++      uint_fast16_t xe = x + w - 1;
++      uint_fast16_t ye = y + h - 1;
++      static constexpr uint32_t mask = 0xFF00FF;
++      uint32_t x_range = x + (xe << 16);
++      uint32_t y_range = y + (ye << 16);
++
++      cs_control(false);
++      _bus->writeCommand(CMD_CASET, 8);
++      _bus->wait();
++      cs_control(true);
++      x_range += _colstart + (_colstart << 16);
++      cs_control(false);
++      _bus->writeData(((x_range >> 8) & mask) + ((x_range & mask) << 8), 32);
++      _bus->wait();
++      cs_control(true);
++
++      cs_control(false);
++      _bus->writeCommand(CMD_RASET, 8);
++      _bus->wait();
++      cs_control(true);
++      y_range += _rowstart + (_rowstart << 16);
++      cs_control(false);
++      _bus->writeData(((y_range >> 8) & mask) + ((y_range & mask) << 8), 32);
++      _bus->wait();
++      cs_control(true);
++
++      cs_control(false);
++      _bus->writeCommand(CMD_RAMWR, 8);
++      _bus->wait();
++      cs_control(true);
++
++      if (_cfg.dlen_16bit) { _has_align_data = (_write_bits & 15) && (len & 1); }
++      cs_control(false);
++      _bus->writeDataRepeat(rawcolor, _write_bits, len);
++      _bus->wait();
++      cs_control(true);
++    }
++
++    void writeBlock(uint32_t rawcolor, uint32_t len) override
++    {
++      cs_control(false);
++      _bus->writeDataRepeat(rawcolor, _write_bits, len);
++      _bus->wait();
++      cs_control(true);
++      if (_cfg.dlen_16bit && (_write_bits & 15) && (len & 1))
++      {
++        _has_align_data = !_has_align_data;
++      }
++    }
++
+     void rst_control(bool level) override
+     {
+-      uint8_t bits = level ? (1<<5) : 0;
+-      uint8_t mask = level ? ~0 : ~(1<<5);
+-      // LCD_RST
++      uint8_t bits = level ? lcd_rst_bit : 0;
++      uint8_t mask = level ? 0xFF : ~lcd_rst_bit;
+       lgfx::i2c::writeRegister8(i2c_port, aw9523_i2c_addr, 0x03, bits, mask, i2c_freq);
+     }
+ 
+@@ -453,7 +560,7 @@ namespace m5gfx
+       // CS操作時にGPIO35の役割を切り替える (MISO or D/C);
+ 
+       // FSPIQ_IN_IDX==FSPI MISO / SIG_GPIO_OUT_IDX==GPIO OUT
+-      // *(volatile uint32_t*)GPIO_FUNC35_OUT_SEL_CFG_REG = flg ? FSPIQ_OUT_IDX : SIG_GPIO_OUT_IDX;
++      *(volatile uint32_t*)GPIO_FUNC35_OUT_SEL_CFG_REG = SIG_GPIO_OUT_IDX;
+ 
+       // CS HIGHの場合はGPIO出力を無効化し、MISO入力として機能させる。
+       // CS LOW の場合はGPIO出力を有効化し、D/Cとして機能させる。
+@@ -511,14 +618,12 @@ namespace m5gfx
+       if (brightness)
+       {
+         brightness = ((brightness + 641) >> 5);
+-    // AXP2101 reg 0x90 = LDOS ON/OFF control
+         lgfx::i2c::bitOn(i2c_port, axp_i2c_addr, 0x90, 0x80, i2c_freq); // DLDO1 enable
+       }
+       else
+       {
+         lgfx::i2c::bitOff(i2c_port, axp_i2c_addr, 0x90, 0x80, i2c_freq); // DLDO1 disable
+       }
+-    // AXP2101 reg 0x99 = DLDO1 voltage setting
+       lgfx::i2c::writeRegister8(i2c_port, axp_i2c_addr, 0x99, brightness, 0, i2c_freq);
+     }
+   };
+@@ -1331,9 +1436,6 @@ namespace m5gfx
+       {
+         lgfx::i2c::init(i2c_port, i2c_sda, i2c_scl);
+ 
+-// ESP_LOGI("DEBUG","AW 0x10 :%02x", (int)lgfx::i2c::readRegister8(i2c_port, aw9523_i2c_addr, 0x10, 400000).value());
+-// ESP_LOGI("DEBUG","AXP0x03 :%02x", (int)lgfx::i2c::readRegister8(i2c_port, axp_i2c_addr, 0x03, 400000).value());
+-
+         auto chk_axp = lgfx::i2c::readRegister8(i2c_port, axp_i2c_addr, 0x03, i2c_freq);
+         if (chk_axp.has_value())
+         {
+@@ -1366,21 +1468,32 @@ namespace m5gfx
+             m5gfx::i2c::writeRegister8(i2c_port, axp_i2c_addr, 0x94, 33 - 5); // ALDO3 set to 3.3v // for GC0308 Camera
+             m5gfx::i2c::writeRegister8(i2c_port, axp_i2c_addr, 0x95, 33 - 5); // ALDO4 set to 3.3v // for TF card slot
+ 
++            // CoreS3 LCD reset is routed through AW9523 P1_1. With IDF 6,
++            // make the reset pulse explicit before SPI panel setup.
++            lgfx::i2c::writeRegister8(i2c_port, aw9523_i2c_addr, 0x03, 0, ~Panel_M5StackCoreS3::lcd_rst_bit, i2c_freq);
++            lgfx::delay(20);
++            lgfx::i2c::writeRegister8(i2c_port, aw9523_i2c_addr, 0x03, Panel_M5StackCoreS3::lcd_rst_bit, 0xFF, i2c_freq);
++            lgfx::delay(120);
++
+             bus_cfg.pin_mosi = GPIO_NUM_37;
+-            bus_cfg.pin_miso = GPIO_NUM_35;
++            bus_cfg.pin_miso = GPIO_NUM_NC;
+             bus_cfg.pin_sclk = GPIO_NUM_36;
+             bus_cfg.pin_dc   = GPIO_NUM_35;// MISOとLCD D/CをGPIO35でシェアしている;
++            bus_cfg.spi_host = SPI3_HOST;
+             bus_cfg.spi_mode = 0;
+-            bus_cfg.spi_3wire = true;
++            bus_cfg.spi_3wire = false;
+             bus_spi->config(bus_cfg);
+             bus_spi->init();
+ 
+             _set_sd_spimode(bus_cfg.spi_host, GPIO_NUM_4);
+ 
+-            id = _read_panel_id(bus_spi, GPIO_NUM_3);
+-            if ((id & 0xFF) == 0xE3)
+-            {  //  check panel (ILI9342)
+-              board = board_t::board_M5StackCoreS3;
++            // IDF v6.0.1: _read_panel_id (RDDID 0x04 via SIO mode) fails because
++            // spi_bus_initialize now always connects MOSI as bidirectional input
++            // (gpio_matrix_input for spid_in), causing bus contention during SIO
++            // read phase. AXP2101@0x34 + AW9523@0x58 already uniquely identify
++            // CoreS3/CoreS3SE hardware, so SPI panel ID check is not needed.
++            board = board_t::board_M5StackCoreS3;
++            {
+               // Camera GC0308 check (not found == M5StackCoreS3SE)
+               auto chk_gc  = lgfx::i2c::readRegister8(i2c_port, gc0308_i2c_addr, 0x00, i2c_freq);
+               if (chk_gc .has_value() && chk_gc .value() == 0x9b) {
+@@ -1389,26 +1502,23 @@ namespace m5gfx
+                 board = board_M5StackCoreS3SE;
+                 ESP_LOGI(LIBRARY_NAME, "[Autodetect] board_M5StackCoreS3SE");
+               }
+-              bus_cfg.freq_write = 40000000;
+-              bus_cfg.freq_read  = 16000000;
+-              bus_spi->config(bus_cfg);
+-              auto p = new Panel_M5StackCoreS3();
+-              p->bus(bus_spi);
+-              _panel_last.reset(p);
+-
+-              _set_backlight(new Light_M5StackCoreS3());
++            }
++            bus_cfg.freq_write = 10000000;
++            bus_cfg.freq_read  = 10000000;
++            bus_spi->config(bus_cfg);
++            auto p = new Panel_M5StackCoreS3();
++            p->bus(bus_spi);
++            _panel_last.reset(p);
+ 
+-              {
+-                auto t = new Touch_M5StackCoreS3();
+-                _touch_last.reset(t);
+-                _panel_last->touch(t);
+-              }
++            _set_backlight(new Light_M5StackCoreS3());
+ 
+-              goto init_clear;
++            {
++              auto t = new Touch_M5StackCoreS3();
++              _touch_last.reset(t);
++              _panel_last->touch(t);
+             }
+-            bus_spi->release();
+-            lgfx::pinMode(GPIO_NUM_4, lgfx::pin_mode_t::input); // TF card CS
+-            lgfx::pinMode(GPIO_NUM_3, lgfx::pin_mode_t::input); // LCD CS
++
++            goto init_clear;
+           }
+         }
+         lgfx::i2c::release(i2c_port);
+diff --git a/src/lgfx/v1/platforms/esp32/Bus_Parallel8.hpp b/src/lgfx/v1/platforms/esp32/Bus_Parallel8.hpp
+index fedf496..67bf6b5 100644
+--- a/src/lgfx/v1/platforms/esp32/Bus_Parallel8.hpp
++++ b/src/lgfx/v1/platforms/esp32/Bus_Parallel8.hpp
+@@ -35,6 +35,13 @@ Contributors:
+  #include <driver/i2s.h>
+ #endif
+ 
++// IDF 6.0 dropped the legacy i2s_port_t typedef. Provide a compat shim;
++// I2S_NUM_x macros are still present (just integers now).
++#include <esp_idf_version.h>
++#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
++typedef int i2s_port_t;
++#endif
++
+ #include "../../Bus.hpp"
+ #include "../common.hpp"
+ 
+diff --git a/src/lgfx/v1/platforms/esp32/Bus_SPI.cpp b/src/lgfx/v1/platforms/esp32/Bus_SPI.cpp
+index 06fce79..1ba7fa1 100644
+--- a/src/lgfx/v1/platforms/esp32/Bus_SPI.cpp
++++ b/src/lgfx/v1/platforms/esp32/Bus_SPI.cpp
+@@ -63,6 +63,10 @@ Contributors:
+    #include <rom/gpio.h> // dispatched by core
+ #endif
+ 
++#if !defined (gpio_matrix_out)
++ #define gpio_matrix_out(pin, signal_idx, out_inv, oen_inv) rom_gpio_matrix_out((pin), (signal_idx), (out_inv), (oen_inv))
++#endif
++
+ #ifndef SPI_PIN_REG
+  #define SPI_PIN_REG SPI_MISC_REG
+ #endif
+@@ -120,6 +124,10 @@ Contributors:
+ 
+ #include <algorithm>
+ 
++#if defined (CONFIG_IDF_TARGET_ESP32S3) && defined (ESP_IDF_VERSION_VAL) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0))
++ #define LGFX_SPI_USE_IDF_POLLING_TRANSMIT
++#endif
++
+ namespace lgfx
+ {
+  inline namespace v1
+@@ -131,6 +139,24 @@ namespace lgfx
+   static __attribute__ ((always_inline)) inline void writereg(uint32_t addr, uint32_t value) { *(volatile uint32_t*)addr = value; }
+ #pragma GCC diagnostic pop
+ 
++#if defined (LGFX_SPI_USE_IDF_POLLING_TRANSMIT)
++  static inline uint_fast8_t spi_pack_word(uint8_t* buf, uint32_t data, uint_fast8_t bit_length)
++  {
++    uint_fast8_t length = (bit_length + 7) >> 3;
++    for (uint_fast8_t i = 0; i < length; ++i) {
++      buf[i] = data >> (i << 3);
++    }
++    return length;
++  }
++
++  static inline void spi_repeat_pattern(uint8_t* dst, const uint8_t* pattern, uint_fast8_t pattern_length, uint32_t count)
++  {
++    for (uint32_t i = 0; i < count; ++i) {
++      memcpy(&dst[i * pattern_length], pattern, pattern_length);
++    }
++  }
++#endif
++
+   void Bus_SPI::config(const config_t& cfg)
+   {
+     _cfg = cfg;
+@@ -177,7 +203,6 @@ namespace lgfx
+ 
+   bool Bus_SPI::init(void)
+   {
+-//ESP_LOGI("LGFX","Bus_SPI::init");
+     dc_control(true);
+     pinMode(_cfg.pin_dc, pin_mode_t::output);
+ 
+@@ -267,7 +292,12 @@ namespace lgfx
+ 
+   void Bus_SPI::beginTransaction(void)
+   {
+-//ESP_LOGI("LGFX","Bus_SPI::beginTransaction");
++#if defined (LGFX_SPI_USE_IDF_POLLING_TRANSMIT)
++    dc_control(true);
++    pinMode(_cfg.pin_dc, pin_mode_t::output);
++    if (_cfg.use_lock) spi::beginTransaction(_cfg.spi_host);
++    return;
++#endif
+     uint32_t freq_apb = getApbFrequency();
+     uint32_t clkdiv_write = _clkdiv_write;
+     if (_last_freq_apb != freq_apb)
+@@ -340,7 +370,13 @@ namespace lgfx
+ 
+   bool Bus_SPI::writeCommand(uint32_t data, uint_fast8_t bit_length)
+   {
+-//ESP_LOGI("LGFX","writeCmd: %02x  len:%d   dc:%02x", data, bit_length, _mask_reg_dc);
++#if defined (LGFX_SPI_USE_IDF_POLLING_TRANSMIT)
++    uint8_t buffer[4];
++    uint_fast8_t length = spi_pack_word(buffer, data, bit_length);
++    while (*_spi_cmd_reg & SPI_USR) {}
++    *_gpio_reg_dc[0] = _mask_reg_dc;
++    return spi::transmit(_cfg.spi_host, buffer, length).has_value();
++#endif
+     --bit_length;
+     auto spi_mosi_dlen_reg = _spi_mosi_dlen_reg;
+     auto spi_w0_reg = _spi_w0_reg;
+@@ -384,6 +420,14 @@ namespace lgfx
+   void Bus_SPI::writeData(uint32_t data, uint_fast8_t bit_length)
+   {
+ //ESP_LOGI("LGFX","writeData: %02x  len:%d", data, bit_length);
++#if defined (LGFX_SPI_USE_IDF_POLLING_TRANSMIT)
++    uint8_t buffer[4];
++    uint_fast8_t length = spi_pack_word(buffer, data, bit_length);
++    while (*_spi_cmd_reg & SPI_USR) {}
++    *_gpio_reg_dc[1] = _mask_reg_dc;
++    spi::transmit(_cfg.spi_host, buffer, length);
++    return;
++#endif
+     --bit_length;
+     auto spi_mosi_dlen_reg = _spi_mosi_dlen_reg;
+     auto spi_w0_reg = _spi_w0_reg;
+@@ -424,6 +468,26 @@ namespace lgfx
+ 
+   void Bus_SPI::writeDataRepeat(uint32_t data, uint_fast8_t bit_length, uint32_t count)
+   {
++#if defined (LGFX_SPI_USE_IDF_POLLING_TRANSMIT)
++    uint8_t pattern[4];
++    uint_fast8_t pattern_length = spi_pack_word(pattern, data, bit_length);
++    uint8_t buffer[640];
++    uint32_t chunk_limit = sizeof(buffer) / pattern_length;
++
++    while (*_spi_cmd_reg & SPI_USR) {}
++    *_gpio_reg_dc[1] = _mask_reg_dc;
++    uint32_t chunks_sent = 0;
++    while (count) {
++      uint32_t chunk = (count < chunk_limit) ? count : chunk_limit;
++      spi_repeat_pattern(buffer, pattern, pattern_length, chunk);
++      spi::transmit(_cfg.spi_host, buffer, chunk * pattern_length);
++      count -= chunk;
++      if ((++chunks_sent & 0x0F) == 0) {
++        vTaskDelay(1);
++      }
++    }
++    return;
++#endif
+     auto spi_mosi_dlen_reg = _spi_mosi_dlen_reg;
+     auto spi_w0_reg = _spi_w0_reg;
+     auto spi_cmd_reg = _spi_cmd_reg;
+@@ -657,6 +721,26 @@ namespace lgfx
+ 
+   void Bus_SPI::writeBytes(const uint8_t* data, uint32_t length, bool dc, bool use_dma)
+   {
++#if defined (LGFX_SPI_USE_IDF_POLLING_TRANSMIT)
++    (void)use_dma;
++    while (*_spi_cmd_reg & SPI_USR) {}
++    dc_control(dc);
++    // Yield periodically so the IDLE task on the same core can reset its
++    // watchdog. spi_device_polling_transmit busy-waits the CPU until the
++    // transfer finishes, so a full-screen pushImage (≈37 chunks) would
++    // otherwise starve IDLE for tens of ms with no preemption point.
++    uint32_t chunks_sent = 0;
++    while (length) {
++      uint32_t chunk = (length < 4096) ? length : 4096;
++      spi::transmit(_cfg.spi_host, data, chunk);
++      data += chunk;
++      length -= chunk;
++      if ((++chunks_sent & 0x0F) == 0) {
++        vTaskDelay(1);
++      }
++    }
++    return;
++#endif
+ #if defined LGFX_USE_QSPI
+     if( _is_quad_spi)
+     {
+diff --git a/src/lgfx/v1/platforms/esp32/common.cpp b/src/lgfx/v1/platforms/esp32/common.cpp
+index 1dbdd8e..3adbf41 100644
+--- a/src/lgfx/v1/platforms/esp32/common.cpp
++++ b/src/lgfx/v1/platforms/esp32/common.cpp
+@@ -38,6 +38,12 @@ Contributors:
+ #include <driver/rtc_io.h>
+ #include <soc/rtc.h>
+ #include <soc/soc.h>
++#if __has_include(<soc/gpio_reg.h>)
++ #include <soc/gpio_reg.h>
++#endif
++#if __has_include(<soc/periph_defs.h>)
++ #include <soc/periph_defs.h>
++#endif
+ #include <soc/i2c_reg.h>
+ #include <soc/i2c_struct.h>
+ #if (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0))
+@@ -616,7 +622,11 @@ namespace lgfx
+         buscfg.mosi_io_num = spi_mosi;
+         buscfg.miso_io_num = spi_miso;
+         buscfg.sclk_io_num = spi_sclk;
++#if defined (CONFIG_IDF_TARGET_ESP32S3) && defined (ESP_IDF_VERSION_VAL) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0))
++        buscfg.max_transfer_sz = 4096;
++#else
+         buscfg.max_transfer_sz = 1;
++#endif
+         buscfg.flags = SPICOMMON_BUSFLAG_MASTER;
+         buscfg.intr_flags = 0;
+ #if defined (ESP_IDF_VERSION_VAL)
+@@ -638,7 +648,11 @@ namespace lgfx
+         memset(&devcfg, 0, sizeof(devcfg));
+         devcfg.clock_speed_hz = 10000000;
+         devcfg.spics_io_num = -1;
++#if defined (CONFIG_IDF_TARGET_ESP32S3) && defined (ESP_IDF_VERSION_VAL) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0))
++        devcfg.flags = 0;
++#else
+         devcfg.flags = SPI_DEVICE_3WIRE | SPI_DEVICE_HALFDUPLEX;
++#endif
+         devcfg.queue_size = 1;
+         if (ESP_OK != spi_bus_add_device(static_cast<spi_host_device_t>(spi_host), &devcfg, &_spi_dev_handle[spi_host])) {
+           ESP_LOGW("LGFX", "Failed to spi_bus_add_device. ");
+@@ -845,6 +859,26 @@ namespace lgfx
+       gpio_hi(spi_cs);
+     }
+ 
++    cpp::result<void, error_t> transmit(int spi_host, const void* data, size_t length)
++    {
++      if (_spi_dev_handle[spi_host] == nullptr) {
++        return cpp::fail(error_t::unknown_err);
++      }
++
++      spi_transaction_t transaction;
++      memset(&transaction, 0, sizeof(transaction));
++      transaction.length = length << 3;
++      transaction.tx_buffer = data;
++
++      esp_err_t err = spi_device_polling_transmit(_spi_dev_handle[spi_host], &transaction);
++      if (ESP_OK != err) {
++        ESP_LOGW("LGFX", "spi_device_polling_transmit failed: %s len=%u host=%d",
++                 esp_err_to_name(err), (unsigned)length, spi_host);
++        return cpp::fail(error_t::unknown_err);
++      }
++      return {};
++    }
++
+     void writeBytes(int spi_host, const uint8_t* data, size_t len)
+     {
+       uint32_t spi_port = (spi_host + 1);
+@@ -950,6 +984,16 @@ namespace lgfx
+       }
+     }
+ #else
++    __attribute__ ((unused))
++    static periph_module_t getPeriphModule(int num)
++    {
++#if SOC_I2C_NUM == 1 || defined CONFIG_IDF_TARGET_ESP32C6
++      return PERIPH_I2C0_MODULE;
++#else
++      return num == 0 ? PERIPH_I2C0_MODULE : PERIPH_I2C1_MODULE;
++#endif
++    }
++
+     __attribute__ ((unused))
+     static void i2c_periph_enable(int i2c_num)
+     {
+@@ -1117,8 +1161,10 @@ namespace lgfx
+ #if __has_include(<driver/i2c_master.h>)
+       if ((int8_t)pin_sda >= 0) {
+         gpio_set_level(pin_sda, true);
+-#if defined (ESP_IDF_VERSION_VAL) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0))
++#if __has_include(<esp_private/gpio.h>) && defined (ESP_IDF_VERSION_VAL) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0))
+         (void)gpio_iomux_output(pin_sda, PIN_FUNC_GPIO);
++#elif __has_include(<esp_private/gpio.h>)
++        gpio_iomux_output(pin_sda, PIN_FUNC_GPIO);
+ #else
+         gpio_iomux_out(pin_sda, PIN_FUNC_GPIO, false);
+ #endif
+@@ -1129,8 +1175,10 @@ namespace lgfx
+       }
+       if ((int8_t)pin_scl >= 0) {
+         gpio_set_level(pin_scl, true);
+-#if defined (ESP_IDF_VERSION_VAL) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0))
++#if __has_include(<esp_private/gpio.h>) && defined (ESP_IDF_VERSION_VAL) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0))
+         (void)gpio_iomux_output(pin_scl, PIN_FUNC_GPIO);
++#elif __has_include(<esp_private/gpio.h>)
++        gpio_iomux_output(pin_scl, PIN_FUNC_GPIO);
+ #else
+         gpio_iomux_out(pin_scl, PIN_FUNC_GPIO, false);
+ #endif
+diff --git a/src/lgfx/v1/platforms/esp32/common.hpp b/src/lgfx/v1/platforms/esp32/common.hpp
+index c44322e..4bce697 100644
+--- a/src/lgfx/v1/platforms/esp32/common.hpp
++++ b/src/lgfx/v1/platforms/esp32/common.hpp
+@@ -345,6 +345,7 @@ protected:
+     cpp::result<void, error_t> initQuad(int spi_host, int spi_sclk, int spi_io0, int spi_io1, int spi_io2, int spi_io3, int dma_channel);
+ #endif
+     void beginTransaction(int spi_host);
++    cpp::result<void, error_t> transmit(int spi_host, const void* data, size_t length);
+   }
+ 
+ //----------------------------------------------------------------------------
+diff --git a/src/lgfx/v1/platforms/esp32p4/Panel_DSI.cpp b/src/lgfx/v1/platforms/esp32p4/Panel_DSI.cpp
+index 9462adc..436412e 100644
+--- a/src/lgfx/v1/platforms/esp32p4/Panel_DSI.cpp
++++ b/src/lgfx/v1/platforms/esp32p4/Panel_DSI.cpp
+@@ -91,16 +91,10 @@ namespace lgfx
+     dpi_config.video_timing.vsync_back_porch  = _config_detail.vsync_back_porch;
+     dpi_config.video_timing.vsync_pulse_width = _config_detail.vsync_pulse_width;
+     dpi_config.video_timing.vsync_front_porch = _config_detail.vsync_front_porch;
+-  #if !defined (ESP_IDF_VERSION_VAL) || (ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(6, 0, 0))
++    // IDF 5 and IDF 6 both expose DMA2D via dpi_config.flags.use_dma2d;
++    // IDF 6 does not provide a separate esp_lcd_dpi_panel_enable_dma2d().
+     dpi_config.flags.use_dma2d = true;
+-  #endif
+     auto ret = esp_lcd_new_panel_dpi(mipi_dsi_bus, &dpi_config, &_disp_panel_handle);
+-  #if defined (ESP_IDF_VERSION_VAL) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0))
+-    if (ret == ESP_OK)
+-    {
+-      (void)esp_lcd_dpi_panel_enable_dma2d(_disp_panel_handle);
+-    }
+-  #endif
+     return ret == ESP_OK;
+   }
+ 
+diff --git a/src/lgfx/v1/platforms/esp32s3/Bus_Parallel16.cpp b/src/lgfx/v1/platforms/esp32s3/Bus_Parallel16.cpp
+index 8dd0a39..c5f7994 100644
+--- a/src/lgfx/v1/platforms/esp32s3/Bus_Parallel16.cpp
++++ b/src/lgfx/v1/platforms/esp32s3/Bus_Parallel16.cpp
+@@ -43,6 +43,12 @@ Contributors:
+   #define DMA_OUTLINK_START_CH0      GDMA_OUTLINK_START_CH0
+   #define DMA_OUTFIFO_EMPTY_CH0      GDMA_OUTFIFO_EMPTY_L3_CH0
+ #endif
++#if !defined (gpio_matrix_out)
++  #define gpio_matrix_out(pin, signal_idx, out_inv, oen_inv) rom_gpio_matrix_out((pin), (signal_idx), (out_inv), (oen_inv))
++#endif
++#if !defined (gpio_pad_select_gpio)
++  #define gpio_pad_select_gpio(pin) rom_gpio_pad_select_gpio(pin)
++#endif
+ 
+ #if defined (ESP_IDF_VERSION_VAL) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0))
+  #define LGFX_GPIO_PAD_SELECT(pin)      rom_gpio_pad_select_gpio((gpio_num_t)(pin))
+diff --git a/src/lgfx/v1/platforms/esp32s3/Bus_Parallel8.cpp b/src/lgfx/v1/platforms/esp32s3/Bus_Parallel8.cpp
+index bdcfa05..1edd063 100644
+--- a/src/lgfx/v1/platforms/esp32s3/Bus_Parallel8.cpp
++++ b/src/lgfx/v1/platforms/esp32s3/Bus_Parallel8.cpp
+@@ -43,6 +43,12 @@ Contributors:
+   #define DMA_OUTLINK_START_CH0      GDMA_OUTLINK_START_CH0
+   #define DMA_OUTFIFO_EMPTY_CH0      GDMA_OUTFIFO_EMPTY_L3_CH0
+ #endif
++#if !defined (gpio_matrix_out)
++  #define gpio_matrix_out(pin, signal_idx, out_inv, oen_inv) rom_gpio_matrix_out((pin), (signal_idx), (out_inv), (oen_inv))
++#endif
++#if !defined (gpio_pad_select_gpio)
++  #define gpio_pad_select_gpio(pin) rom_gpio_pad_select_gpio(pin)
++#endif
+ 
+ #if defined (ESP_IDF_VERSION_VAL) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0))
+  #define LGFX_GPIO_PAD_SELECT(pin)      rom_gpio_pad_select_gpio((gpio_num_t)(pin))
