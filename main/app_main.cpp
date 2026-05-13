@@ -92,6 +92,14 @@ extern "C" void app_main()
     }
     auto& board = *board_result;
 
+    // Quick audio sanity check: a short rising arpeggio so we can hear
+    // immediately whether the speaker is wired up correctly.
+    M5.Speaker.setVolume(128);
+    for (float freq : {523.25f, 659.25f, 783.99f}) { // C5 – E5 – G5
+        M5.Speaker.tone(freq, 150);
+        vTaskDelay(pdMS_TO_TICKS(180));
+    }
+
     if (auto r = board.set_servo_power(true); !r) {
         ESP_LOGE(kTag, "set_servo_power(true) failed: %d", static_cast<int>(r.error()));
     }
