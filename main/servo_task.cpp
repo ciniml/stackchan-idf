@@ -46,10 +46,14 @@ void servo_task_entry(void* arg)
     if (auto r = yaw.ping(); !r) {
         ESP_LOGW(kTag, "yaw (id=%u) ping failed: %d", scs_servo::kYawId,
                  static_cast<int>(r.error()));
+    } else {
+        ESP_LOGI(kTag, "yaw (id=%u) ping OK", scs_servo::kYawId);
     }
     if (auto r = pitch.ping(); !r) {
         ESP_LOGW(kTag, "pitch (id=%u) ping failed: %d", scs_servo::kPitchId,
                  static_cast<int>(r.error()));
+    } else {
+        ESP_LOGI(kTag, "pitch (id=%u) ping OK", scs_servo::kPitchId);
     }
     if (auto r = yaw.enable_torque(true); !r) {
         ESP_LOGW(kTag, "yaw enable_torque failed: %d", static_cast<int>(r.error()));

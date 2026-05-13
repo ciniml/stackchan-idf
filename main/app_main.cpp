@@ -1,5 +1,6 @@
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 #include <M5Unified.h>
 #include <esp_log.h>
@@ -132,6 +133,10 @@ extern "C" void app_main()
     }
     auto& board = *board_result;
 
+    // CoreS3 Speaker and Mic share I2S_NUM_1 (BCK=GPIO34, WS=GPIO33),
+    // so the side that's done has to release the bus before the other
+    // side can install its own driver.
+
     // Quick audio sanity check: a short rising arpeggio so we can hear
     // immediately whether the speaker is wired up correctly.
     M5.Speaker.setVolume(128);
@@ -139,12 +144,50 @@ extern "C" void app_main()
         M5.Speaker.tone(freq, 150);
         vTaskDelay(pdMS_TO_TICKS(180));
     }
+    while (M5.Speaker.isPlaying()) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    M5.Speaker.end();
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    // Mic / loopback sanity check: record 2 s, then play it back so we can
+    // hear whether the on-board mic + ES7210 codec are wired up.
+    {
+        constexpr std::uint32_t kSampleRate = 16'000;
+        constexpr std::uint32_t kSeconds = 2;
+        constexpr std::size_t kSamples = kSampleRate * kSeconds;
+        std::vector<std::int16_t> buf(kSamples, 0);
+
+        ESP_LOGI(kTag, "mic test: recording %u s...", static_cast<unsigned>(kSeconds));
+        if (!M5.Mic.record(buf.data(), buf.size(), kSampleRate, /*stereo=*/false)) {
+            ESP_LOGE(kTag, "M5.Mic.record returned false");
+        } else {
+            // record() is async — the mic task hasn't necessarily flipped
+            // _is_recording yet. Spin a few ticks until it has, then wait
+            // for it to drop back to 0.
+            for (int i = 0; i < 50 && M5.Mic.isRecording() == 0; ++i) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+            while (M5.Mic.isRecording()) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
+            M5.Mic.end();
+            vTaskDelay(pdMS_TO_TICKS(20));
+            ESP_LOGI(kTag, "mic test: playing back...");
+            M5.Speaker.playRaw(buf.data(), buf.size(), kSampleRate, /*stereo=*/false);
+            while (M5.Speaker.isPlaying()) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
+            ESP_LOGI(kTag, "mic test: done");
+        }
+    }
 
     if (auto r = board.set_servo_power(true); !r) {
         ESP_LOGE(kTag, "set_servo_power(true) failed: %d", static_cast<int>(r.error()));
     }
-    // Allow the servo bus rail to settle before the servo task starts driving UART.
-    vTaskDelay(pdMS_TO_TICKS(500));
+    // Allow the servo bus rail to settle before the servo task starts driving
+    // UART. SCS0009 needs ~1 s after Vmotor comes up before it answers PING.
+    vTaskDelay(pdMS_TO_TICKS(1500));
 
     g_state = new stackchan::app::SharedState{};
     g_render_args = new stackchan::app::RenderTaskArgs{.display = &board.display(), .state = g_state};
