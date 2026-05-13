@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
+// SPDX-License-Identifier: BSL-1.0
+
 #include "servo_task.hpp"
 
 #include <driver/gpio.h>

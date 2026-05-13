@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
+# SPDX-License-Identifier: BSL-1.0
 """Non-interactive serial log capture.
 
 Resets the target via DTR/RTS (matching esptool's default-reset sequence),

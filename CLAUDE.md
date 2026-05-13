@@ -2,6 +2,21 @@
 
 M5Stack CoreS3 向けスタックチャン ファームウェア (ESP-IDF 5.4 / C++20)。
 
+## ライセンス
+
+このリポジトリのソース (`components/board`, `components/scs_servo`,
+`components/avatar`, `main`, `tools`) は **Boost Software License 1.0**
+の下で配布されます ([LICENSE](LICENSE) 参照)。Submodule
+(M5GFX / M5Unified / tl_expected/expected) と managed_components は
+それぞれのアップストリーム ライセンスに従います。
+
+新規ソース ファイルには下記の SPDX ヘッダを付与してください:
+
+```cpp
+// SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
+// SPDX-License-Identifier: BSL-1.0
+```
+
 ## ビルド
 
 ```sh
