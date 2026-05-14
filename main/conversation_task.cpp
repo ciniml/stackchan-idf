@@ -32,9 +32,11 @@ namespace conv = stackchan::conversation;
 
 constexpr const char* kTag = "conv-task";
 
-// Audio: OpenAI Realtime is PCM16 mono. We capture and play at 24 kHz to match
-// the API natively and avoid resampling.
-constexpr std::uint32_t kSampleRate = 24000;
+// Audio rates. Mic uplink stays pcm16 @ 24 kHz; the assistant reply comes back
+// as G.711 µ-law @ 8 kHz (the OpenAI client decodes µ-law -> PCM16 internally,
+// so this task always sees PCM16 — just at 8 kHz for playback).
+constexpr std::uint32_t kMicSampleRate = 24000;
+constexpr std::uint32_t kSpeakerSampleRate = 8000;
 constexpr std::size_t kMicChunkSamples = 960;  // 40 ms per mic chunk
 constexpr std::uint32_t kEnvelopeStepMs = 16;
 
@@ -44,7 +46,7 @@ constexpr std::uint32_t kEnvelopeStepMs = 16;
 // (choppy playback). So the reply is accumulated in PSRAM but played back in
 // segments copied into this small internal-RAM ring — the speaker only ever
 // reads from fast SRAM. 3 buffers: M5.Speaker holds 2, we always have 1 free.
-constexpr std::size_t kSegmentSamples = 8192;  // ~341 ms per segment at 24 kHz
+constexpr std::size_t kSegmentSamples = 4096;  // ~512 ms per segment at 8 kHz
 constexpr std::size_t kSegmentBuffers = 3;
 constexpr int kSpeakerChannel = 0;
 
@@ -193,8 +195,8 @@ private:
         cfg.instructions = kInstructions;
         cfg.voice = CONFIG_STACKCHAN_OPENAI_VOICE;
         cfg.model = CONFIG_STACKCHAN_OPENAI_REALTIME_MODEL;
-        cfg.input_sample_rate_hz = kSampleRate;
-        cfg.output_sample_rate_hz = kSampleRate;
+        cfg.input_sample_rate_hz = kMicSampleRate;
+        cfg.output_sample_rate_hz = kSpeakerSampleRate; // 8 kHz selects g711_ulaw on the wire
         cfg.tools.push_back(make_set_expression_tool());
         cfg.tools.push_back(make_set_head_pose_tool());
         config_ = cfg;
@@ -262,7 +264,7 @@ private:
                M5.Speaker.isPlaying(kSpeakerChannel) < kSegmentBuffers - 1) {
             const std::size_t n = std::min(kSegmentSamples, assistant_pcm_.size() - seg_pos_);
             std::memcpy(seg_buf_[seg_next_], assistant_pcm_.data() + seg_pos_, n * sizeof(std::int16_t));
-            M5.Speaker.playRaw(seg_buf_[seg_next_], n, kSampleRate, /*stereo=*/false,
+            M5.Speaker.playRaw(seg_buf_[seg_next_], n, kSpeakerSampleRate, /*stereo=*/false,
                                /*repeat=*/1, kSpeakerChannel, /*stop_current_sound=*/false);
             seg_pos_ += n;
             seg_next_ = (seg_next_ + 1) % kSegmentBuffers;
@@ -284,7 +286,7 @@ private:
         if (M5.Mic.isRecording() < 2) {
             const auto& buf = mic_buf_[mic_read_];
             (void)client_->push_audio(std::span<const std::int16_t>{buf.data(), buf.size()});
-            M5.Mic.record(mic_buf_[mic_read_].data(), mic_buf_[mic_read_].size(), kSampleRate, /*stereo=*/false);
+            M5.Mic.record(mic_buf_[mic_read_].data(), mic_buf_[mic_read_].size(), kMicSampleRate, /*stereo=*/false);
             mic_read_ ^= 1;
         } else {
             vTaskDelay(pdMS_TO_TICKS(5));
@@ -299,8 +301,8 @@ private:
         assistant_pcm_.clear();
         assistant_text_.clear();
         // Prime the 2-deep mic queue.
-        M5.Mic.record(mic_buf_[0].data(), mic_buf_[0].size(), kSampleRate, /*stereo=*/false);
-        M5.Mic.record(mic_buf_[1].data(), mic_buf_[1].size(), kSampleRate, /*stereo=*/false);
+        M5.Mic.record(mic_buf_[0].data(), mic_buf_[0].size(), kMicSampleRate, /*stereo=*/false);
+        M5.Mic.record(mic_buf_[1].data(), mic_buf_[1].size(), kMicSampleRate, /*stereo=*/false);
         mic_read_ = 0;
         local_ = Local::Listening;
     }
@@ -312,7 +314,7 @@ private:
 
         // Re-derive a 16 ms-window peak envelope so the avatar mouth tracks
         // the streamed reply (same approach as Speech::current_mouth_open).
-        const std::size_t window = kSampleRate * kEnvelopeStepMs / 1000u;
+        const std::size_t window = kSpeakerSampleRate * kEnvelopeStepMs / 1000u;
         const std::size_t windows = (assistant_pcm_.size() + window - 1) / std::max<std::size_t>(window, 1);
         envelope_.assign(windows, 0.0f);
         for (std::size_t w = 0; w < windows; ++w) {
@@ -327,7 +329,7 @@ private:
 
         playback_start_ms_ = now_ms();
         playback_duration_ms_ =
-            static_cast<std::uint32_t>(static_cast<std::uint64_t>(assistant_pcm_.size()) * 1000u / kSampleRate);
+            static_cast<std::uint32_t>(static_cast<std::uint64_t>(assistant_pcm_.size()) * 1000u / kSpeakerSampleRate);
 
         // The reply stays in PSRAM; service_state() streams it out segment by
         // segment through the internal-RAM ring so the speaker never reads

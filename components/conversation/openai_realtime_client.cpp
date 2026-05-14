@@ -36,6 +36,20 @@ constexpr std::size_t kMaxChunkSamples = 2048;
 
 constexpr TickType_t kSendTimeout = pdMS_TO_TICKS(500);
 
+// OpenAI Realtime only offers pcm16 at 24 kHz or G.711 at 8 kHz, so the
+// requested output sample rate uniquely selects the wire codec.
+constexpr std::uint32_t kG711SampleRate = 8000;
+
+// Standard G.711 µ-law decode (Sun algorithm, BIAS = 0x84). One companded
+// byte -> one 16-bit PCM sample.
+std::int16_t ulaw_to_pcm16(std::uint8_t u_val)
+{
+    u_val = ~u_val;
+    std::int32_t t = ((u_val & 0x0F) << 3) + 0x84;
+    t <<= (u_val & 0x70) >> 4;
+    return static_cast<std::int16_t>((u_val & 0x80) ? (0x84 - t) : (t - 0x84));
+}
+
 } // namespace
 
 class OpenAiRealtimeClient::Impl {
@@ -50,6 +64,7 @@ public:
             return tl::unexpected{ConversationError::InvalidState};
         }
         config_ = config;
+        output_is_ulaw_ = (config_.output_sample_rate_hz == kG711SampleRate);
 
         const std::size_t rx_cap = static_cast<std::size_t>(CONFIG_STACKCHAN_CONV_WS_RX_BUFFER);
         rx_buffer_ = static_cast<char*>(heap_caps_malloc(rx_cap, MALLOC_CAP_SPIRAM));
@@ -326,7 +341,7 @@ private:
             cJSON_AddStringToObject(session, "voice", config_.voice.c_str());
         }
         cJSON_AddStringToObject(session, "input_audio_format", "pcm16");
-        cJSON_AddStringToObject(session, "output_audio_format", "pcm16");
+        cJSON_AddStringToObject(session, "output_audio_format", output_is_ulaw_ ? "g711_ulaw" : "pcm16");
 
         if (config_.enable_input_transcription) {
             cJSON* tr = cJSON_AddObjectToObject(session, "input_audio_transcription");
@@ -465,8 +480,18 @@ private:
             return;
         }
         const auto& bytes = *decoded;
-        auto pcm = std::make_shared<std::vector<std::int16_t>>(bytes.size() / sizeof(std::int16_t));
-        std::memcpy(pcm->data(), bytes.data(), pcm->size() * sizeof(std::int16_t));
+        std::shared_ptr<std::vector<std::int16_t>> pcm;
+        if (output_is_ulaw_) {
+            // G.711 µ-law: one byte per 8 kHz sample, expand to PCM16.
+            pcm = std::make_shared<std::vector<std::int16_t>>(bytes.size());
+            for (std::size_t i = 0; i < bytes.size(); ++i) {
+                (*pcm)[i] = ulaw_to_pcm16(bytes[i]);
+            }
+        } else {
+            // pcm16: raw little-endian 16-bit samples.
+            pcm = std::make_shared<std::vector<std::int16_t>>(bytes.size() / sizeof(std::int16_t));
+            std::memcpy(pcm->data(), bytes.data(), pcm->size() * sizeof(std::int16_t));
+        }
 
         if (state_.load(std::memory_order_relaxed) != ConversationState::Speaking) {
             set_state(ConversationState::Speaking);
@@ -517,6 +542,7 @@ private:
 
     bool session_updated_{false};
     bool pending_tool_call_{false};
+    bool output_is_ulaw_{false}; // wire codec for assistant audio (g711_ulaw vs pcm16)
 
     // RX frame reassembly (PSRAM).
     char* rx_buffer_{nullptr};
