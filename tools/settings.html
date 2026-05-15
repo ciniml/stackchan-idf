@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stack-chan 設定</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #f5f5f5;
+    color: #222;
+    min-height: 100vh;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 2rem 1rem;
+  }
+  .card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.12);
+    padding: 2rem;
+    width: 100%;
+    max-width: 480px;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 0.3rem; }
+  .subtitle { color: #666; font-size: 0.9rem; margin-bottom: 1.5rem; }
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1rem;
+    border-radius: 8px;
+    background: #f0f0f0;
+    margin-bottom: 1.5rem;
+    font-size: 0.9rem;
+  }
+  .dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: #bbb;
+    flex-shrink: 0;
+    transition: background 0.3s;
+  }
+  .dot.ble-connected  { background: #4caf50; }
+  .dot.wifi-connected { background: #2196f3; }
+  .dot.ble-connecting { background: #ff9800; animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .flags {
+    margin-left: auto;
+    display: flex;
+    gap: 0.3rem;
+  }
+  .flag {
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: #e0e0e0;
+    color: #555;
+  }
+  .flag.set { background: #c8e6c9; color: #2e7d32; }
+  label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 0.3rem;
+    margin-top: 1rem;
+  }
+  input[type=text], input[type=password] {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  input:focus { border-color: #2196f3; }
+  .hint { font-size: 0.78rem; color: #888; margin-top: 0.2rem; }
+  .actions { margin-top: 1.5rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
+  button {
+    padding: 0.55rem 1.2rem;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    cursor: pointer;
+    font-weight: 600;
+    transition: opacity 0.2s, background 0.2s;
+  }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  #btn-connect  { background: #1976d2; color: white; }
+  #btn-apply    { background: #388e3c; color: white; }
+  #btn-disconnect { background: #e0e0e0; color: #333; }
+  .log {
+    margin-top: 1.5rem;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    font-family: monospace;
+    font-size: 0.8rem;
+    max-height: 180px;
+    overflow-y: auto;
+  }
+  .log .entry { line-height: 1.5; }
+  .log .ts { color: #888; margin-right: 0.4rem; }
+  .log .ok  { color: #89d185; }
+  .log .err { color: #f48771; }
+  .log .info{ color: #9cdcfe; }
+  .compat-note {
+    margin-top: 1.25rem;
+    font-size: 0.78rem;
+    color: #999;
+    border-top: 1px solid #eee;
+    padding-top: 0.75rem;
+  }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🤖 Stack-chan 設定</h1>
+  <p class="subtitle">Web Bluetooth 経由で Wi-Fi と API キーを設定します</p>
+
+  <div class="status-bar">
+    <span class="dot" id="ble-dot"></span>
+    <span id="ble-label">未接続</span>
+    <span class="dot" id="wifi-dot" style="margin-left:0.75rem"></span>
+    <span id="wifi-label">Wi-Fi: —</span>
+    <span class="flags">
+      <span class="flag" id="flag-ssid" title="SSID 設定済み">S</span>
+      <span class="flag" id="flag-pass" title="Password 設定済み">P</span>
+      <span class="flag" id="flag-key"  title="API key 設定済み">K</span>
+    </span>
+  </div>
+
+  <label for="ssid">Wi-Fi SSID</label>
+  <input type="text" id="ssid" maxlength="32" placeholder="MyNetwork">
+  <p class="hint">空欄のままにすると現在の値を変更しません</p>
+
+  <label for="password">Wi-Fi パスワード</label>
+  <input type="password" id="password" maxlength="64" placeholder="（変更しない場合は空欄）">
+
+  <label for="apikey">OpenAI API キー</label>
+  <input type="password" id="apikey" maxlength="256" placeholder="sk-… （変更しない場合は空欄）">
+
+  <div class="actions">
+    <button id="btn-connect">BLE 接続</button>
+    <button id="btn-apply" disabled>保存 &amp; 再起動</button>
+    <button id="btn-disconnect" disabled>切断</button>
+  </div>
+
+  <div class="log" id="log"></div>
+
+  <p class="compat-note">
+    Chrome / Edge (デスクトップ) + <code>file://</code> で動作します。
+    Firefox・Safari は Web Bluetooth 非対応です。<br>
+    初回アクセス時に OS の Just Works ペアリング（PIN なし）が発生します。
+  </p>
+</div>
+
+<script>
+// --- UUIDs ---
+const SVC_UUID    = 'e3f0a000-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+const CHR_SSID    = 'e3f0a001-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+const CHR_PASS    = 'e3f0a002-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+const CHR_KEY     = 'e3f0a003-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+const CHR_APPLY   = 'e3f0a004-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+const CHR_STATUS  = 'e3f0a005-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+
+// --- State ---
+let bleDevice = null, bleServer = null, svc = null;
+let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null;
+
+// --- Log ---
+const logEl = document.getElementById('log');
+function log(msg, cls = 'info') {
+  const now = new Date();
+  const ts = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+  const div = document.createElement('div');
+  div.className = 'entry';
+  div.innerHTML = `<span class="ts">[${ts}]</span><span class="${cls}">${msg}</span>`;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// --- UI helpers ---
+function setBleUi(connected) {
+  const dot = document.getElementById('ble-dot');
+  dot.className = 'dot ' + (connected ? 'ble-connected' : '');
+  document.getElementById('ble-label').textContent = connected ? 'BLE 接続中' : '未接続';
+  document.getElementById('btn-apply').disabled = !connected;
+  document.getElementById('btn-disconnect').disabled = !connected;
+  document.getElementById('btn-connect').disabled = connected;
+}
+
+function updateStatus(data) {
+  const flags = data.getUint8(0);
+  const wifi  = data.getUint8(1);
+  document.getElementById('flag-ssid').classList.toggle('set', !!(flags & 0x01));
+  document.getElementById('flag-pass').classList.toggle('set', !!(flags & 0x02));
+  document.getElementById('flag-key' ).classList.toggle('set', !!(flags & 0x04));
+  const wifiDot = document.getElementById('wifi-dot');
+  wifiDot.className = 'dot ' + (wifi ? 'wifi-connected' : '');
+  document.getElementById('wifi-label').textContent = wifi ? 'Wi-Fi: 接続中' : 'Wi-Fi: 切断中';
+}
+
+// --- Encode helpers ---
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+function strToBytes(s) { return enc.encode(s); }
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Retry a GATT operation that fails because OS-level pairing is mid-flight.
+// The first access to an encryption-required characteristic triggers Just
+// Works pairing in the OS; until it completes, Chrome reports the op as
+// "Connection already in progress" / similar. Wait and retry.
+async function retryGatt(op, label) {
+  // OS-level Just Works pairing (especially the very first time) can take
+  // 15-20 seconds on Linux / BlueZ. Retry on a fixed cadence until pairing
+  // completes.
+  const transient = /already in progress|Connection attempt failed|Authentication failed|GATT operation failed/i;
+  const ATTEMPTS = 10;
+  const DELAY_MS = 3000;
+  let lastErr;
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    try { return await op(); }
+    catch (e) {
+      lastErr = e;
+      if (transient.test(e.message || '') && attempt < ATTEMPTS) {
+        log(`${label} ペアリング待機中 (${attempt}/${ATTEMPTS})…`, 'info');
+        await sleep(DELAY_MS);
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr;
+}
+
+// --- Connect ---
+document.getElementById('btn-connect').addEventListener('click', async () => {
+  if (!navigator.bluetooth) {
+    log('Web Bluetooth が使えません。Chrome / Edge デスクトップで開いてください。', 'err');
+    return;
+  }
+  document.getElementById('ble-dot').className = 'dot ble-connecting';
+  document.getElementById('ble-label').textContent = '接続中…';
+  document.getElementById('btn-connect').disabled = true;
+
+  try {
+    log('デバイスを検索中…');
+    bleDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [SVC_UUID] }],
+      optionalServices: [SVC_UUID],
+    });
+    bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+    log(`デバイス: ${bleDevice.name || '(名称不明)'}`);
+    bleServer = await bleDevice.gatt.connect();
+    log('GATT 接続完了', 'ok');
+
+    svc = await bleServer.getPrimaryService(SVC_UUID);
+    [chrSsid, chrPass, chrKey, chrApply, chrStatus] = await Promise.all([
+      svc.getCharacteristic(CHR_SSID),
+      svc.getCharacteristic(CHR_PASS),
+      svc.getCharacteristic(CHR_KEY),
+      svc.getCharacteristic(CHR_APPLY),
+      svc.getCharacteristic(CHR_STATUS),
+    ]);
+    log('Characteristics 取得完了', 'ok');
+
+    // Read current SSID and Status. The first read triggers Just Works
+    // pairing; while pairing is in-flight Chrome rejects subsequent ops as
+    // "Connection already in progress", so retryGatt retries with backoff.
+    try {
+      const ssidVal = await retryGatt(() => chrSsid.readValue(), 'SSID 読み取り');
+      const ssidStr = dec.decode(ssidVal);
+      if (ssidStr) {
+        document.getElementById('ssid').placeholder = ssidStr + ' (現在の値)';
+        log(`現在の SSID: ${ssidStr}`);
+      }
+    } catch (e) {
+      log(`SSID 読み取りエラー: ${e.message}`, 'err');
+    }
+
+    try {
+      const stVal = await retryGatt(() => chrStatus.readValue(), 'Status 読み取り');
+      updateStatus(stVal);
+    } catch (e) {
+      log(`Status 読み取りエラー: ${e.message}`, 'err');
+    }
+
+    // Subscribe to Status notifications for live Wi-Fi updates.
+    await retryGatt(() => chrStatus.startNotifications(), 'Status 通知登録');
+    chrStatus.addEventListener('characteristicvaluechanged', e => {
+      updateStatus(e.target.value);
+    });
+    log('Status 通知を登録しました', 'ok');
+
+    setBleUi(true);
+  } catch (e) {
+    log(`接続失敗: ${e.message}`, 'err');
+    setBleUi(false);
+    document.getElementById('ble-dot').className = 'dot';
+    document.getElementById('ble-label').textContent = '未接続';
+    document.getElementById('btn-connect').disabled = false;
+  }
+});
+
+// --- Disconnect handler ---
+function onDisconnected() {
+  log('切断されました', 'err');
+  setBleUi(false);
+  chrSsid = chrPass = chrKey = chrApply = chrStatus = null;
+}
+
+// --- Manual disconnect ---
+document.getElementById('btn-disconnect').addEventListener('click', () => {
+  if (bleDevice && bleDevice.gatt.connected) {
+    bleDevice.gatt.disconnect();
+  }
+});
+
+// --- Apply ---
+document.getElementById('btn-apply').addEventListener('click', async () => {
+  const ssid = document.getElementById('ssid').value.trim();
+  const pass = document.getElementById('password').value;
+  const key  = document.getElementById('apikey').value.trim();
+
+  const btn = document.getElementById('btn-apply');
+  btn.disabled = true;
+  btn.textContent = '保存中…';
+
+  try {
+    // Write only fields that have input (empty = unchanged).
+    if (ssid) {
+      await chrSsid.writeValueWithResponse(strToBytes(ssid));
+      log('SSID 書き込み完了', 'ok');
+    }
+    if (pass) {
+      await chrPass.writeValueWithResponse(strToBytes(pass));
+      log('パスワード 書き込み完了', 'ok');
+    }
+    if (key) {
+      await chrKey.writeValueWithResponse(strToBytes(key));
+      log('API キー 書き込み完了', 'ok');
+    }
+
+    log('Apply を送信しています…');
+    // Sentinel: single byte 0x01.
+    await chrApply.writeValueWithResponse(new Uint8Array([0x01]));
+    log('Apply 完了 — デバイスが再起動します', 'ok');
+    btn.textContent = '再起動中…';
+    // Device reboots ~200 ms after Apply; disconnection event will fire shortly.
+  } catch (e) {
+    // A disconnection during/after Apply is expected (device restarted).
+    if (e.message && e.message.toLowerCase().includes('disconnect')) {
+      log('適用しました — 再起動中…', 'ok');
+      btn.textContent = '再起動中…';
+    } else {
+      log(`Apply エラー: ${e.message}`, 'err');
+      btn.disabled = false;
+      btn.textContent = '保存 & 再起動';
+    }
+  }
+});
+</script>
+</body>
+</html>

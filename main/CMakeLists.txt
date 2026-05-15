@@ -6,13 +6,14 @@ idf_component_register(
         "render_task.cpp"
         "servo_task.cpp"
         "speech.cpp"
-        "wifi_provisioning.cpp"
+        "wifi_sta.cpp"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
         board
         scs_servo
         avatar
         conversation
+        config_service
         json
         M5Unified
         M5GFX
@@ -22,8 +23,5 @@ idf_component_register(
         esp_wifi
         esp_netif
         esp_event
-        bt
-        wifi_provisioning
-        protocomm
 )
 target_compile_features(${COMPONENT_LIB} PRIVATE cxx_std_20)

@@ -13,15 +13,18 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <nvs_flash.h>
+
 #include "avatar/expression.hpp"
 #include "board/board.hpp"
 #include "board/si12t_touch.hpp"
+#include "config_service/config_service.hpp"
 #include "conversation_task.hpp"
 #include "render_task.hpp"
 #include "servo_task.hpp"
 #include "shared_state.hpp"
 #include "speech.hpp"
-#include "wifi_provisioning.hpp"
+#include "wifi_sta.hpp"
 
 namespace {
 
@@ -314,11 +317,23 @@ extern "C" void app_main()
     M5.Speaker.end();
     vTaskDelay(pdMS_TO_TICKS(20));
 
-    // Wi-Fi: reconnect with stored credentials, or run interactive BLE
-    // provisioning. Returns as soon as the driver is started — actual
-    // association happens in the background and is surfaced via the
-    // balloon ("Wi-Fi: 切断中") in demo_loop.
-    stackchan::app::wifi_connect_or_provision(board.display());
+    // NVS must be initialised exactly once, before NimBLE host and Wi-Fi.
+    {
+        esp_err_t nvs_err = nvs_flash_init();
+        if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+            nvs_flash_erase();
+            nvs_flash_init();
+        }
+    }
+
+    static stackchan::config::DeviceConfig cfg = stackchan::config::load();
+
+    if (auto r = stackchan::config::start(cfg); !r) {
+        ESP_LOGE(kTag, "BLE config service failed to start: %d (continuing without BLE)",
+                 static_cast<int>(r.error()));
+    }
+
+    stackchan::app::wifi_start(cfg);
 
     // Mic / loopback sanity check at startup.
     record_and_playback(2, "mic test");
@@ -334,8 +349,14 @@ extern "C" void app_main()
     g_render_args = new stackchan::app::RenderTaskArgs{.display = &board.display(), .state = g_state};
     g_servo_args = new stackchan::app::ServoTaskArgs{.state = g_state};
     g_touch = board.touch_sensor();
+
+    // API key: prefer NVS value; fall back to Kconfig (sdkconfig.defaults.local).
+    const char* api_key = !cfg.openai_api_key.empty()
+                              ? cfg.openai_api_key.c_str()
+                              : CONFIG_STACKCHAN_OPENAI_API_KEY;
+
     g_conversation_args = new stackchan::app::ConversationTaskArgs{
-        .state = g_state, .api_key = CONFIG_STACKCHAN_OPENAI_API_KEY, .touch = g_touch};
+        .state = g_state, .api_key = api_key, .touch = g_touch};
 
     stackchan::app::start_render_task(*g_render_args);
     stackchan::app::start_servo_task(*g_servo_args);

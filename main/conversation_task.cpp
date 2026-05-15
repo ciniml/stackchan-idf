@@ -23,7 +23,7 @@
 #include "avatar/expression.hpp"
 #include "board/si12t_touch.hpp"
 #include "conversation/openai_realtime_client.hpp"
-#include "wifi_provisioning.hpp"
+#include "wifi_sta.hpp"
 
 namespace stackchan::app {
 

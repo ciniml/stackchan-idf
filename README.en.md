@@ -12,7 +12,7 @@ Firmware for M5Stack CoreS3 + Stack-chan base, written against ESP-IDF 5.4 / C++
 - **Mic**: 2-second loopback (record-then-playback) sanity check at boot.
 - **Touch**: Tap the LCD to record 10 seconds, encode to AAC, and play it back.
 - **Speech balloon**: Rounded white panel along the bottom of the screen with a 24 px Japanese-capable Gothic font. Long text scrolls right-to-left as a marquee, auto-hides after one full pass, and invokes an optional completion callback.
-- **Wi-Fi provisioning**: ESP Unified Provisioning over BLE (NimBLE) on first boot — a QR code is rendered on the LCD for the *ESP BLE Provisioning* mobile app to scan. Credentials are persisted in NVS so subsequent boots reconnect silently. While Wi-Fi is down the avatar pins a "Wi-Fi: 切断中" balloon.
+- **BLE settings service**: a custom BLE GATT service (NimBLE) advertises from boot, always on. Configure the Wi-Fi network and the OpenAI API key from `tools/settings.html` (Web Bluetooth, desktop Chrome / Edge). The link is encrypted via Bluetooth 4.2+ Just Works pairing (no bonding). Settings are persisted in NVS; applying them reboots the device. While Wi-Fi is down the avatar pins a "Wi-Fi: 切断中" balloon.
 
 ## Hardware
 
@@ -47,7 +47,7 @@ GCC 14 `-Werror=maybe-uninitialized` check.
 ## Boot sequence
 
 1. M5 / Avatar initialised, startup arpeggio (C5–E5–G5).
-2. **Wi-Fi**: if no credentials are in NVS, run BLE provisioning (QR shown on LCD); otherwise reconnect. The Wi-Fi state machine runs in the background — boot does not block on association.
+2. **NVS / BLE settings service / Wi-Fi**: load settings from NVS, start the BLE settings service (always advertising). If an SSID is stored, start the Wi-Fi STA connection (non-blocking); otherwise boot continues with Wi-Fi disconnected until configured.
 3. Mic loopback test (record 2 s, then play it back).
 4. Servo power on, ping both servos.
 5. Start the render task (30 fps face, core 1) and servo task (20 ms tick, core 0).
