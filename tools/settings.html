@@ -115,6 +115,31 @@
     border-top: 1px solid #eee;
     padding-top: 0.75rem;
   }
+  .device-info {
+    display: none;
+    margin-bottom: 1.5rem;
+    padding: 0.6rem 0.9rem;
+    background: #fafafa;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    color: #555;
+  }
+  .device-info.visible { display: block; }
+  .device-info .row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    line-height: 1.6;
+  }
+  .device-info .key { color: #888; flex-shrink: 0; }
+  .device-info .val {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    color: #222;
+    text-align: right;
+    word-break: break-all;
+  }
 </style>
 </head>
 <body>
@@ -132,6 +157,14 @@
       <span class="flag" id="flag-pass" title="Password 設定済み">P</span>
       <span class="flag" id="flag-key"  title="API key 設定済み">K</span>
     </span>
+  </div>
+
+  <div class="device-info" id="device-info">
+    <div class="row"><span class="key">Firmware</span><span class="val" id="dis-fw">—</span></div>
+    <div class="row"><span class="key">Hardware</span><span class="val" id="dis-hw">—</span></div>
+    <div class="row"><span class="key">Model</span><span class="val" id="dis-model">—</span></div>
+    <div class="row"><span class="key">Manufacturer</span><span class="val" id="dis-mfr">—</span></div>
+    <div class="row"><span class="key">Software</span><span class="val" id="dis-sw">—</span></div>
   </div>
 
   <label for="ssid">Wi-Fi SSID</label>
@@ -168,6 +201,17 @@ const CHR_KEY     = 'e3f0a003-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_APPLY   = 'e3f0a004-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_STATUS  = 'e3f0a005-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_KX      = 'e3f0a006-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+
+// Device Information Service (Bluetooth SIG-assigned, UUID 0x180A).
+// Web Bluetooth accepts the standard short names.
+const DIS_SVC = 'device_information';
+const DIS_CHRS = {
+  fw:    'firmware_revision_string',
+  hw:    'hardware_revision_string',
+  model: 'model_number_string',
+  mfr:   'manufacturer_name_string',
+  sw:    'software_revision_string',
+};
 
 // --- State ---
 let bleDevice = null, bleServer = null, svc = null;
@@ -267,6 +311,38 @@ async function readEncrypted(chr) {
   return new Uint8Array(ptBuf);
 }
 
+// Read the Device Information Service (standard 0x180A) and populate the
+// device-info panel. DIS is plaintext (it's identification info), so this
+// runs alongside the encrypted settings I/O without touching aesKey.
+async function fetchDeviceInfo() {
+  const disSvc = await bleServer.getPrimaryService(DIS_SVC);
+  const entries = await Promise.all(
+    Object.entries(DIS_CHRS).map(async ([id, uuid]) => {
+      try {
+        const chr = await disSvc.getCharacteristic(uuid);
+        const v = await chr.readValue();
+        return [id, dec.decode(v)];
+      } catch (e) {
+        return [id, ''];
+      }
+    }));
+  for (const [id, val] of entries) {
+    const el = document.getElementById('dis-' + id);
+    if (el) el.textContent = val || '—';
+  }
+  document.getElementById('device-info').classList.add('visible');
+  const fw = entries.find(([id]) => id === 'fw');
+  if (fw && fw[1]) log(`Firmware: ${fw[1]}`);
+}
+
+function clearDeviceInfo() {
+  document.getElementById('device-info').classList.remove('visible');
+  for (const id of Object.keys(DIS_CHRS)) {
+    const el = document.getElementById('dis-' + id);
+    if (el) el.textContent = '—';
+  }
+}
+
 // Encrypt a payload and write it. Same wire format.
 async function writeEncrypted(chr, plainBytes) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -298,7 +374,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
     log('デバイスを検索中…');
     bleDevice = await navigator.bluetooth.requestDevice({
       filters: [{ services: [SVC_UUID] }],
-      optionalServices: [SVC_UUID],
+      optionalServices: [SVC_UUID, DIS_SVC],
     });
     bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
 
@@ -320,6 +396,13 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
     // X25519 handshake. After this, every other read/write is encrypted.
     await setupSession();
     log('鍵交換完了 (X25519 + AES-256-GCM)', 'ok');
+
+    // DIS is plaintext — read it once and surface in the UI.
+    try {
+      await fetchDeviceInfo();
+    } catch (e) {
+      log(`デバイス情報の取得失敗: ${e.message}`, 'err');
+    }
 
     try {
       const ssidBytes = await readEncrypted(chrSsid);
@@ -372,6 +455,7 @@ function onDisconnected() {
   setBleUi(false);
   chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = null;
   aesKey = null;
+  clearDeviceInfo();
 }
 
 // --- Manual disconnect ---

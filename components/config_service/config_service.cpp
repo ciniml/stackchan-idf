@@ -3,6 +3,7 @@
 
 #include <config_service/config_service.hpp>
 #include "config_store.hpp"
+#include "dis.hpp"
 #include "gatt_settings.hpp"
 
 #include <cstdio>
@@ -227,6 +228,11 @@ tl::expected<void, Error> start(const DeviceConfig& current)
     ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
     ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
 
+    // Register the standard Device Information Service alongside our settings
+    // service. DIS exposes manufacturer / model / firmware revision (filled
+    // from the git-derived PROJECT_VER) — handy for clients to identify what
+    // version they're talking to before touching the settings characteristics.
+    dis::init();
     gatt::init(current);
 
     // Register the bond store backend (RAM-only — CONFIG_BT_NIMBLE_NVS_PERSIST
