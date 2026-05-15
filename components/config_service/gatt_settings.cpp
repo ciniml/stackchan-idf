@@ -185,11 +185,13 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
 // descriptors, flags, min_key_size, val_handle — C++ designated initializers
 // must be in declaration order.
 //
-// NOTE: encryption (Just Works pairing) is currently DISABLED — the link is
-// plaintext. The originally-planned _READ_ENC / _WRITE_ENC flags were removed
-// because NimBLE Just Works pairing didn't complete cleanly with Web Bluetooth
-// in our testing. Anyone in BLE range of an unconfigured device can write the
-// settings. Acceptable v1 trade-off; revisit with persistent bonding later.
+// TODO: BLE link encryption is currently disabled — characteristics carry no
+// _ENC flags. NimBLE Just Works pairing + Windows Web Bluetooth (and Windows
+// OS-level pairing) failed reliably in testing, so the pragmatic v1 choice
+// is plaintext. SSID / password / API key are visible to any BLE sniffer in
+// range during setup. The SM config in config_service.cpp is left in place
+// (dormant) so encryption can be re-enabled later — likely needs PoP-style
+// application-layer encryption rather than relying on Just Works.
 static ble_gatt_chr_def kChrs[] = {
     {
         .uuid = &kSsidUuid.u,

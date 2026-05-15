@@ -103,6 +103,29 @@ static int gap_event_cb(struct ble_gap_event* event, void* /*arg*/)
         }
         break;
 
+    case BLE_GAP_EVENT_LINK_ESTAB:
+        // The link is now fully established. ESP-IDF's NimBLE fires this
+        // separately from BLE_GAP_EVENT_CONNECT and uses it as the "definitive
+        // link-ready" event. Opportunistically request encryption here so a
+        // central with no stored bond gets prompted to pair (Just Works) —
+        // characteristics with _WRITE_ENC need this to succeed before secrets
+        // can be written. If the central already has a bond, NimBLE has
+        // already encrypted the link via the stored LTK; skip in that case.
+        if (event->link_estab.status == 0) {
+            ESP_LOGI(kTag, "link established: handle=%d", event->link_estab.conn_handle);
+            struct ble_gap_conn_desc desc{};
+            if (ble_gap_conn_find(event->link_estab.conn_handle, &desc) == 0 &&
+                !desc.sec_state.encrypted) {
+                int rc = ble_gap_security_initiate(event->link_estab.conn_handle);
+                if (rc != 0 && rc != BLE_HS_EALREADY) {
+                    ESP_LOGW(kTag, "security_initiate: %d", rc);
+                }
+            }
+        } else {
+            ESP_LOGW(kTag, "link_estab failed: status=%d", event->link_estab.status);
+        }
+        break;
+
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI(kTag, "disconnected: reason=%d", event->disconnect.reason);
         gatt::set_subscribe(BLE_HS_CONN_HANDLE_NONE, false);
@@ -184,19 +207,22 @@ tl::expected<void, Error> start(const DeviceConfig& current)
         return tl::unexpected(Error::NimbleInit);
     }
 
-    // Pairing is currently disabled — characteristics carry no _ENC flags
-    // (see gatt_settings.cpp). The SM config below sits dormant. Future:
-    // re-enable Just Works pairing once the NimBLE / Web Bluetooth pairing
-    // flow is sorted out (likely needs persistent bonding to be robust).
+    // Opportunistic Just Works pairing: characteristics carry no _ENC flags
+    // (see gatt_settings.cpp), so reads/writes always work — but on every new
+    // connection we request pairing via ble_gap_security_initiate(). If the
+    // central agrees the link is encrypted as a bonus; if it declines or
+    // fails the setup still goes through. sm_bonding + key distribution +
+    // CONFIG_BT_NIMBLE_NVS_PERSIST=y persist the bond, so reconnecting from
+    // a previously paired host skips pairing entirely.
     ble_hs_cfg.reset_cb = on_reset;
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
     ble_hs_cfg.sm_sc = 1;
     ble_hs_cfg.sm_mitm = 0;
-    ble_hs_cfg.sm_bonding = 0;
+    ble_hs_cfg.sm_bonding = 1;
     ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
-    ble_hs_cfg.sm_our_key_dist = 0;
-    ble_hs_cfg.sm_their_key_dist = 0;
+    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
 
     gatt::init(current);
 

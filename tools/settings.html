@@ -335,23 +335,25 @@ document.getElementById('btn-apply').addEventListener('click', async () => {
   btn.textContent = '保存中…';
 
   try {
-    // Write only fields that have input (empty = unchanged).
+    // Write only fields that have input (empty = unchanged). Secret writes
+    // require an encrypted link, so the FIRST encryption-required write here
+    // triggers OS Just Works pairing — retryGatt waits for it to complete.
     if (ssid) {
-      await chrSsid.writeValueWithResponse(strToBytes(ssid));
+      await retryGatt(() => chrSsid.writeValueWithResponse(strToBytes(ssid)), 'SSID 書き込み');
       log('SSID 書き込み完了', 'ok');
     }
     if (pass) {
-      await chrPass.writeValueWithResponse(strToBytes(pass));
+      await retryGatt(() => chrPass.writeValueWithResponse(strToBytes(pass)), 'パスワード 書き込み');
       log('パスワード 書き込み完了', 'ok');
     }
     if (key) {
-      await chrKey.writeValueWithResponse(strToBytes(key));
+      await retryGatt(() => chrKey.writeValueWithResponse(strToBytes(key)), 'API キー 書き込み');
       log('API キー 書き込み完了', 'ok');
     }
 
     log('Apply を送信しています…');
-    // Sentinel: single byte 0x01.
-    await chrApply.writeValueWithResponse(new Uint8Array([0x01]));
+    // Sentinel: single byte 0x01. Apply also requires encryption.
+    await retryGatt(() => chrApply.writeValueWithResponse(new Uint8Array([0x01])), 'Apply');
     log('Apply 完了 — デバイスが再起動します', 'ok');
     btn.textContent = '再起動中…';
     // Device reboots ~200 ms after Apply; disconnection event will fire shortly.
