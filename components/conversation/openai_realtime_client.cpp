@@ -34,7 +34,13 @@ constexpr const char* kRealtimeUriPrefix = "wss://api.openai.com/v1/realtime?mod
 // leaves generous headroom so the append path never allocates.
 constexpr std::size_t kMaxChunkSamples = 2048;
 
-constexpr TickType_t kSendTimeout = pdMS_TO_TICKS(500);
+// Wi-Fi RTT is normally <100 ms, but bursts of latency or AP roaming can push
+// individual writes past several seconds. With the old 500 ms cap, a single
+// blip during a 40-ms mic chunk's send would fail transport_poll_write and
+// tear down the whole WebSocket — so the conversation would reconnect mid-
+// sentence every time the network burped. 3 s tolerates the typical worst
+// case without making the audio path feel laggy when things are healthy.
+constexpr TickType_t kSendTimeout = pdMS_TO_TICKS(3000);
 
 // OpenAI Realtime only offers pcm16 at 24 kHz or G.711 at 8 kHz, so the
 // requested output sample rate uniquely selects the wire codec.
@@ -89,6 +95,19 @@ public:
         cfg.task_prio = 5;
         cfg.disable_auto_reconnect = true;
         cfg.network_timeout_ms = 10000;
+        // Active keepalive: client sends a WebSocket PING every 15 s; if no
+        // PONG arrives within 25 s the client drops the connection (PONGs
+        // are auto-handled by esp_websocket_client). This catches silently-
+        // dead TCP links without waiting for the next mic-chunk send to fail.
+        cfg.ping_interval_sec = 15;
+        cfg.pingpong_timeout_sec = 25;
+        // Layer-4 TCP keepalive as a second line of defence — kernel probes
+        // notice broken NATs / AP reboots even if the WS ping cycle hasn't
+        // come around yet.
+        cfg.keep_alive_enable = true;
+        cfg.keep_alive_idle = 10;
+        cfg.keep_alive_interval = 5;
+        cfg.keep_alive_count = 3;
 
         client_ = esp_websocket_client_init(&cfg);
         if (client_ == nullptr) {
