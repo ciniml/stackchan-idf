@@ -9,6 +9,13 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# softprops/action-gh-release needs to create a Release on the repo. Default
+# token scopes are tight under modern GitHub orgs / repo settings, so grant
+# `contents: write` here explicitly rather than relying on
+# Settings → Actions → Workflow permissions.
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build Firmware
