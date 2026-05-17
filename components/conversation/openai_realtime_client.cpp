@@ -22,6 +22,7 @@
 #include <esp_heap_caps.h>
 
 #include "base64.hpp"
+#include "psram_allocator.hpp"
 
 namespace stackchan::conversation {
 
@@ -107,14 +108,8 @@ public:
         rx_op_code_ = 0;
 
         const std::size_t b64_cap = base64::encoded_size(kMaxChunkSamples * sizeof(std::int16_t));
-        b64_scratch_ = static_cast<char*>(heap_caps_malloc(b64_cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-        json_scratch_ = static_cast<char*>(heap_caps_malloc(b64_cap + 128, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-        if (b64_scratch_ == nullptr || json_scratch_ == nullptr) {
-            teardown();
-            return tl::unexpected{ConversationError::OutOfMemory};
-        }
-        b64_capacity_ = b64_cap;
-        json_capacity_ = b64_cap + 128;
+        b64_scratch_.assign(b64_cap, '\0');
+        json_scratch_.assign(b64_cap + 128, '\0');
 
         const std::string uri = std::string{kRealtimeUriPrefix} + config_.model;
 
@@ -334,16 +329,13 @@ private:
             heap_caps_free(rx_buffer_);
             rx_buffer_ = nullptr;
         }
-        if (b64_scratch_ != nullptr) {
-            heap_caps_free(b64_scratch_);
-            b64_scratch_ = nullptr;
-        }
-        if (json_scratch_ != nullptr) {
-            heap_caps_free(json_scratch_);
-            json_scratch_ = nullptr;
-        }
-        b64_capacity_ = 0;
-        json_capacity_ = 0;
+        // Release the PSRAM-backed scratch storage too — assign(0) keeps the
+        // capacity, so use shrink_to_fit after clearing. Free the heap so a
+        // subsequent reconnect doesn't leak it if the new chunk size differs.
+        b64_scratch_.clear();
+        b64_scratch_.shrink_to_fit();
+        json_scratch_.clear();
+        json_scratch_.shrink_to_fit();
         rx_capacity_ = 0;
         rx_len_ = 0;
         set_state(ConversationState::Idle);
@@ -391,19 +383,19 @@ private:
         const std::size_t raw_len =
             static_cast<std::size_t>(chunk->len_samples) * sizeof(std::int16_t);
         const std::size_t needed_b64 = base64::encoded_size(raw_len);
-        if (needed_b64 > b64_capacity_) {
+        if (needed_b64 > b64_scratch_.size()) {
             // Shouldn't happen — start() pre-sizes for the largest chunk —
             // but skip rather than try to grow on the hot path.
             return;
         }
-        auto enc = base64::encode_into({raw_ptr, raw_len}, {b64_scratch_, b64_capacity_});
+        auto enc = base64::encode_into({raw_ptr, raw_len}, b64_scratch_);
         if (!enc) {
             return;
         }
-        const int n = std::snprintf(json_scratch_, json_capacity_,
+        const int n = std::snprintf(json_scratch_.data(), json_scratch_.size(),
                                     "{\"type\":\"input_audio_buffer.append\",\"audio\":\"%.*s\"}",
-                                    static_cast<int>(*enc), b64_scratch_);
-        if (n <= 0 || static_cast<std::size_t>(n) >= json_capacity_) {
+                                    static_cast<int>(*enc), b64_scratch_.data());
+        if (n <= 0 || static_cast<std::size_t>(n) >= json_scratch_.size()) {
             return;
         }
 
@@ -412,7 +404,7 @@ private:
         int send_rc;
         {
             std::lock_guard lock{send_mutex_};
-            send_rc = esp_websocket_client_send_text(client_, json_scratch_, n, kSendTimeout);
+            send_rc = esp_websocket_client_send_text(client_, json_scratch_.data(), n, kSendTimeout);
         }
         const std::uint32_t dt =
             static_cast<std::uint32_t>(esp_timer_get_time() / 1000) - t0;
@@ -813,15 +805,14 @@ private:
     std::size_t rx_len_{0};
     std::uint8_t rx_op_code_{0};
 
-    // Hot-path scratch for input_audio_buffer.append. PSRAM-resident so the
-    // ~6 KiB combined doesn't eat the internal-RAM budget that mbedtls needs
-    // for handshake-time allocations. Only the sender task reads/writes these
-    // (push_audio just memcpys into PSRAM-allocated chunks now), so no extra
-    // locking beyond send_mutex_ is needed for the WS call.
-    char* b64_scratch_{nullptr};
-    std::size_t b64_capacity_{0};
-    char* json_scratch_{nullptr};
-    std::size_t json_capacity_{0};
+    // Hot-path scratch for input_audio_buffer.append. Storage lives in PSRAM
+    // (via PsramAllocator) so the ~6 KiB combined doesn't eat the internal
+    // heap that mbedtls needs for handshake-time allocations. Only the sender
+    // task reads/writes these (push_audio just memcpys into PSRAM-allocated
+    // chunks now), so no extra locking beyond send_mutex_ is needed for the
+    // WS call.
+    std::vector<char, PsramAllocator<char>> b64_scratch_;
+    std::vector<char, PsramAllocator<char>> json_scratch_;
 
     // Audio tx pipeline: push_audio() enqueues PSRAM-resident AudioChunks
     // here, sender_loop() drains them and feeds esp_websocket_client_send_text.
