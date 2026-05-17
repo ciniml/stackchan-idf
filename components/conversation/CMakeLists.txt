@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "openai_realtime_client.cpp"
+        "gemini_live_client.cpp"
         "base64.cpp"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."

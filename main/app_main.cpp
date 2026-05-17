@@ -383,21 +383,30 @@ extern "C" void app_main()
     g_servo_args = new stackchan::app::ServoTaskArgs{.state = g_state};
     g_touch = board.touch_sensor();
 
-    // API key: prefer NVS value; fall back to Kconfig (sdkconfig.defaults.local).
-    // openai_enabled is the user-controlled master switch — when off, the
-    // conversation task starts but immediately exits, as if no key were set.
-    // The key itself stays in NVS so the user can re-enable without re-typing.
+    // API key + provider: pick whichever backend the user configured. The
+    // openai_enabled flag still acts as a master "conversation off" switch
+    // regardless of provider; turning it off keeps both keys in NVS.
     const char* api_key = "";
     if (!cfg.openai_enabled) {
-        ESP_LOGI(kTag, "OpenAI conversation disabled by configuration");
-    } else if (!cfg.openai_api_key.empty()) {
-        api_key = cfg.openai_api_key.c_str();
+        ESP_LOGI(kTag, "Conversation disabled by configuration");
+    } else if (cfg.provider == stackchan::config::Provider::Gemini) {
+        if (!cfg.gemini_api_key.empty()) {
+            api_key = cfg.gemini_api_key.c_str();
+        }
+        ESP_LOGI(kTag, "provider=Gemini Live, key=%s",
+                 api_key[0] ? "set" : "empty");
     } else {
-        api_key = CONFIG_STACKCHAN_OPENAI_API_KEY;
+        if (!cfg.openai_api_key.empty()) {
+            api_key = cfg.openai_api_key.c_str();
+        } else {
+            api_key = CONFIG_STACKCHAN_OPENAI_API_KEY;
+        }
+        ESP_LOGI(kTag, "provider=OpenAI Realtime, key=%s",
+                 api_key[0] ? "set" : "empty");
     }
 
     g_conversation_args = new stackchan::app::ConversationTaskArgs{
-        .state = g_state, .api_key = api_key, .touch = g_touch};
+        .state = g_state, .api_key = api_key, .provider = cfg.provider, .touch = g_touch};
 
     stackchan::app::start_render_task(*g_render_args);
     stackchan::app::start_servo_task(*g_servo_args);

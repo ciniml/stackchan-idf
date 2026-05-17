@@ -22,6 +22,7 @@
 
 #include "avatar/expression.hpp"
 #include "board/si12t_touch.hpp"
+#include "conversation/gemini_live_client.hpp"
 #include "conversation/openai_realtime_client.hpp"
 #include "utf8.hpp"
 #include "wifi_sta.hpp"
@@ -36,14 +37,13 @@ namespace conv = stackchan::conversation;
 
 constexpr const char* kTag = "conv-task";
 
-// Audio rates. Both directions use G.711 µ-law @ 8 kHz — symmetric, and 6×
-// lighter on the BLE-coex-stressed Wi-Fi uplink than PCM16 @ 24 kHz. The
-// OpenAI client encodes mic samples to µ-law inside push_audio (PCM16 stays
-// in M5.Mic's buffers and on this task's stack only) and decodes the reply
-// back to PCM16 for M5.Speaker.
-constexpr std::uint32_t kMicSampleRate = 8000;
-constexpr std::uint32_t kSpeakerSampleRate = 8000;
-constexpr std::size_t kMicChunkSamples = 320;  // 40 ms per mic chunk @ 8 kHz
+// Audio rates depend on the selected provider:
+//   OpenAI Realtime: µ-law @ 8 kHz both directions (encoded inside the
+//                    client, this task just deals in PCM16).
+//   Gemini Live:     PCM16 @ 16 kHz uplink, PCM16 @ 24 kHz downlink.
+// The values used here are PCM16 sample rates the client expects/produces;
+// any companding happens inside the ConversationService impl.
+constexpr std::size_t kMaxMicChunkSamples = 640; // worst case: 40 ms @ 16 kHz
 constexpr std::uint32_t kEnvelopeStepMs = 16;
 
 // Playback ring: M5.Speaker.playRaw references the buffer (no copy) and its
@@ -56,10 +56,10 @@ constexpr std::size_t kSegmentSamples = 4096;  // ~512 ms per segment at 8 kHz
 constexpr std::size_t kSegmentBuffers = 3;
 constexpr int kSpeakerChannel = 0;
 
-// Streaming playback: start speaking once this much reply audio has been
-// buffered, rather than waiting for the whole reply. Jitter margin against
-// network hiccups (the wire delivers µ-law faster than realtime).
-constexpr std::size_t kJitterBufferSamples = kSpeakerSampleRate * 300 / 1000; // ~300 ms
+// Streaming playback: start speaking once this many ms of reply audio has
+// been buffered, rather than waiting for the whole reply. Jitter margin
+// against network hiccups. Scaled to actual speaker_sample_rate_ at use.
+constexpr std::uint32_t kJitterBufferMs = 300;
 
 // Mic / speaker I2S handoff settle time (matches the existing audio code).
 constexpr TickType_t kI2sSettle = pdMS_TO_TICKS(20);
@@ -142,15 +142,28 @@ std::uint32_t now_ms()
 // Owns the conversation; one instance per task.
 class Coordinator {
 public:
-    Coordinator(SharedState& state, const char* api_key, board::Si12tTouch* touch)
-        : state_{state}, api_key_{api_key != nullptr ? api_key : ""}, touch_{touch}
+    Coordinator(SharedState& state, const char* api_key, config::Provider provider,
+                board::Si12tTouch* touch)
+        : state_{state}, api_key_{api_key != nullptr ? api_key : ""},
+          provider_{provider}, touch_{touch}
     {
+        // Per-provider audio rates. The OpenAI client further compands its
+        // 8 kHz PCM16 into µ-law on the wire; Gemini sends raw PCM16.
+        if (provider_ == config::Provider::Gemini) {
+            mic_sample_rate_ = 16000;
+            speaker_sample_rate_ = 24000;
+        } else {
+            mic_sample_rate_ = 8000;
+            speaker_sample_rate_ = 8000;
+        }
+        mic_chunk_samples_ = mic_sample_rate_ * 40 / 1000;        // 40 ms per chunk
+        jitter_buffer_samples_ = speaker_sample_rate_ * kJitterBufferMs / 1000u;
     }
 
     void run()
     {
         if (api_key_.empty()) {
-            ESP_LOGW(kTag, "OPENAI_API_KEY is empty — conversation disabled, demo mode continues");
+            ESP_LOGW(kTag, "API key empty for selected provider — conversation disabled");
             vTaskDelete(nullptr);
             return;
         }
@@ -159,11 +172,12 @@ public:
         while (!wifi_is_connected()) {
             vTaskDelay(pdMS_TO_TICKS(500));
         }
-        ESP_LOGI(kTag, "Wi-Fi up, starting conversation");
+        ESP_LOGI(kTag, "Wi-Fi up, starting %s conversation",
+                 provider_ == config::Provider::Gemini ? "Gemini" : "OpenAI");
 
         event_queue_ = xQueueCreate(32, sizeof(conv::ConversationEvent*));
-        mic_buf_[0].resize(kMicChunkSamples);
-        mic_buf_[1].resize(kMicChunkSamples);
+        mic_buf_[0].resize(mic_chunk_samples_);
+        mic_buf_[1].resize(mic_chunk_samples_);
 
         // Segment ring must live in internal RAM (see kSegmentSamples comment).
         // The Coordinator object itself is heap-allocated and large enough to
@@ -178,7 +192,11 @@ public:
             }
         }
 
-        client_ = std::make_unique<conv::OpenAiRealtimeClient>(api_key_);
+        if (provider_ == config::Provider::Gemini) {
+            client_ = std::make_unique<conv::GeminiLiveClient>(api_key_);
+        } else {
+            client_ = std::make_unique<conv::OpenAiRealtimeClient>(api_key_);
+        }
         client_->set_event_callback([this](const conv::ConversationEvent& ev) { enqueue_event(ev); });
 
         if (!connect()) {
@@ -237,10 +255,17 @@ private:
     {
         conv::ConversationConfig cfg{};
         cfg.instructions = kInstructions;
-        cfg.voice = CONFIG_STACKCHAN_OPENAI_VOICE;
-        cfg.model = CONFIG_STACKCHAN_OPENAI_REALTIME_MODEL;
-        cfg.input_sample_rate_hz = kMicSampleRate;
-        cfg.output_sample_rate_hz = kSpeakerSampleRate; // 8 kHz selects g711_ulaw on the wire
+        if (provider_ == config::Provider::Gemini) {
+            // Gemini Live model + voice. The model is namespaced as
+            // "models/..."; the client prepends that for us when missing.
+            cfg.model = "gemini-2.0-flash-live-001";
+            cfg.voice = "Aoede"; // pre-built voice name; OK to leave empty
+        } else {
+            cfg.model = CONFIG_STACKCHAN_OPENAI_REALTIME_MODEL;
+            cfg.voice = CONFIG_STACKCHAN_OPENAI_VOICE;
+        }
+        cfg.input_sample_rate_hz = mic_sample_rate_;
+        cfg.output_sample_rate_hz = speaker_sample_rate_;
         cfg.tools.push_back(make_set_expression_tool());
         cfg.tools.push_back(make_set_head_pose_tool());
         cfg.tools.push_back(make_speak_katakoto_tool());
@@ -335,7 +360,7 @@ private:
                M5.Speaker.isPlaying(kSpeakerChannel) < kSegmentBuffers - 1) {
             const std::size_t n = std::min(kSegmentSamples, assistant_pcm_.size() - seg_pos_);
             std::memcpy(seg_buf_[seg_next_], assistant_pcm_.data() + seg_pos_, n * sizeof(std::int16_t));
-            M5.Speaker.playRaw(seg_buf_[seg_next_], n, kSpeakerSampleRate, /*stereo=*/false,
+            M5.Speaker.playRaw(seg_buf_[seg_next_], n, speaker_sample_rate_, /*stereo=*/false,
                                /*repeat=*/1, kSpeakerChannel, /*stop_current_sound=*/false);
             seg_pos_ += n;
             seg_next_ = (seg_next_ + 1) % kSegmentBuffers;
@@ -369,7 +394,7 @@ private:
         if (M5.Mic.isRecording() < 2) {
             const auto& buf = mic_buf_[mic_read_];
             (void)client_->push_audio(std::span<const std::int16_t>{buf.data(), buf.size()});
-            M5.Mic.record(mic_buf_[mic_read_].data(), mic_buf_[mic_read_].size(), kMicSampleRate, /*stereo=*/false);
+            M5.Mic.record(mic_buf_[mic_read_].data(), mic_buf_[mic_read_].size(), mic_sample_rate_, /*stereo=*/false);
             mic_read_ ^= 1;
         } else {
             vTaskDelay(pdMS_TO_TICKS(5));
@@ -384,12 +409,12 @@ private:
         assistant_pcm_.clear();
         // Reserve ahead so the streaming-playback inserts don't keep
         // reallocating the PSRAM buffer as the reply grows.
-        assistant_pcm_.reserve(kSpeakerSampleRate * 20); // ~20 s headroom
+        assistant_pcm_.reserve(speaker_sample_rate_ * 20); // ~20 s headroom
         assistant_text_.clear();
         audio_complete_ = false;
         // Prime the 2-deep mic queue.
-        M5.Mic.record(mic_buf_[0].data(), mic_buf_[0].size(), kMicSampleRate, /*stereo=*/false);
-        M5.Mic.record(mic_buf_[1].data(), mic_buf_[1].size(), kMicSampleRate, /*stereo=*/false);
+        M5.Mic.record(mic_buf_[0].data(), mic_buf_[0].size(), mic_sample_rate_, /*stereo=*/false);
+        M5.Mic.record(mic_buf_[1].data(), mic_buf_[1].size(), mic_sample_rate_, /*stereo=*/false);
         mic_read_ = 0;
         set_local(Local::Listening);
     }
@@ -413,7 +438,7 @@ private:
     // assistant_pcm_ is still being streamed in.
     void update_mouth()
     {
-        const std::size_t window = kSpeakerSampleRate * kEnvelopeStepMs / 1000u;
+        const std::size_t window = speaker_sample_rate_ * kEnvelopeStepMs / 1000u;
         const std::uint32_t elapsed = now_ms() - playback_start_ms_;
         const std::size_t begin = (elapsed / kEnvelopeStepMs) * window;
         if (begin + window > assistant_pcm_.size()) {
@@ -490,7 +515,7 @@ private:
                 assistant_pcm_.insert(assistant_pcm_.end(), ev.audio->begin(), ev.audio->end());
                 // Streaming: start playback as soon as the jitter buffer fills,
                 // rather than waiting for the whole reply.
-                if (local_ == Local::Thinking && assistant_pcm_.size() >= kJitterBufferSamples) {
+                if (local_ == Local::Thinking && assistant_pcm_.size() >= jitter_buffer_samples_) {
                     tool_pending_ = false;
                     start_speaking();
                 }
@@ -719,10 +744,17 @@ private:
 
     SharedState& state_;
     std::string api_key_;
+    config::Provider provider_;
     board::Si12tTouch* touch_; // top touch sensor for barge-in (may be null)
     conv::ConversationConfig config_{};
-    std::unique_ptr<conv::OpenAiRealtimeClient> client_;
+    std::unique_ptr<conv::ConversationService> client_;
     QueueHandle_t event_queue_{nullptr};
+
+    // Per-provider audio rates set in the constructor.
+    std::uint32_t mic_sample_rate_{8000};
+    std::uint32_t speaker_sample_rate_{8000};
+    std::size_t mic_chunk_samples_{320};
+    std::size_t jitter_buffer_samples_{2400};
 
     Local local_{Local::Init};
     std::uint32_t thinking_since_ms_{0};
@@ -743,7 +775,7 @@ private:
 void conversation_task_entry(void* arg)
 {
     auto& args = *static_cast<ConversationTaskArgs*>(arg);
-    auto* coordinator = new Coordinator(*args.state, args.api_key, args.touch);
+    auto* coordinator = new Coordinator(*args.state, args.api_key, args.provider, args.touch);
     coordinator->run();
     // run() only returns by deleting the task; keep the object alive regardless.
     vTaskDelete(nullptr);
