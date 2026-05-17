@@ -11,6 +11,11 @@ sdkconfig.defaults.*.local
 managed_components/
 dependencies.lock
 
+# Pinned PROJECT_VER override written by CI's release workflow (overrides
+# git_describe for esp_app_desc.version). Local builds rely on git_describe
+# directly.
+version.txt
+
 Makefile.local
 
 *.swp

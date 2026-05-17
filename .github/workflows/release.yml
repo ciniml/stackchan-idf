@@ -52,6 +52,25 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE/components/M5Unified"
           tools/apply-m5-patches.sh
 
+      - name: Pin PROJECT_VER for the build
+        # `tools/apply-m5-patches.sh` modifies the M5Unified submodule's
+        # working tree, which makes ESP-IDF's internal
+        # `git describe --tags --dirty` (run during cmake) tack a -dirty
+        # suffix onto the version stamped into esp_app_desc. Writing the
+        # resolved version to version.txt at the project root takes priority
+        # over git_describe (see project.cmake's PROJECT_VER resolution
+        # order: version.txt > project(VERSION ...) > git describe) and
+        # gives us a clean, deterministic version string in CI builds.
+        shell: bash
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="dev-${GITHUB_SHA::8}"
+          fi
+          echo "$VERSION" > version.txt
+          echo "version.txt contents: $(cat version.txt)"
+
       - name: Build firmware
         shell: bash
         env:
