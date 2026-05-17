@@ -75,6 +75,12 @@ jobs:
           find _site/firmware -maxdepth 2 -type f | sort
 
       - uses: actions/configure-pages@v5
+        with:
+          # Auto-enable GitHub Pages with the "GitHub Actions" source on
+          # first run. Without this the action returns 404 ("Get Pages
+          # site failed") unless someone manually enables Pages in
+          # Settings → Pages first.
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
