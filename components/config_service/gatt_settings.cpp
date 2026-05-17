@@ -495,7 +495,13 @@ static ble_gatt_chr_def kChrs[] = {
     {
         .uuid = &kOtaDataUuid.u,
         .access_cb = gatt_access_cb,
-        .flags = BLE_GATT_CHR_F_WRITE,
+        // Both response and no-response writes. WRITE_NO_RSP lets the
+        // Web Bluetooth client pipeline ATT_WRITE_CMD frames without
+        // waiting for each ATT_WRITE_RSP, which is the dominant
+        // cost in the old OTA path (~one 30-50 ms RTT per chunk).
+        // The application protocol does its own flow control by reading
+        // the OtaControl status every N chunks.
+        .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
         .val_handle = &g_ota_data_handle,
     },
     {

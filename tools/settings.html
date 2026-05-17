@@ -762,6 +762,52 @@ async function performOta(file) {
     setOtaProgress(0, total, null);
 
     // stream
+    // Probe the firmware's capability once: try a single
+    // writeValueWithoutResponse with an empty payload. On v0.0.4+ the
+    // OtaData chr has BLE_GATT_CHR_F_WRITE_NO_RSP and this succeeds; on
+    // older firmware Chrome rejects the call because the chr doesn't
+    // advertise the no-response property. Either way the chunked loop
+    // below picks the right writer for the rest of the transfer.
+    let fastPath = true;
+    try {
+      // A real probe would require a chunk that the firmware will accept;
+      // instead just look for the property bit on the GATT object.
+      // chr.properties.writeWithoutResponse is set in the WebBluetooth
+      // descriptor when the firmware advertised WRITE_NO_RSP.
+      fastPath = !!chrOtaData.properties.writeWithoutResponse;
+    } catch (_) {
+      fastPath = false;
+    }
+    const writeChunk = fastPath
+      ? (bytes) => writeEncryptedNoResp(chrOtaData, bytes)
+      : (bytes) => writeEncrypted(chrOtaData, bytes);
+    log(fastPath
+        ? '高速パス: writeValueWithoutResponse + 16-chunk status sync'
+        : '互換パス: writeValueWithResponse (firmware < v0.0.4)');
+
+    // Flow control: in the fast path the browser fires chunks without
+    // waiting for ATT_WRITE_RSP, so neither end has back-pressure visible
+    // at the app layer. Every FLUSH_EVERY chunks we read OtaControl to
+    // confirm the firmware has caught up. The firmware buffers ATT writes
+    // in NimBLE's host queue; this caps the in-flight window.
+    const FLUSH_EVERY = fastPath ? 16 : 1;
+    let chunksSinceFlush = 0;
+    async function maybeFlush(forceLog) {
+      const st = await readOtaStatus();
+      if (st.state !== 'receiving') {
+        throw new Error(`flush 中に session が消失 (${st.state}: ${st.error || ''})`);
+      }
+      // Reuse st.received as the canonical progress source — bytes the
+      // device actually wrote to flash, not what we shipped over the wire.
+      const now = performance.now();
+      if (forceLog || (now - lastProgressMs) >= 250) {
+        const bps = ((st.received - lastProgressBytes) * 1000) / Math.max(1, now - lastProgressMs);
+        setOtaProgress(st.received, total, bps);
+        lastProgressMs = now;
+        lastProgressBytes = st.received;
+      }
+    }
+
     const reader = file.stream().getReader();
     let received = 0;
     let pending = new Uint8Array(0);
@@ -771,10 +817,6 @@ async function performOta(file) {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      // Concatenate any leftover from the previous read with this one and
-      // slice into fixed-size chunks. Sequential writeWithResponse waits for
-      // each ATT ack before the next, so this is naturally rate-limited to
-      // whatever the BLE link can sustain.
       let buf;
       if (pending.length === 0) {
         buf = value;
@@ -785,23 +827,22 @@ async function performOta(file) {
       }
       let off = 0;
       while (off + OTA_CHUNK_SIZE <= buf.length) {
-        await writeEncrypted(chrOtaData, buf.subarray(off, off + OTA_CHUNK_SIZE));
+        await writeChunk(buf.subarray(off, off + OTA_CHUNK_SIZE));
         off += OTA_CHUNK_SIZE;
         received += OTA_CHUNK_SIZE;
-        const now = performance.now();
-        if (now - lastProgressMs >= 250) {
-          const bps = ((received - lastProgressBytes) * 1000) / (now - lastProgressMs);
-          setOtaProgress(received, total, bps);
-          lastProgressMs = now;
-          lastProgressBytes = received;
+        if (++chunksSinceFlush >= FLUSH_EVERY) {
+          await maybeFlush(false);
+          chunksSinceFlush = 0;
         }
       }
       pending = buf.subarray(off);
     }
     if (pending.length > 0) {
-      await writeEncrypted(chrOtaData, pending);
+      await writeChunk(pending);
       received += pending.length;
     }
+    // Sync once at the end so the byte count is exact before we send `end`.
+    await maybeFlush(true);
     const elapsed = (performance.now() - t0) / 1000;
     setOtaProgress(received, total, received / elapsed);
     log(`データ送信完了 (${elapsed.toFixed(1)} 秒, 平均 ${fmtBytes(received / elapsed)}/s)`);
@@ -837,6 +878,21 @@ async function writeEncrypted(chr, plainBytes) {
   wire.set(iv, 0);
   wire.set(ctTag, iv.length);
   await chr.writeValueWithResponse(wire);
+}
+
+// Same wire format, but the bulk OTA path uses writeValueWithoutResponse
+// so successive chunks pipeline through one connection event each — no
+// per-chunk ATT_WRITE_RSP wait. Throws if the chr doesn't expose the
+// WRITE_NO_RSP flag (pre-v0.0.4 firmware) so the caller can fall back to
+// the response variant.
+async function writeEncryptedNoResp(chr, plainBytes) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ctTag = new Uint8Array(
+    await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, plainBytes));
+  const wire = new Uint8Array(iv.length + ctTag.length);
+  wire.set(iv, 0);
+  wire.set(ctTag, iv.length);
+  await chr.writeValueWithoutResponse(wire);
 }
 
 // --- Connect ---

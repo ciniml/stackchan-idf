@@ -58,3 +58,11 @@ CONFIG_BT_NIMBLE_TASK_STACK_SIZE=8192
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+
+# Bump the preferred ATT MTU to the maximum (517 bytes). Default is 256,
+# which forces our 508 B encrypted OTA chunks through a 3-frame Prepared
+# Write per chunk; with MTU 517 the chunk fits in a single
+# ATT_WRITE_REQ / ATT_WRITE_CMD, removing 2 RTTs per chunk. Combined
+# with the WRITE_NO_RSP flag on OtaData this is what makes pipelined
+# OTA possible.
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=517
