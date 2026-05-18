@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSL-1.0
 
 #include <config_service/config_service.hpp>
-#include "config_store.hpp"
+#include <config_service/config_store.hpp>
 #include "dis.hpp"
 #include "gatt_settings.hpp"
 
@@ -18,6 +18,7 @@
 #include <nimble/nimble_port_freertos.h>
 #include <host/ble_hs.h>
 #include <host/ble_gap.h>
+#include <host/ble_esp_gap.h>
 #include <host/ble_store.h>
 #include <host/ble_uuid.h>
 #include <services/gap/ble_svc_gap.h>
@@ -93,7 +94,47 @@ static int gap_event_cb(struct ble_gap_event* event, void* /*arg*/)
         // even though the connection itself is already up. Treat as a true
         // connect failure only when no connection handle is associated.
         if (event->connect.status == 0) {
-            ESP_LOGI(kTag, "connected: handle=%d", event->connect.conn_handle);
+            const uint16_t conn = event->connect.conn_handle;
+            ESP_LOGI(kTag, "connected: handle=%d", conn);
+
+            // BLE OTA throughput tuning. Without these the link sits at
+            // 27 B LL PDUs (DLE off), 1M PHY, and whatever connection
+            // interval Chrome chose (typically 30–50 ms on desktop) —
+            // measured ~2 KB/s. Triggering DLE + 2M + a shorter interval
+            // moves us into the 20+ KB/s range.
+
+            // 1. Data Length Extension. NimBLE-port enables DLE at the LL
+            // by default but neither side initiates LL_LENGTH_REQ on its
+            // own. 251 B / 2120 µs are the spec max for 1M PHY and remain
+            // valid on 2M.
+            int rc = ble_hs_hci_util_set_data_len(conn, 251, 2120);
+            if (rc != 0) {
+                ESP_LOGW(kTag, "set_data_len: rc=%d", rc);
+            }
+
+            // 2. Switch both directions to 2M PHY. Halves the on-air time
+            // per LL PDU, complementary to DLE.
+            rc = ble_gap_set_prefered_le_phy(conn,
+                                             BLE_GAP_LE_PHY_2M_MASK,
+                                             BLE_GAP_LE_PHY_2M_MASK,
+                                             0);
+            if (rc != 0) {
+                ESP_LOGW(kTag, "set_prefered_le_phy: rc=%d", rc);
+            }
+
+            // 3. Request a tighter connection interval. 12–24 × 1.25 ms
+            // = 15–30 ms; latency 0 so every event is honoured. Chrome
+            // can refuse, but on Linux/BlueZ and recent Android it
+            // accepts. 400 × 10 ms = 4 s supervision timeout.
+            struct ble_gap_upd_params params{};
+            params.itvl_min = 12;
+            params.itvl_max = 24;
+            params.latency = 0;
+            params.supervision_timeout = 400;
+            rc = ble_gap_update_params(conn, &params);
+            if (rc != 0) {
+                ESP_LOGW(kTag, "update_params: rc=%d", rc);
+            }
         } else if (event->connect.conn_handle == BLE_HS_CONN_HANDLE_NONE) {
             ESP_LOGW(kTag, "connect failed: status=%d", event->connect.status);
             start_advertising();
@@ -147,6 +188,38 @@ static int gap_event_cb(struct ble_gap_event* event, void* /*arg*/)
         ESP_LOGI(kTag, "MTU: conn=%d mtu=%d",
                  event->mtu.conn_handle, event->mtu.value);
         break;
+
+    case BLE_GAP_EVENT_DATA_LEN_CHG:
+        // Confirms whether the peer honoured our LL_LENGTH_REQ.
+        ESP_LOGI(kTag, "DLE: tx_octets=%u tx_time=%u rx_octets=%u rx_time=%u",
+                 event->data_len_chg.max_tx_octets,
+                 event->data_len_chg.max_tx_time,
+                 event->data_len_chg.max_rx_octets,
+                 event->data_len_chg.max_rx_time);
+        break;
+
+    case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE:
+        // Confirms whether the peer accepted our 2M PHY request.
+        ESP_LOGI(kTag, "PHY: status=%d tx_phy=%u rx_phy=%u",
+                 event->phy_updated.status,
+                 event->phy_updated.tx_phy,
+                 event->phy_updated.rx_phy);
+        break;
+
+    case BLE_GAP_EVENT_CONN_UPDATE: {
+        // Confirms the negotiated connection interval after our
+        // ble_gap_update_params request.
+        struct ble_gap_conn_desc desc{};
+        if (ble_gap_conn_find(event->conn_update.conn_handle, &desc) == 0) {
+            ESP_LOGI(kTag, "CONN_UPDATE: status=%d itvl=%u (%.2f ms) latency=%u timeout=%u",
+                     event->conn_update.status,
+                     desc.conn_itvl,
+                     desc.conn_itvl * 1.25f,
+                     desc.conn_latency,
+                     desc.supervision_timeout);
+        }
+        break;
+    }
 
     case BLE_GAP_EVENT_REPEAT_PAIRING: {
         // If we ever receive an unsolicited pair request from a peer that

@@ -261,6 +261,14 @@
     <div class="row"><span class="key">Model</span><span class="val" id="dis-model">—</span></div>
     <div class="row"><span class="key">Manufacturer</span><span class="val" id="dis-mfr">—</span></div>
     <div class="row"><span class="key">Software</span><span class="val" id="dis-sw">—</span></div>
+    <div class="row" id="dis-wifi-row" hidden>
+      <span class="key">Wi-Fi 設定 (mDNS)</span>
+      <span class="val"><a id="dis-wifi-url" href="#" target="_blank" rel="noopener">—</a></span>
+    </div>
+    <div class="row" id="dis-wifi-ip-row" hidden>
+      <span class="key">Wi-Fi 設定 (IP)</span>
+      <span class="val"><a id="dis-wifi-ip-url" href="#" target="_blank" rel="noopener">—</a></span>
+    </div>
   </div>
 
   <label for="ssid">Wi-Fi SSID</label>
@@ -383,6 +391,7 @@ const CHR_OTA_CTRL = 'e3f0a009-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_OTA_DATA = 'e3f0a00a-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_PROVIDER = 'e3f0a00b-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_GEMINI_KEY = 'e3f0a00c-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+const CHR_WIFI_IP = 'e3f0a00d-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 
 // OTA transfer parameters. The chunk size is bounded by the Web Bluetooth
 // GATT value-length cap of 512 bytes total on writeValueWithResponse — and
@@ -405,7 +414,7 @@ const DIS_CHRS = {
 
 // --- State ---
 let bleDevice = null, bleServer = null, svc = null;
-let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null;
+let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrWifiIp = null;
 let jttsInitialJson = '';  // last read JSON, used to detect Apply-time changes
 let otaInFlight = false;
 let aesKey = null;  // CryptoKey for AES-256-GCM, derived per connection
@@ -531,6 +540,51 @@ async function fetchDeviceInfo() {
   document.getElementById('device-info').classList.add('visible');
   const fw = entries.find(([id]) => id === 'fw');
   if (fw && fw[1]) log(`Firmware: ${fw[1]}`);
+
+  // Derive the mDNS hostname from the BLE advertising name. The device side
+  // publishes its mDNS host as `stackchan-<mac3>.local` using the same lower
+  // 3 bytes of the MAC that go into the BLE name `Stackchan-XXXXXX`. So a
+  // lowercase pass over the BLE name produces the correct .local hostname.
+  // Requires the device to have Wi-Fi configured + an IP — if it doesn't,
+  // the link is still shown but the browser will fail to resolve.
+  const name = bleDevice && bleDevice.name;
+  const row = document.getElementById('dis-wifi-row');
+  const link = document.getElementById('dis-wifi-url');
+  if (name && /^stackchan-[0-9a-f]{6}$/i.test(name)) {
+    // Plain HTTP — the Wi-Fi settings page doesn't use Web Crypto, so
+    // a Secure Context isn't required and self-signed TLS would only
+    // add the cert-warning click-through.
+    const url = `http://${name.toLowerCase()}.local/`;
+    link.href = url;
+    link.textContent = url;
+    row.hidden = false;
+  } else {
+    row.hidden = true;
+  }
+
+  // Fallback for environments where mDNS doesn't resolve (Android Chrome,
+  // Windows without Bonjour, locked-down nets): read the live IPv4 address
+  // from the encrypted WifiIp chr and surface it as a second link. Empty
+  // string from the device means Wi-Fi isn't connected yet — hide the row.
+  const ipRow = document.getElementById('dis-wifi-ip-row');
+  const ipLink = document.getElementById('dis-wifi-ip-url');
+  if (chrWifiIp && aesKey) {
+    try {
+      const ip = dec.decode(await readEncrypted(chrWifiIp)).trim();
+      if (ip && /^[\d.]+$/.test(ip)) {
+        const url = `http://${ip}/`;
+        ipLink.href = url;
+        ipLink.textContent = url;
+        ipRow.hidden = false;
+      } else {
+        ipRow.hidden = true;
+      }
+    } catch (e) {
+      ipRow.hidden = true;
+    }
+  } else {
+    ipRow.hidden = true;
+  }
 }
 
 function clearDeviceInfo() {
@@ -539,6 +593,14 @@ function clearDeviceInfo() {
     const el = document.getElementById('dis-' + id);
     if (el) el.textContent = '—';
   }
+  document.getElementById('dis-wifi-row').hidden = true;
+  const link = document.getElementById('dis-wifi-url');
+  link.href = '#';
+  link.textContent = '—';
+  document.getElementById('dis-wifi-ip-row').hidden = true;
+  const ipLink = document.getElementById('dis-wifi-ip-url');
+  ipLink.href = '#';
+  ipLink.textContent = '—';
 }
 
 // --- jtts config form <-> JSON ---
@@ -943,6 +1005,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       ['otaData',    CHR_OTA_DATA],
       ['provider',   CHR_PROVIDER],
       ['geminiKey',  CHR_GEMINI_KEY],
+      ['wifiIp',     CHR_WIFI_IP],
     ];
     const settled = await Promise.allSettled(
       probes.map(([_, uuid]) => svc.getCharacteristic(uuid)));
@@ -965,6 +1028,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
     chrOtaData  = found.otaData  ?? null;
     chrProvider = found.provider ?? null;
     chrGeminiKey= found.geminiKey?? null;
+    chrWifiIp   = found.wifiIp   ?? null;
     log(`Characteristics 取得完了 (missing: ${missing.length ? missing.join(', ') : 'none'})`,
         missing.length ? 'info' : 'ok');
 
@@ -1083,7 +1147,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
 function onDisconnected() {
   log('切断されました', 'err');
   setBleUi(false);
-  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = null;
+  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrWifiIp = null;
   aesKey = null;
   clearDeviceInfo();
   delete document.getElementById('openai-enabled').dataset.initial;

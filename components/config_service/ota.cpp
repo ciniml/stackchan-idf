@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
 // SPDX-License-Identifier: BSL-1.0
 
-#include "ota.hpp"
+#include <config_service/ota.hpp>
 
 #include <cstdio>
 #include <cstring>

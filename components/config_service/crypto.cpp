@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
 // SPDX-License-Identifier: BSL-1.0
 
-#include "crypto.hpp"
+#include <config_service/crypto.hpp>
 
 #include <cstring>
 #include <mutex>

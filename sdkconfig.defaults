@@ -59,6 +59,22 @@ CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 
+# Default 16 KiB keeps every allocation < 16 KiB pinned to internal RAM
+# first, which fragments internal SRAM heavily and starves the AES hardware
+# DMA descriptor allocator (esp-aes "Failed to allocate memory") during
+# Gemini WS reconnects. 1 KiB means only genuinely small allocations
+# (FreeRTOS queues, sockaddr_in, etc.) prefer internal; cJSON parses /
+# WebSocket buffers / TLS scratch all land in PSRAM, leaving the internal
+# heap contiguous enough for the AES DMA descriptors to slot in.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
+
+# Keep hardware AES on (ESP32-S3 doesn't expose hardware-accelerated GCM
+# — GHASH is always done in software here regardless of config). The AES
+# block operation uses a small DMA descriptor in internal RAM; the
+# ALWAYSINTERNAL bump above is what keeps that allocation reliable under
+# WebSocket reconnect pressure.
+CONFIG_MBEDTLS_HARDWARE_AES=y
+
 # Bump the preferred ATT MTU to the maximum (517 bytes). Default is 256,
 # which forces our 508 B encrypted OTA chunks through a 3-frame Prepared
 # Write per chunk; with MTU 517 the chunk fits in a single
@@ -66,3 +82,29 @@ CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 # with the WRITE_NO_RSP flag on OtaData this is what makes pipelined
 # OTA possible.
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=517
+
+# HTTP server URI handler defaults are too small once wifi_config_service
+# registers ~20 routes plus the static root. Raise the cap so http_server
+# initialisation doesn't silently drop late registrations.
+CONFIG_HTTPD_MAX_URI_LEN=128
+
+# Chrome's HTTP request headers (Sec-CH-UA-*, Accept, User-Agent, Cookie,
+# Origin, Referer) routinely exceed 1 KiB. The default 512 B cap triggers
+# "Header fields are too long" 431 responses from esp_http_server. 4 KiB
+# leaves plenty of headroom for Chrome's growing client-hint set.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=4096
+
+# mDNS hostname is set at runtime to "stackchan-XXXXXX", but Kconfig still
+# wants a build-time default; keep it short and meaningless.
+CONFIG_MDNS_RESOLVE_TEST_SERVICES=n
+
+# Advertise preferred connection parameters via the GAP service so the
+# central can pick a tight interval from the start. Values are in
+# 1.25 ms units: 12–24 = 15–30 ms. Combined with the active update
+# we issue in BLE_GAP_EVENT_CONNECT (config_service.cpp) this drops
+# the typical 30–50 ms Chrome default to ~15 ms, which is the single
+# biggest lever on OTA throughput. Supervision timeout 400 = 4 s.
+CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MIN_CONN_INTERVAL=12
+CONFIG_BT_NIMBLE_SVC_GAP_PPCP_MAX_CONN_INTERVAL=24
+CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SLAVE_LATENCY=0
+CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SUPERVISION_TMO=400

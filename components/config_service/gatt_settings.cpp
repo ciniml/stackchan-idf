@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: BSL-1.0
 
 #include "gatt_settings.hpp"
-#include "config_store.hpp"
-#include "crypto.hpp"
-#include "ota.hpp"
+#include <config_service/config_store.hpp>
+#include <config_service/crypto.hpp>
+#include <config_service/ota.hpp>
 
 #include <array>
 #include <cstdint>
@@ -16,6 +16,7 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <esp_system.h>
+#include <esp_netif.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
@@ -40,7 +41,7 @@ constexpr const char* kTag = "cfg-gatt";
 // Apply:   e3f0a004-...  Status: e3f0a005-...  KeyExchange: e3f0a006-...
 // OpenAiEnabled: e3f0a007-...  JttsConfig: e3f0a008-...
 // OtaControl: e3f0a009-...  OtaData: e3f0a00a-...
-// Provider: e3f0a00b-...  GeminiApiKey: e3f0a00c-...
+// Provider: e3f0a00b-...  GeminiApiKey: e3f0a00c-...  WifiIp: e3f0a00d-...
 
 static const ble_uuid128_t kSvcUuid = BLE_UUID128_INIT(
     0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
@@ -97,6 +98,14 @@ static const ble_uuid128_t kProviderUuid = BLE_UUID128_INIT(
 static const ble_uuid128_t kGeminiApiKeyUuid = BLE_UUID128_INIT(
     0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
     0x2a, 0x4d, 0x1c, 0x7b, 0x0c, 0xa0, 0xf0, 0xe3);
+// WifiIp — encrypted READ-only string with the current STA IPv4 address
+// (e.g. "192.168.1.42"), or empty string when Wi-Fi is down. Lets the
+// browser surface a fallback link for environments where the corresponding
+// mDNS hostname (stackchan-XXXXXX.local) doesn't resolve — Android Chrome,
+// Windows without Bonjour, locked-down corporate networks etc.
+static const ble_uuid128_t kWifiIpUuid = BLE_UUID128_INIT(
+    0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
+    0x2a, 0x4d, 0x1c, 0x7b, 0x0d, 0xa0, 0xf0, 0xe3);
 
 // --- Mutable state guarded by g_mutex ---
 static SemaphoreHandle_t g_mutex = nullptr;
@@ -126,6 +135,7 @@ static uint16_t g_ota_ctrl_handle = 0;
 static uint16_t g_ota_data_handle = 0;
 static uint16_t g_provider_handle = 0;
 static uint16_t g_gemini_key_handle = 0;
+static uint16_t g_wifi_ip_handle = 0;
 
 // Largest plaintext payload we accept on a single write — chosen to fit the
 // jtts config JSON comfortably. The encrypted wire form adds 12 (nonce) + 16
@@ -164,6 +174,21 @@ void restart_cb(void* /*arg*/)
 {
     ESP_LOGI(kTag, "restarting now");
     esp_restart();
+}
+
+// Current STA IPv4 as a dotted-decimal string, or empty when Wi-Fi is
+// disconnected / netif not yet up. Looked up on-demand from the default STA
+// netif so we don't have to keep a shared mirror in sync with esp_event.
+std::string current_wifi_ip()
+{
+    esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif == nullptr) return {};
+    esp_netif_ip_info_t info{};
+    if (esp_netif_get_ip_info(netif, &info) != ESP_OK) return {};
+    if (info.ip.addr == 0) return {};
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), IPSTR, IP2STR(&info.ip));
+    return std::string(buf);
 }
 
 // --- GATT access callback ---
@@ -264,6 +289,21 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             }
             const std::uint8_t byte = static_cast<std::uint8_t>(g_active.provider);
             const bool ok = append_encrypted(ctxt->om, {&byte, 1});
+            xSemaphoreGive(g_mutex);
+            return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
+        }
+        if (attr_handle == g_wifi_ip_handle) {
+            // current_wifi_ip() touches esp_netif, not g_session — but the
+            // session check + encrypt still has to happen under g_mutex.
+            const std::string ip = current_wifi_ip();
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            if (!g_session.is_established()) {
+                xSemaphoreGive(g_mutex);
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            const bool ok = append_encrypted(
+                ctxt->om,
+                {reinterpret_cast<const std::uint8_t*>(ip.data()), ip.size()});
             xSemaphoreGive(g_mutex);
             return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
         }
@@ -515,6 +555,12 @@ static ble_gatt_chr_def kChrs[] = {
         .access_cb = gatt_access_cb,
         .flags = BLE_GATT_CHR_F_WRITE,
         .val_handle = &g_gemini_key_handle,
+    },
+    {
+        .uuid = &kWifiIpUuid.u,
+        .access_cb = gatt_access_cb,
+        .flags = BLE_GATT_CHR_F_READ,
+        .val_handle = &g_wifi_ip_handle,
     },
     {} // terminator: uuid = nullptr
 };

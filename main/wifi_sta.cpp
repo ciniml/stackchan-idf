@@ -14,6 +14,7 @@
 #include <freertos/task.h>
 
 #include <config_service/config_service.hpp>
+#include <wifi_config_service/wifi_config_service.hpp>
 
 namespace stackchan::app {
 
@@ -22,6 +23,11 @@ namespace {
 constexpr const char* kTag = "wifi-sta";
 
 std::atomic<bool> g_connected{false};
+// Snapshot of the config used at boot — held so the HTTP settings service
+// can be brought up on the *first* IP_EVENT_STA_GOT_IP with the same view
+// of NVS that the BLE service registered. After the first start it stays
+// up across reconnects (wifi_config_service::start ignores re-entry).
+const config::DeviceConfig* g_boot_cfg = nullptr;
 
 void event_handler(void* /*arg*/, esp_event_base_t base, int32_t id, void* data)
 {
@@ -31,6 +37,7 @@ void event_handler(void* /*arg*/, esp_event_base_t base, int32_t id, void* data)
         } else if (id == WIFI_EVENT_STA_DISCONNECTED) {
             g_connected.store(false, std::memory_order_release);
             config::notify_wifi_connected(false);
+            wifi_config::notify_wifi_connected(false);
             ESP_LOGW(kTag, "disconnected, retrying");
             esp_wifi_connect();
         }
@@ -39,6 +46,18 @@ void event_handler(void* /*arg*/, esp_event_base_t base, int32_t id, void* data)
         ESP_LOGI(kTag, "got IP: " IPSTR, IP2STR(&event->ip_info.ip));
         g_connected.store(true, std::memory_order_release);
         config::notify_wifi_connected(true);
+
+        // Bring up mDNS + HTTP settings server on the first successful STA
+        // association. Subsequent reconnects are no-ops inside start().
+        if (g_boot_cfg != nullptr) {
+            if (auto r = wifi_config::start(*g_boot_cfg); !r) {
+                if (r.error() != wifi_config::Error::AlreadyStarted) {
+                    ESP_LOGW(kTag, "wifi_config::start failed: %d",
+                             static_cast<int>(r.error()));
+                }
+            }
+        }
+        wifi_config::notify_wifi_connected(true);
     }
 }
 
@@ -46,6 +65,7 @@ void event_handler(void* /*arg*/, esp_event_base_t base, int32_t id, void* data)
 
 void wifi_start(const config::DeviceConfig& cfg)
 {
+    g_boot_cfg = &cfg;
     ESP_ERROR_CHECK(esp_netif_init());
 
     static bool loop_started = false;

@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stack-chan 設定 (Wi-Fi)</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #f5f5f5;
+    color: #222;
+    min-height: 100vh;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 2rem 1rem;
+  }
+  .card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.12);
+    padding: 2rem;
+    width: 100%;
+    max-width: 480px;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 0.3rem; }
+  .subtitle { color: #666; font-size: 0.9rem; margin-bottom: 1.5rem; }
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1rem;
+    border-radius: 8px;
+    background: #f0f0f0;
+    margin-bottom: 1.5rem;
+    font-size: 0.9rem;
+  }
+  .dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: #bbb;
+    flex-shrink: 0;
+    transition: background 0.3s;
+  }
+  .dot.http-connected { background: #4caf50; }
+  .dot.wifi-connected { background: #2196f3; }
+  .dot.http-error     { background: #e53935; }
+  .flags {
+    margin-left: auto;
+    display: flex;
+    gap: 0.3rem;
+  }
+  .flag {
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: #e0e0e0;
+    color: #555;
+  }
+  .flag.set { background: #c8e6c9; color: #2e7d32; }
+  label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 0.3rem;
+    margin-top: 1rem;
+  }
+  input[type=text], input[type=password], select#provider {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    outline: none;
+    transition: border-color 0.2s;
+    background: white;
+  }
+  input:focus, select#provider:focus { border-color: #2196f3; }
+  .hint { font-size: 0.78rem; color: #888; margin-top: 0.2rem; }
+  .toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+    font-weight: 500;
+    margin-top: 1rem;
+    cursor: pointer;
+    user-select: none;
+  }
+  .toggle-label input[type=checkbox] {
+    width: 1.1rem;
+    height: 1.1rem;
+    accent-color: #1976d2;
+    cursor: pointer;
+  }
+  .jtts-section {
+    margin-top: 1.25rem;
+    padding: 0.6rem 0.9rem;
+    background: #fafafa;
+    border: 1px solid #eee;
+    border-radius: 8px;
+  }
+  .jtts-section summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: #444;
+    user-select: none;
+  }
+  .jtts-section[open] summary { margin-bottom: 0.5rem; }
+  .jtts-section select,
+  .jtts-section input[type=number],
+  .jtts-section textarea {
+    width: 100%;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    outline: none;
+    background: white;
+    transition: border-color 0.2s;
+  }
+  .jtts-section textarea {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    resize: vertical;
+    line-height: 1.5;
+  }
+  .grid2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem 1rem;
+    margin-top: 0.25rem;
+  }
+  .grid2 > div label { margin-top: 0.5rem; }
+  .ota-row {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    margin: 0.4rem 0 0.6rem;
+  }
+  .ota-row input[type=file] { flex: 1; font-size: 0.85rem; }
+  #btn-ota {
+    background: #d84315; color: white;
+    padding: 0.45rem 0.9rem;
+    font-size: 0.9rem;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  #btn-ota:disabled { opacity: 0.4; cursor: not-allowed; }
+  .ota-bar {
+    width: 100%;
+    height: 8px;
+    background: #e0e0e0;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-top: 0.25rem;
+  }
+  .ota-bar-fill {
+    height: 100%;
+    width: 0;
+    background: linear-gradient(90deg, #ff9800, #d84315);
+    transition: width 0.1s linear;
+  }
+  .ota-stats {
+    font-size: 0.78rem;
+    color: #666;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    margin-top: 0.3rem;
+  }
+  .actions { margin-top: 1.5rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
+  button {
+    padding: 0.55rem 1.2rem;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    cursor: pointer;
+    font-weight: 600;
+    transition: opacity 0.2s, background 0.2s;
+  }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  #btn-refresh { background: #1976d2; color: white; }
+  #btn-apply   { background: #388e3c; color: white; }
+  .log {
+    margin-top: 1.5rem;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    font-family: monospace;
+    font-size: 0.8rem;
+    max-height: 180px;
+    overflow-y: auto;
+  }
+  .log .entry { line-height: 1.5; }
+  .log .ts { color: #888; margin-right: 0.4rem; }
+  .log .ok  { color: #89d185; }
+  .log .err { color: #f48771; }
+  .log .info{ color: #9cdcfe; }
+  .compat-note {
+    margin-top: 1.25rem;
+    font-size: 0.78rem;
+    color: #999;
+    border-top: 1px solid #eee;
+    padding-top: 0.75rem;
+  }
+  .device-info {
+    margin-bottom: 1.5rem;
+    padding: 0.6rem 0.9rem;
+    background: #fafafa;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    color: #555;
+  }
+  .device-info .row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    line-height: 1.6;
+  }
+  .device-info .key { color: #888; flex-shrink: 0; }
+  .device-info .val {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    color: #222;
+    text-align: right;
+    word-break: break-all;
+  }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🤖 Stack-chan 設定 (Wi-Fi)</h1>
+  <p class="subtitle">HTTP 経由で Wi-Fi と API キーを設定します</p>
+
+  <div class="status-bar">
+    <span class="dot" id="http-dot"></span>
+    <span id="http-label">状態取得中…</span>
+    <span class="dot" id="wifi-dot" style="margin-left:0.75rem"></span>
+    <span id="wifi-label">Wi-Fi: —</span>
+    <span class="flags">
+      <span class="flag" id="flag-ssid" title="SSID 設定済み">S</span>
+      <span class="flag" id="flag-pass" title="Password 設定済み">P</span>
+      <span class="flag" id="flag-key"  title="OpenAI key 設定済み">K</span>
+      <span class="flag" id="flag-en"   title="OpenAI 有効">O</span>
+      <span class="flag" id="flag-gkey" title="Gemini key 設定済み">G</span>
+      <span class="flag" id="flag-prov" title="Provider = Gemini">P</span>
+    </span>
+  </div>
+
+  <div class="device-info" id="device-info">
+    <div class="row"><span class="key">Firmware</span><span class="val" id="dis-fw">—</span></div>
+    <div class="row"><span class="key">ESP-IDF</span><span class="val" id="dis-idf">—</span></div>
+    <div class="row"><span class="key">IP</span><span class="val" id="dis-ip">—</span></div>
+  </div>
+
+  <label for="ssid">Wi-Fi SSID</label>
+  <input type="text" id="ssid" maxlength="32" placeholder="MyNetwork">
+  <p class="hint">空欄のままにすると現在の値を変更しません</p>
+
+  <label for="password">Wi-Fi パスワード</label>
+  <input type="password" id="password" maxlength="64" placeholder="（変更しない場合は空欄）">
+
+  <label for="provider">会話プロバイダ</label>
+  <select id="provider">
+    <option value="0">OpenAI Realtime</option>
+    <option value="1">Google Gemini Live</option>
+  </select>
+  <p class="hint">どちらの API を使うかを切り替えます。キーは下記の両方に保存できます。</p>
+
+  <label for="apikey">OpenAI API キー</label>
+  <input type="password" id="apikey" maxlength="256" placeholder="sk-… （変更しない場合は空欄）">
+
+  <label for="gemini-apikey">Gemini API キー</label>
+  <input type="password" id="gemini-apikey" maxlength="256" placeholder="AIza… （変更しない場合は空欄）">
+
+  <label class="toggle-label" for="openai-enabled" style="margin-top:1rem">
+    <input type="checkbox" id="openai-enabled" checked>
+    <span>会話機能を有効にする</span>
+  </label>
+  <p class="hint">オフにすると API キーは残したまま会話タスクを起動しません</p>
+
+  <details class="jtts-section" id="jtts-section">
+    <summary>アイドル時の声 (jtts) を調整する</summary>
+    <p class="hint" style="margin-bottom:0.5rem">空欄や変更なしで「保存」を押すと現在の設定は維持されます。</p>
+
+    <label for="jtts-voice">声タイプ</label>
+    <select id="jtts-voice">
+      <option value="female">Female (子供っぽい)</option>
+      <option value="male">Male (低め)</option>
+    </select>
+
+    <div class="grid2">
+      <div>
+        <label for="jtts-f0">ピッチ F0 (Hz)</label>
+        <input type="number" id="jtts-f0" min="60" max="500" step="1" placeholder="280">
+      </div>
+      <div>
+        <label for="jtts-formant">フォルマント倍率</label>
+        <input type="number" id="jtts-formant" min="0.5" max="2.0" step="0.05" placeholder="1.30">
+      </div>
+      <div>
+        <label for="jtts-mora">モーラ長 (ms)</label>
+        <input type="number" id="jtts-mora" min="40" max="300" step="5" placeholder="120">
+      </div>
+      <div>
+        <label for="jtts-gain">音量 (gain)</label>
+        <input type="number" id="jtts-gain" min="0" max="2" step="0.05" placeholder="0.60">
+      </div>
+      <div>
+        <label for="jtts-breath">息成分 (breathiness)</label>
+        <input type="number" id="jtts-breath" min="0" max="1" step="0.05" placeholder="0.00">
+      </div>
+      <div>
+        <label for="jtts-vibrate">ビブラート rate (Hz)</label>
+        <input type="number" id="jtts-vibrate" min="0" max="10" step="0.1" placeholder="0">
+      </div>
+      <div>
+        <label for="jtts-vibratoc">ビブラート depth (cents)</label>
+        <input type="number" id="jtts-vibratoc" min="0" max="200" step="1" placeholder="0">
+      </div>
+    </div>
+
+    <label for="jtts-phrases" style="margin-top:0.75rem">アイドル時の発話フレーズ (一行 1 つ・ひらがな/カタカナのみ)</label>
+    <textarea id="jtts-phrases" rows="6" placeholder="こんにちわー&#10;おはよー&#10;..."></textarea>
+  </details>
+
+  <details class="jtts-section" id="ota-section">
+    <summary>ファームウェア更新 (OTA)</summary>
+    <p class="hint" style="margin-bottom:0.5rem">
+      ローカルの <code>firmware.bin</code> を選んで「書き込み」を押すと、新ファームを
+      別パーティションに書き込んで再起動します。Wi-Fi 経由は BLE より大幅に高速です。
+    </p>
+    <div class="ota-row">
+      <input type="file" id="ota-file" accept=".bin">
+      <button id="btn-ota" type="button" disabled>書き込み</button>
+    </div>
+    <div class="ota-status" id="ota-status">
+      <div class="ota-bar"><div class="ota-bar-fill" id="ota-bar-fill"></div></div>
+      <div class="ota-stats" id="ota-stats">未開始</div>
+    </div>
+  </details>
+
+  <div class="actions">
+    <button id="btn-refresh" type="button">状態を再取得</button>
+    <button id="btn-apply" type="button">保存 &amp; 再起動</button>
+  </div>
+
+  <div class="log" id="log"></div>
+
+  <p class="compat-note">
+    Wi-Fi 経由設定。家庭 LAN 上の他端末から API キーを盗聴される可能性があるので、
+    信頼できないネットワークでは BLE 版の設定ツールを使ってください。
+  </p>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const enc = new TextEncoder();
+
+function log(msg, kind = '') {
+  const div = document.createElement('div');
+  div.className = 'entry';
+  const ts = document.createElement('span');
+  ts.className = 'ts';
+  ts.textContent = new Date().toLocaleTimeString();
+  const body = document.createElement('span');
+  body.className = kind;
+  body.textContent = ' ' + msg;
+  div.appendChild(ts);
+  div.appendChild(body);
+  const el = $('log');
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+async function fetchJSON(path) {
+  const r = await fetch(path, { cache: 'no-store' });
+  if (!r.ok) throw new Error(`${path} → ${r.status}`);
+  return r.json();
+}
+
+async function postText(path, body) {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    body: body,
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`${path} → ${r.status} ${t}`);
+  }
+}
+
+async function postBinary(path, bytes) {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: bytes,
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`${path} → ${r.status} ${t}`);
+  }
+  return r;
+}
+
+function setFlag(id, on) {
+  $(id).classList.toggle('set', !!on);
+}
+
+function setDot(id, klass) {
+  $(id).className = 'dot' + (klass ? ' ' + klass : '');
+}
+
+// --- jtts config form <-> JSON (mirrors the BLE page's logic) ---
+
+const JTTS_NUM_FIELDS = {
+  f0_hz:           'jtts-f0',
+  formant_scale:   'jtts-formant',
+  mora_ms:         'jtts-mora',
+  gain:            'jtts-gain',
+  breathiness:     'jtts-breath',
+  vibrato_rate_hz: 'jtts-vibrate',
+  vibrato_cents:   'jtts-vibratoc',
+};
+
+function readJttsForm() {
+  const obj = {};
+  const voice = $('jtts-voice').value;
+  if (voice) obj.voice = voice;
+  for (const [key, id] of Object.entries(JTTS_NUM_FIELDS)) {
+    const v = $(id).value.trim();
+    if (v !== '') obj[key] = Number(v);
+  }
+  const phrases = $('jtts-phrases').value
+    .split('\n')
+    .map(s => s.trim())
+    .filter(s => s.length);
+  if (phrases.length) obj.phrases = phrases;
+  return Object.keys(obj).length ? JSON.stringify(obj) : '';
+}
+
+function applyJttsToForm(json) {
+  if (!json) return;
+  let obj;
+  try { obj = JSON.parse(json); } catch { return; }
+  if (obj.voice) $('jtts-voice').value = obj.voice;
+  for (const [key, id] of Object.entries(JTTS_NUM_FIELDS)) {
+    if (obj[key] !== undefined) $(id).value = obj[key];
+  }
+  if (Array.isArray(obj.phrases)) $('jtts-phrases').value = obj.phrases.join('\n');
+}
+
+// --- Status refresh ---
+
+async function refresh() {
+  try {
+    const s = await fetchJSON('/api/status');
+    $('dis-fw').textContent = s.firmware || '—';
+    $('dis-idf').textContent = s.idf || '—';
+    $('dis-ip').textContent = s.ip || '—';
+
+    $('ssid').value = s.ssid || '';
+    $('provider').value = String(s.provider ?? 0);
+    $('openai-enabled').checked = !!s.openai_enabled;
+    applyJttsToForm(s.jtts_config || '');
+
+    setFlag('flag-ssid', !!s.ssid);
+    setFlag('flag-pass', !!s.has_password);
+    setFlag('flag-key',  !!s.has_openai_key);
+    setFlag('flag-gkey', !!s.has_gemini_key);
+    setFlag('flag-en',   !!s.openai_enabled);
+    setFlag('flag-prov', (s.provider | 0) === 1);
+
+    if (s.wifi_connected) {
+      setDot('wifi-dot', 'wifi-connected');
+      $('wifi-label').textContent = 'Wi-Fi: 接続中';
+    } else {
+      setDot('wifi-dot', '');
+      $('wifi-label').textContent = 'Wi-Fi: —';
+    }
+    setDot('http-dot', 'http-connected');
+    $('http-label').textContent = 'HTTP 接続中';
+    $('btn-ota').disabled = false;
+    log('状態取得 OK', 'ok');
+  } catch (e) {
+    setDot('http-dot', 'http-error');
+    $('http-label').textContent = '接続失敗';
+    log('状態取得失敗: ' + e.message, 'err');
+  }
+}
+
+// --- Apply ---
+
+async function apply() {
+  $('btn-apply').disabled = true;
+  try {
+    const ssid = $('ssid').value;
+    const pass = $('password').value;
+    const apiKey = $('apikey').value;
+    const geminiKey = $('gemini-apikey').value;
+    const provider = $('provider').value;
+    const enabled = $('openai-enabled').checked;
+    const jtts = readJttsForm();
+
+    if (ssid)      { await postText('/api/ssid', ssid);                       log('SSID 送信', 'ok'); }
+    if (pass)      { await postText('/api/password', pass);                   log('パスワード送信', 'ok'); }
+    if (apiKey)    { await postText('/api/api-key', apiKey);                  log('OpenAI キー送信', 'ok'); }
+    if (geminiKey) { await postText('/api/gemini-api-key', geminiKey);        log('Gemini キー送信', 'ok'); }
+    await postText('/api/provider', provider);
+    await postText('/api/openai-enabled', enabled ? '1' : '0');
+    if (jtts)      { await postText('/api/jtts-config', jtts);                log('jtts 設定送信', 'ok'); }
+
+    await postText('/api/apply', '');
+    log('Apply 完了 — デバイスは ~200ms 後に再起動します', 'ok');
+    setDot('http-dot', '');
+    $('http-label').textContent = '再起動中';
+  } catch (e) {
+    log('Apply 失敗: ' + e.message, 'err');
+    $('btn-apply').disabled = false;
+  }
+}
+
+// --- OTA ---
+
+const OTA_CHUNK_SIZE = 8192;
+let otaCancel = false;
+
+async function pollOtaStatus() {
+  try {
+    const r = await fetch('/api/ota/status', { cache: 'no-store' });
+    return r.ok ? r.json() : null;
+  } catch { return null; }
+}
+
+function fmtBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KiB';
+  return (n / 1024 / 1024).toFixed(2) + ' MiB';
+}
+
+async function startOta() {
+  const file = $('ota-file').files[0];
+  if (!file) { log('ファイル未選択', 'err'); return; }
+  if (!file.name.toLowerCase().endsWith('.bin')) {
+    log('firmware.bin を選んでください (ZIP 非対応)', 'err');
+    return;
+  }
+
+  $('btn-ota').disabled = true;
+  $('btn-refresh').disabled = true;
+  $('btn-apply').disabled = true;
+  const bar = $('ota-bar-fill');
+  const stats = $('ota-stats');
+  bar.style.width = '0';
+  stats.textContent = '準備中…';
+  otaCancel = false;
+
+  const t0 = performance.now();
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    log(`OTA 開始: ${fmtBytes(bytes.length)}`);
+
+    await postText('/api/ota/control', JSON.stringify({ op: 'begin', size: bytes.length }));
+
+    for (let off = 0; off < bytes.length; off += OTA_CHUNK_SIZE) {
+      if (otaCancel) throw new Error('中断');
+      const slice = bytes.subarray(off, Math.min(off + OTA_CHUNK_SIZE, bytes.length));
+      await postBinary('/api/ota/data', slice);
+      const pct = ((off + slice.length) * 100 / bytes.length);
+      bar.style.width = pct.toFixed(1) + '%';
+      const dt = (performance.now() - t0) / 1000;
+      const rate = (off + slice.length) / dt / 1024;
+      stats.textContent = `${pct.toFixed(1)}%  ${fmtBytes(off + slice.length)} / ${fmtBytes(bytes.length)}  ${rate.toFixed(1)} KiB/s`;
+    }
+
+    await postText('/api/ota/control', JSON.stringify({ op: 'end' }));
+    bar.style.width = '100%';
+    stats.textContent = '完了 — 再起動します';
+    log('OTA 完了 — 新ファームに再起動', 'ok');
+  } catch (e) {
+    log('OTA 失敗: ' + e.message, 'err');
+    try { await postText('/api/ota/control', JSON.stringify({ op: 'abort' })); } catch {}
+    stats.textContent = '失敗: ' + e.message;
+  } finally {
+    $('btn-ota').disabled = false;
+    $('btn-refresh').disabled = false;
+    $('btn-apply').disabled = false;
+  }
+}
+
+// --- Wire up ---
+
+$('btn-refresh').addEventListener('click', refresh);
+$('btn-apply').addEventListener('click', apply);
+$('btn-ota').addEventListener('click', startOta);
+
+refresh();
+</script>
+</body>
+</html>
