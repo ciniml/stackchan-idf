@@ -398,11 +398,13 @@ void worker_task(void* /*arg*/)
                 break;
             }
 
-            // Periodic diagnostics — once a second is plenty.
+            // Periodic diagnostics — once every 5 seconds at DEBUG so we
+            // can flip CONFIG_LOG_DEFAULT_LEVEL_DEBUG on if streaming
+            // glitches and inspect ring / decoder / speaker queue depth.
             const std::uint32_t now_ms =
                 static_cast<std::uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
-            if (now_ms - debug_last_log_ms > 2000) {
-                ESP_LOGI(kTag,
+            if (now_ms - debug_last_log_ms > 5000) {
+                ESP_LOGD(kTag,
                          "stream: raw=%uB ring=%uS spk_q=%d frames=%u chunks=%u%s",
                          static_cast<unsigned>(raw_len),
                          static_cast<unsigned>(ring.available_read()),

@@ -1146,12 +1146,13 @@ async function audioPlay() {
     // (OtaStatus read every 16 chunks).
     const fastPath = !!chrAudioData.properties.writeWithoutResponse;
     const FLUSH_EVERY = fastPath ? 16 : 1;
-    // Target throughput cap. Observed BLE effective rate on this build
-    // tops out around 7–8 KiB/s; pushing harder than that piles up the
-    // host BLE adapter's queue and Chrome reliably drops the link after
-    // ~40 s with HCI 0x13 "remote user terminated". Pacing here keeps
-    // the queue shallow and the link stable.
-    const TARGET_KBPS = 6;
+    // Target throughput cap. With PPCP tightened to 7.5–15 ms CI the device
+    // can sink ~12 KiB/s of AAC, which lets a 96 kbps stream play in real
+    // time without underflow. Cap to 10 KiB/s here — Chrome's BLE adapter
+    // queues filled at full BLE speed historically triggered HCI 0x13
+    // "remote user terminated" after ~40 s; staying just under the device
+    // sink rate keeps the queue shallow without starving playback.
+    const TARGET_KBPS = 10;
     const TARGET_BPS = TARGET_KBPS * 1024;
     let framesSinceFlush = 0;
 

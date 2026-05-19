@@ -457,7 +457,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             // convenience; commands are tiny in practice.
             if (pt.size() > kMaxJttsConfigBytes) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             const std::string cmd(reinterpret_cast<const char*>(pt.data()), pt.size());
-            ESP_LOGI(kTag, "audio_ctrl write: %u B sink=%p active=%d cmd='%.*s'",
+            ESP_LOGD(kTag, "audio_ctrl write: %u B sink=%p active=%d cmd='%.*s'",
                      static_cast<unsigned>(pt.size()),
                      static_cast<const void*>(g_audio_sink),
                      g_audio_session_active ? 1 : 0,
@@ -498,13 +498,6 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             // Raw AAC ADTS bytes; just forward to the sink. No length cap
             // beyond what the scratch buffer can hold — the AAC decoder
             // handles sync on its end so chunking is arbitrary.
-            static unsigned data_seen = 0;
-            if ((++data_seen % 64) == 1) {
-                ESP_LOGI(kTag, "audio_data #%u: %u B sink=%p active=%d",
-                         data_seen, static_cast<unsigned>(pt.size()),
-                         static_cast<const void*>(g_audio_sink),
-                         g_audio_session_active ? 1 : 0);
-            }
             if (g_audio_sink != nullptr && g_audio_sink->on_data && g_audio_session_active) {
                 g_audio_sink->on_data(pt.data(), pt.size());
             }
