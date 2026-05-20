@@ -126,3 +126,8 @@ CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SUPERVISION_TMO=400
 #   - NimBLE ACL 24 → 16: 8 × 255 B freed; OTA/audio chunking still fits.
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
 CONFIG_BT_NIMBLE_ACL_BUF_COUNT=16
+# IDF enforces WIFI_RX_BA_WIN <= 2 × WIFI_STATIC_RX_BUFFER_NUM at compile
+# time (esp_wifi/src/wifi_init.c). With static RX dropped to 6 the window
+# must be <= 12; pin it to 6 (the conservative default) so a fresh build
+# from defaults doesn't trip the #error.
+CONFIG_ESP_WIFI_RX_BA_WIN=6
