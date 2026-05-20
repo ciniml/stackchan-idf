@@ -23,7 +23,6 @@ namespace {
 constexpr const char* kTag = "wifi-sta";
 
 std::atomic<bool> g_connected{false};
-std::atomic<bool> g_paused{false};
 // Snapshot of the config used at boot — held so the HTTP settings service
 // can be brought up on the *first* IP_EVENT_STA_GOT_IP with the same view
 // of NVS that the BLE service registered. After the first start it stays
@@ -39,12 +38,8 @@ void event_handler(void* /*arg*/, esp_event_base_t base, int32_t id, void* data)
             g_connected.store(false, std::memory_order_release);
             config::notify_wifi_connected(false);
             wifi_config::notify_wifi_connected(false);
-            if (g_paused.load(std::memory_order_acquire)) {
-                ESP_LOGI(kTag, "disconnected (paused)");
-            } else {
-                ESP_LOGW(kTag, "disconnected, retrying");
-                esp_wifi_connect();
-            }
+            ESP_LOGW(kTag, "disconnected, retrying");
+            esp_wifi_connect();
         }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const auto* event = static_cast<ip_event_got_ip_t*>(data);
@@ -108,28 +103,6 @@ void wifi_start(const config::DeviceConfig& cfg)
 bool wifi_is_connected()
 {
     return g_connected.load(std::memory_order_acquire);
-}
-
-void wifi_pause()
-{
-    if (g_paused.exchange(true, std::memory_order_acq_rel)) return;
-    ESP_LOGI(kTag, "pausing (full Wi-Fi stop for BLE audio)");
-    // esp_wifi_stop() kills the driver entirely — beacons stop, the lwIP
-    // netif goes down, every periodic Wi-Fi task (mDNS announces, DHCP
-    // renewal timers, etc.) stops getting traffic. esp_wifi_disconnect()
-    // alone left the driver alive and the radio still ticking ~100 ms
-    // per beacon, which kept stealing BLE air-time.
-    esp_wifi_stop();
-}
-
-void wifi_resume()
-{
-    if (!g_paused.exchange(false, std::memory_order_acq_rel)) return;
-    ESP_LOGI(kTag, "resuming");
-    esp_wifi_start();
-    // esp_wifi_start fires WIFI_EVENT_STA_START which our handler turns
-    // into an esp_wifi_connect() call, so the association comes back
-    // automatically.
 }
 
 } // namespace stackchan::app

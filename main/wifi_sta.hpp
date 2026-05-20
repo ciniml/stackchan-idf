@@ -17,13 +17,4 @@ void wifi_start(const config::DeviceConfig& cfg);
 // True once Wi-Fi has an IP address. Becomes false again on disconnect.
 bool wifi_is_connected();
 
-// Pause Wi-Fi: disassociate from the AP and suppress the event handler's
-// auto-reconnect path. Use during BLE audio streaming so the radio's BT
-// time isn't stolen by association maintenance. Idempotent.
-void wifi_pause();
-
-// Resume Wi-Fi: re-enable auto-reconnect and kick a connect attempt.
-// No-op if not currently paused.
-void wifi_resume();
-
 } // namespace stackchan::app

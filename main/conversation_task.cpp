@@ -16,7 +16,6 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
-#include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
@@ -223,13 +222,6 @@ public:
                     M5.Speaker.end();
                     state_.mouth_open.store(0.0f, std::memory_order_relaxed);
                     client_->stop();
-                    // Disassociate from the AP entirely — even idle
-                    // Wi-Fi steals 15–25% of the shared radio for beacon
-                    // / DTIM handling, which knocks BLE TX throughput
-                    // from ~12 KiB/s down to 10 KiB/s and causes audible
-                    // playback dropouts. wifi_pause() suppresses the
-                    // event-handler auto-reconnect; we restore on resume.
-                    wifi_pause();
                     vTaskDelay(pdMS_TO_TICKS(500));
                     flush_events();
                     assistant_pcm_.clear();
@@ -244,16 +236,6 @@ public:
             }
             if (local_ == Local::Yielded) {
                 ESP_LOGI(kTag, "BLE audio done — restarting conversation");
-                // Reassociate with the AP before bringing the WebSocket
-                // back up. wifi_resume() is async; the connect() below
-                // will queue and waited inside the existing flow.
-                wifi_resume();
-                // Wait for the IP to come back (got_ip event). Bound at
-                // 10 s; if the AP is gone we re-enter Listening anyway
-                // and the next iteration will see Wi-Fi still down.
-                for (int i = 0; i < 100 && !wifi_is_connected(); ++i) {
-                    vTaskDelay(pdMS_TO_TICKS(100));
-                }
                 state_.conversation_yielded_i2s.store(false, std::memory_order_release);
                 if (!connect()) {
                     ESP_LOGW(kTag, "reconnect after audio stream failed; retrying in 5 s");
