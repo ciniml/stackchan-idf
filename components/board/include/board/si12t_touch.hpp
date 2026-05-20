@@ -34,16 +34,25 @@ public:
         {
             return intensities[0] > 0 || intensities[1] > 0 || intensities[2] > 0;
         }
-        // Middle or Back at "Middle" intensity or above (>= 2). Front is
-        // deliberately excluded: on this board the Front electrode reports
-        // a steady false intensity 2 with nothing touching it (auto-calib
-        // baseline drift / nearby ground / unknown hardware issue), and
-        // including it triggered ~one false nadenade every 5 s. People pet
-        // the top center of the head (Middle) anyway. Matches the
-        // CTRL1=0x22 "interrupt on Middle/High" intent.
+        // Middle or Back at "High" intensity (== 3). Two filters combine
+        // here:
+        //   1. Threshold 3 (was 2). Intensity 2 still fired falsely from
+        //      RFI bursts that lift all three electrodes uniformly to 2;
+        //      requiring "High" needs an actual press, not just a noise
+        //      spike that happens to clear the calibration baseline.
+        //   2. All-three-equal-non-zero is treated as RFI even if values
+        //      reach 3. Real touches concentrate on one or two zones;
+        //      front + middle + back at the same intensity has no
+        //      anatomical equivalent on this enclosure.
+        // Front is still excluded from the per-zone trigger: on this
+        // board the Front electrode reports a steady false intensity
+        // with nothing touching it (auto-calib baseline drift / nearby
+        // ground). People pet the top center of the head (Middle) anyway.
         bool firmly_touched() const noexcept
         {
-            return intensities[1] >= 2 || intensities[2] >= 2;
+            const auto f = intensities[0], m = intensities[1], b = intensities[2];
+            if (f != 0 && f == m && m == b) return false;
+            return m >= 3 || b >= 3;
         }
         std::uint8_t front() const noexcept { return intensities[0]; }
         std::uint8_t middle() const noexcept { return intensities[1]; }
