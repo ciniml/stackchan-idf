@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSL-1.0
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -112,12 +113,26 @@ void demo_loop(const std::string& jtts_config_json)
     std::uint32_t next_speech_ms = 2000; // first babble shortly after boot
 
     // Nadenade (head-petting) detection on the top-mounted Si12T sensor.
-    // Any zone touched continuously for kNadenadeMinTouchMs triggers a
-    // cute head-shake; kNadenadeCooldownMs prevents retriggering while the
-    // user's hand is still on the head.
-    constexpr std::uint32_t kNadenadeMinTouchMs = 250;
+    //
+    // A static "is something touching?" test kept false-firing on 2.4 GHz
+    // EMI. Captured sensor traces show the real discriminator is the *onset
+    // order*: a real pet drags across the head, so each zone first reaches a
+    // firm contact (intensity 3) in spatial order — front→middle→back, or the
+    // reverse. (Untouched, the chip reads a clean 0 0 0; the zones overlap
+    // heavily mid-stroke — front=3,middle=3 ties etc. — so tracking a single
+    // "dominant" zone doesn't work; the first-hit timestamps do.)
+    //
+    // We trigger only when all three zones have hit intensity 3 within one
+    // gesture AND their first-hit times are monotonic across the head, with
+    // the two ends hit in *different* samples so a single uniform RFI spike
+    // (all three at once) can't qualify.
+    //   - kStrokePeakIntensity: a zone counts as "hit" at this intensity (3).
+    //   - kStrokeGapMs: an all-quiet stretch this long ends the gesture.
+    constexpr std::uint8_t kStrokePeakIntensity = 3;
+    constexpr std::uint32_t kStrokeGapMs = 600;
     constexpr std::uint32_t kNadenadeCooldownMs = 4000;
-    std::uint32_t touch_start_ms = 0;     // 0 = no touch in progress
+    std::array<std::uint32_t, 3> stroke_hit_ms{0, 0, 0}; // first-hit-3 time per zone (0 = not yet)
+    std::uint32_t stroke_active_ms = 0;   // last time any zone was non-zero
     std::uint32_t next_nadenade_ms = 0;   // earliest time we'll trigger again
 
     // Set true by the (render-task) completion callback so demo_loop knows
@@ -203,74 +218,99 @@ void demo_loop(const std::string& jtts_config_json)
             }
         }
 
-        // Nadenade: poll the top sensor, debounce, and on a sustained touch
-        // run a quick happy head-wobble while the petting continues. The
-        // wobble blocks demo_loop's normal scheduling for ~1.4 s but the
-        // render and servo tasks keep running so animation stays smooth.
+        // Nadenade: poll the top sensor and look for a directional stroke
+        // across the three zones. On a completed stroke, run a quick happy
+        // head-wobble. The wobble blocks demo_loop's normal scheduling for
+        // ~1.4 s but the render and servo tasks keep running.
         if (g_touch != nullptr && !wifi_warning_active && now_ms >= next_nadenade_ms) {
             const auto reading = g_touch->read();
+            const std::uint8_t f = reading.front(), mid = reading.middle(), bk = reading.back();
+            const std::uint8_t mx = std::max({f, mid, bk});
+
             // Edge-triggered diagnostic — only log when the reading
             // actually changes, otherwise a chip that gets stuck at
             // `2 2 2` from RFI floods the serial port at 20 Hz.
             static std::uint8_t last_logged[3] = {0xFF, 0xFF, 0xFF};
-            if (reading.front() != last_logged[0] ||
-                reading.middle() != last_logged[1] ||
-                reading.back() != last_logged[2]) {
+            if (f != last_logged[0] || mid != last_logged[1] || bk != last_logged[2]) {
                 if (reading.any_touched() ||
                     last_logged[0] != 0 || last_logged[1] != 0 || last_logged[2] != 0) {
-                    ESP_LOGI(kTag, "touch raw: front=%u middle=%u back=%u",
-                             reading.front(), reading.middle(), reading.back());
+                    ESP_LOGI(kTag, "touch raw: front=%u middle=%u back=%u", f, mid, bk);
                 }
-                last_logged[0] = reading.front();
-                last_logged[1] = reading.middle();
-                last_logged[2] = reading.back();
+                last_logged[0] = f;
+                last_logged[1] = mid;
+                last_logged[2] = bk;
             }
-            // Use firmly_touched() (intensity >= 2) so the chip's stray
-            // Level-1 readings from BLE/Wi-Fi RFI don't accumulate into
-            // a false nadenade trigger.
-            if (reading.firmly_touched()) {
-                if (touch_start_ms == 0) {
-                    touch_start_ms = now_ms;
-                } else if (now_ms - touch_start_ms >= kNadenadeMinTouchMs) {
-                    speech.stop();
-                    const float prev_yaw = g_state->target_yaw_deg.load(std::memory_order_relaxed);
-                    const int prev_expr = g_state->expression.load(std::memory_order_relaxed);
 
-                    g_state->expression.store(static_cast<int>(avatar::Expression::Happy),
-                                              std::memory_order_relaxed);
-                    g_state->servo_speed_override.store(800, std::memory_order_relaxed); // ~120°/s
-                    balloon_in_flight.store(true, std::memory_order_release);
-                    g_state->set_balloon_text("なでなで♡", /*hold_ms=*/2200, [] {
-                        balloon_in_flight.store(false, std::memory_order_release);
-                    });
+            // End (and clear) the gesture once the head's been all-quiet for
+            // longer than the inter-zone gap.
+            if (now_ms - stroke_active_ms > kStrokeGapMs) {
+                stroke_hit_ms = {0, 0, 0};
+            }
+            if (mx > 0) stroke_active_ms = now_ms;
 
-                    constexpr float kWobbleDeg = 8.0f;
-                    constexpr std::uint32_t kHalfPeriodMs = 160;
-                    for (int i = 0; i < 4; ++i) {
-                        g_state->target_yaw_deg.store(-kWobbleDeg, std::memory_order_relaxed);
-                        vTaskDelay(pdMS_TO_TICKS(kHalfPeriodMs));
-                        g_state->target_yaw_deg.store(+kWobbleDeg, std::memory_order_relaxed);
-                        vTaskDelay(pdMS_TO_TICKS(kHalfPeriodMs));
-                    }
-                    g_state->target_yaw_deg.store(prev_yaw, std::memory_order_relaxed);
-                    vTaskDelay(pdMS_TO_TICKS(kHalfPeriodMs));
-                    g_state->servo_speed_override.store(0, std::memory_order_relaxed);
-                    g_state->expression.store(prev_expr, std::memory_order_relaxed);
+            // Record the first time each zone reaches a firm contact in this
+            // gesture.
+            if (f   >= kStrokePeakIntensity && stroke_hit_ms[0] == 0) stroke_hit_ms[0] = now_ms;
+            if (mid >= kStrokePeakIntensity && stroke_hit_ms[1] == 0) stroke_hit_ms[1] = now_ms;
+            if (bk  >= kStrokePeakIntensity && stroke_hit_ms[2] == 0) stroke_hit_ms[2] = now_ms;
 
-                    touch_start_ms = 0;
-                    const std::uint32_t after_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
-                    next_nadenade_ms = after_ms + kNadenadeCooldownMs;
-                    // Push back demo activity so the wobble doesn't fight a
-                    // freshly-scheduled random pose / babble.
-                    next_speech_ms = after_ms + 1500;
-                    next_pose_ms = std::max(next_pose_ms, after_ms + 2000);
-                    continue;
+            bool stroke_complete = false;
+            if (stroke_hit_ms[0] && stroke_hit_ms[1] && stroke_hit_ms[2]) {
+                // All three zones firmly touched within one gesture. Accept
+                // only a monotonic onset order across the head, with the two
+                // ends hit in different samples (so a single all-three RFI
+                // spike — equal timestamps — can't qualify).
+                const auto a = stroke_hit_ms[0], b = stroke_hit_ms[1], c = stroke_hit_ms[2];
+                const bool fwd = a <= b && b <= c && a < c;   // front→middle→back
+                const bool rev = a >= b && b >= c && a > c;   // back→middle→front
+                stroke_complete = fwd || rev;
+                if (!stroke_complete) {
+                    // Hit all three but not cleanly ordered → drop so a noisy
+                    // simultaneous lift can't linger and re-qualify.
+                    stroke_hit_ms = {0, 0, 0};
                 }
-            } else {
-                // Strict reset: any sample that's not firmly touched drops
-                // the debounce. That way Level-1 noise can't keep the timer
-                // alive between rare false Level-2 spikes from RFI.
-                touch_start_ms = 0;
+            }
+
+            if (stroke_complete) {
+                ESP_LOGI(kTag, "nadenade! stroke %s (hit ms: f=%u m=%u b=%u)",
+                         stroke_hit_ms[0] < stroke_hit_ms[2] ? "front->back" : "back->front",
+                         static_cast<unsigned>(stroke_hit_ms[0]),
+                         static_cast<unsigned>(stroke_hit_ms[1]),
+                         static_cast<unsigned>(stroke_hit_ms[2]));
+                speech.stop();
+                const float prev_yaw = g_state->target_yaw_deg.load(std::memory_order_relaxed);
+                const int prev_expr = g_state->expression.load(std::memory_order_relaxed);
+
+                g_state->expression.store(static_cast<int>(avatar::Expression::Happy),
+                                          std::memory_order_relaxed);
+                g_state->servo_speed_override.store(800, std::memory_order_relaxed); // ~120°/s
+                balloon_in_flight.store(true, std::memory_order_release);
+                g_state->set_balloon_text("なでなで♡", /*hold_ms=*/2200, [] {
+                    balloon_in_flight.store(false, std::memory_order_release);
+                });
+
+                constexpr float kWobbleDeg = 8.0f;
+                constexpr std::uint32_t kHalfPeriodMs = 160;
+                for (int i = 0; i < 4; ++i) {
+                    g_state->target_yaw_deg.store(-kWobbleDeg, std::memory_order_relaxed);
+                    vTaskDelay(pdMS_TO_TICKS(kHalfPeriodMs));
+                    g_state->target_yaw_deg.store(+kWobbleDeg, std::memory_order_relaxed);
+                    vTaskDelay(pdMS_TO_TICKS(kHalfPeriodMs));
+                }
+                g_state->target_yaw_deg.store(prev_yaw, std::memory_order_relaxed);
+                vTaskDelay(pdMS_TO_TICKS(kHalfPeriodMs));
+                g_state->servo_speed_override.store(0, std::memory_order_relaxed);
+                g_state->expression.store(prev_expr, std::memory_order_relaxed);
+
+                stroke_hit_ms = {0, 0, 0};
+                stroke_active_ms = 0;
+                const std::uint32_t after_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
+                next_nadenade_ms = after_ms + kNadenadeCooldownMs;
+                // Push back demo activity so the wobble doesn't fight a
+                // freshly-scheduled random pose / babble.
+                next_speech_ms = after_ms + 1500;
+                next_pose_ms = std::max(next_pose_ms, after_ms + 2000);
+                continue;
             }
         }
 
