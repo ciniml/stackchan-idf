@@ -95,23 +95,6 @@ void demo_loop(const std::string& jtts_config_json)
     constexpr std::uint32_t kSpeechMinMs = 6000;
     constexpr std::uint32_t kSpeechMaxMs = 12000;
 
-    static constexpr const char* kPhrases[] = {
-        "Hello!",
-        "Hi there",
-        "How are you?",
-        "I'm listening",
-        "Tell me more",
-        "Welcome to Stack-chan firmware on ESP-IDF 5.4",
-        "Did you know I have two servos and one face?",
-        "こんにちは",
-        "おはよう",
-        "今日もよろしくね",
-        "ピッ ポッ ピッ",
-        "スタックチャンです、よろしく!",
-        "ESP-IDF 5.4 でうごいてます",
-        "サーボとアバターのテスト中です",
-    };
-
     static app::Speech speech;
     speech.configure(jtts_config_json);
 
@@ -206,13 +189,16 @@ void demo_loop(const std::string& jtts_config_json)
                 now_ms >= next_speech_ms &&
                 !speech.is_speaking() &&
                 !balloon_in_flight.load(std::memory_order_acquire)) {
-                speech.babble(now_ms);
-                constexpr std::size_t kPhraseCount = sizeof(kPhrases) / sizeof(kPhrases[0]);
-                const char* phrase = kPhrases[esp_random() % kPhraseCount];
-                balloon_in_flight.store(true, std::memory_order_release);
-                g_state->set_balloon_text(phrase, /*hold_ms=*/0, [] {
-                    balloon_in_flight.store(false, std::memory_order_release);
-                });
+                // Speak a phrase and show ITS display text in the balloon —
+                // babble() returns the display (発話内容) of the same phrase
+                // it synthesises (発声内容), so screen and voice always match.
+                const std::string display = speech.babble(esp_random());
+                if (!display.empty()) {
+                    balloon_in_flight.store(true, std::memory_order_release);
+                    g_state->set_balloon_text(display, /*hold_ms=*/0, [] {
+                        balloon_in_flight.store(false, std::memory_order_release);
+                    });
+                }
                 next_speech_ms = now_ms + rand_range_ms(kSpeechMinMs, kSpeechMaxMs);
             }
         }

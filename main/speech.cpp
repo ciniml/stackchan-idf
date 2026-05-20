@@ -24,18 +24,24 @@ namespace {
 constexpr const char* kTag = "speech";
 
 // Compile-time defaults — used when no JttsConfig has been written over BLE
-// (fresh device, or empty JSON). The phrase set is hiragana + 拗音 + 「ー」
-// 「っ」「ん」 only — jtts has no kana-to-phoneme dictionary so kanji are
-// rejected as InvalidKana.
-constexpr std::u32string_view kDefaultPhrases[] = {
-    U"こんにちわー",
-    U"おはよー",
-    U"やっほー",
-    U"あそぼー",
-    U"なでなで してー",
-    U"おなかすいたー",
-    U"げんき げんき",
-    U"わたしわ すたっくちゃん",
+// (fresh device, or empty JSON). Each entry is { display, reading }: the
+// balloon shows `display` (free-form, kanji allowed) while jtts synthesises
+// `reading` (kana only — kanji in a reading are silently skipped). Keeping
+// them separate lets us spell "こんにちは" on screen but pronounce the
+// natural "こんにちわ".
+struct DefaultPhrase {
+    std::string_view display;        // UTF-8
+    std::u32string_view reading;     // kana for jtts
+};
+constexpr DefaultPhrase kDefaultPhrases[] = {
+    {"こんにちは",        U"こんにちわ"},
+    {"おはよう",          U"おはよー"},
+    {"やっほー",          U"やっほー"},
+    {"あそぼうよ",        U"あそぼーよ"},
+    {"なでなでして",      U"なでなで してー"},
+    {"おなかすいた",      U"おなか すいたー"},
+    {"元気元気！",        U"げんき げんき"},
+    {"スタックチャンです", U"すたっくちゃんです"},
 };
 
 jtts::Options default_options(std::uint32_t sample_rate)
@@ -94,8 +100,8 @@ void Speech::configure(const std::string& json)
     // and missing JSON fields don't pick up stale state.
     opts_ = default_options(kSampleRate);
     phrases_.clear();
-    for (auto v : kDefaultPhrases) {
-        phrases_.emplace_back(v);
+    for (const auto& p : kDefaultPhrases) {
+        phrases_.push_back({std::string(p.display), std::u32string(p.reading)});
     }
     initialised_ = true;
 
@@ -119,14 +125,32 @@ void Speech::configure(const std::string& json)
     apply_number(opts_.vibrato_rate_hz, cJSON_GetObjectItemCaseSensitive(root, "vibrato_rate_hz"));
     apply_number(opts_.vibrato_cents, cJSON_GetObjectItemCaseSensitive(root, "vibrato_cents"));
 
+    // phrases: array whose elements are either
+    //   - a string  "こんにちわ"                       (display == reading), or
+    //   - an object  {"text":"こんにちは","reading":"こんにちわ"}
+    // `reading` defaults to `text` when omitted, and vice-versa, so a phrase
+    // can supply either field alone.
     const cJSON* phrases = cJSON_GetObjectItemCaseSensitive(root, "phrases");
     if (cJSON_IsArray(phrases)) {
-        std::vector<std::u32string> parsed;
+        std::vector<Phrase> parsed;
         const cJSON* item = nullptr;
         cJSON_ArrayForEach(item, phrases) {
-            if (!cJSON_IsString(item) || item->valuestring == nullptr) continue;
-            auto u32 = decode_utf8(item->valuestring);
-            if (!u32.empty()) parsed.push_back(std::move(u32));
+            const char* display = nullptr;
+            const char* reading = nullptr;
+            if (cJSON_IsString(item) && item->valuestring != nullptr) {
+                display = reading = item->valuestring;
+            } else if (cJSON_IsObject(item)) {
+                const cJSON* t = cJSON_GetObjectItemCaseSensitive(item, "text");
+                const cJSON* r = cJSON_GetObjectItemCaseSensitive(item, "reading");
+                if (cJSON_IsString(t) && t->valuestring != nullptr) display = t->valuestring;
+                if (cJSON_IsString(r) && r->valuestring != nullptr) reading = r->valuestring;
+                if (display == nullptr) display = reading;
+                if (reading == nullptr) reading = display;
+            }
+            if (display == nullptr || reading == nullptr) continue;
+            auto kana = decode_utf8(reading);
+            if (kana.empty()) continue;          // nothing speakable → drop
+            parsed.push_back({std::string(display), std::move(kana)});
         }
         if (!parsed.empty()) phrases_ = std::move(parsed);
     }
@@ -136,23 +160,25 @@ void Speech::configure(const std::string& json)
              opts_.f0_hz, opts_.mora_ms, phrases_.size());
 }
 
-void Speech::babble(std::uint32_t seed)
+std::string Speech::babble(std::uint32_t seed)
 {
     if (!initialised_) {
         configure(""); // first-call lazy init with defaults
     }
     if (phrases_.empty()) {
-        return;
+        return {};
     }
-    const std::u32string& kana = phrases_[seed % phrases_.size()];
+    const Phrase& phrase = phrases_[seed % phrases_.size()];
 
     jtts::Options opt = opts_;
     opt.sample_rate_hz = kSampleRate; // playback rate is fixed for envelope sync
 
     pcm_.clear();
-    auto r = jtts::synthesize(kana, pcm_, opt);
+    auto r = jtts::synthesize(phrase.reading, pcm_, opt);
     if (!r || pcm_.empty()) {
-        return;
+        // Couldn't pronounce this reading — still return the display text so
+        // the caller shows the matching balloon (no audio / mouth movement).
+        return phrase.display;
     }
 
     build_envelope_from_pcm(pcm_, envelope_, kSampleRate, kEnvelopeStepMs);
@@ -167,6 +193,7 @@ void Speech::babble(std::uint32_t seed)
     M5.Speaker.playRaw(pcm_.data(), pcm_.size(), kSampleRate, /*stereo=*/false,
                        /*repeat=*/1, /*channel=*/-1,
                        /*stop_current_sound=*/true);
+    return phrase.display;
 }
 
 void Speech::stop()

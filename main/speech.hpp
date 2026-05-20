@@ -31,8 +31,11 @@ public:
     void configure(const std::string& json);
 
     // Start a fresh utterance (non-blocking — M5.Speaker queues it).
-    // `seed` randomises pitch / syllable count so successive calls differ.
-    void babble(std::uint32_t seed);
+    // `seed` selects which phrase to speak (seed % phrase count). Returns the
+    // *display* text (発話内容) of the chosen phrase so the caller can show a
+    // matching balloon — synthesis uses that phrase's separate *reading*
+    // (発声内容, kana). Returns an empty string only when there are no phrases.
+    std::string babble(std::uint32_t seed);
 
     // Cancel any in-flight babble so we can hand the speaker / I2S bus to
     // someone else (e.g. mic loopback). After this is_speaking() returns false.
@@ -50,11 +53,21 @@ private:
     // PCM kept alive while M5.Speaker plays it asynchronously.
     std::vector<std::int16_t> pcm_;
 
+    // A single babble phrase. `display` (発話内容) is the UTF-8 text shown in
+    // the balloon — free-form, may contain kanji/punctuation. `reading`
+    // (発声内容) is the kana fed to jtts for synthesis (jtts has no kana-to-
+    // phoneme dictionary, so kanji in a reading are silently skipped). The
+    // two are decoupled on purpose so "こんにちは" can be read "こんにちわ".
+    struct Phrase {
+        std::string display;
+        std::u32string reading;
+    };
+
     // Voice preset + babble phrase list. configure() can overwrite these at
     // boot; otherwise they hold the compile-time defaults (Female child
     // preset, ~8 short Japanese phrases).
     jtts::Options opts_;
-    std::vector<std::u32string> phrases_;
+    std::vector<Phrase> phrases_;
     bool initialised_{false};
 
     std::atomic<std::uint32_t> start_ms_{0};

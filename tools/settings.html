@@ -338,8 +338,12 @@
       </div>
     </div>
 
-    <label for="jtts-phrases" style="margin-top:0.75rem">アイドル時の発話フレーズ (一行 1 つ・ひらがな/カタカナのみ)</label>
-    <textarea id="jtts-phrases" rows="6" placeholder="こんにちわー&#10;おはよー&#10;..."></textarea>
+    <label for="jtts-phrases" style="margin-top:0.75rem">アイドル時の発話フレーズ (一行 1 つ)</label>
+    <p style="font-size:0.8rem;color:#888;margin:0.2rem 0">
+      <code>画面表示 | 読み</code> の形式。<code>|</code> の右側 (読み) はひらがな/カタカナのみ
+      (漢字は発声時に無視されます)。<code>|</code> を省くと表示と読みが同じになります。
+      例: <code>こんにちは | こんにちわ</code></p>
+    <textarea id="jtts-phrases" rows="6" placeholder="こんにちは | こんにちわ&#10;スタックチャンです | すたっくちゃんです&#10;やっほー"></textarea>
   </details>
 
   <details class="jtts-section" id="ota-section">
@@ -678,8 +682,23 @@ function readJttsForm() {
       if (Number.isFinite(n)) obj[key] = n;
     }
   }
+  // Each line is `display | reading`. Emit a plain string when the two are
+  // identical (compact — keeps the 768-byte JttsConfig budget), otherwise an
+  // object {text, reading}. The device parser accepts both forms.
   const phrases = document.getElementById('jtts-phrases').value
-    .split('\n').map(s => s.trim()).filter(s => s.length > 0);
+    .split('\n')
+    .map(line => {
+      const bar = line.indexOf('|');
+      const text = (bar < 0 ? line : line.slice(0, bar)).trim();
+      const reading = (bar < 0 ? line : line.slice(bar + 1)).trim();
+      return { text, reading };
+    })
+    .filter(p => p.text.length > 0 || p.reading.length > 0)
+    .map(p => {
+      const text = p.text || p.reading;
+      const reading = p.reading || p.text;
+      return text === reading ? text : { text, reading };
+    });
   if (phrases.length > 0) obj.phrases = phrases;
   return obj;
 }
@@ -704,7 +723,12 @@ function writeJttsForm(json) {
     }
   }
   if (Array.isArray(obj.phrases)) {
-    document.getElementById('jtts-phrases').value = obj.phrases.join('\n');
+    document.getElementById('jtts-phrases').value = obj.phrases.map(p => {
+      if (typeof p === 'string') return p;
+      const text = p.text ?? p.reading ?? '';
+      const reading = p.reading ?? p.text ?? '';
+      return text === reading ? text : `${text} | ${reading}`;
+    }).join('\n');
   }
 }
 
