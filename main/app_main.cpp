@@ -211,12 +211,21 @@ void demo_loop(const std::string& jtts_config_json)
         // render and servo tasks keep running so animation stays smooth.
         if (g_touch != nullptr && !wifi_warning_active && now_ms >= next_nadenade_ms) {
             const auto reading = g_touch->read();
-            // TEMP DIAGNOSTIC: every time *any* zone shows nonzero, log the
-            // raw per-zone intensities. Lets us see what RFI vs. an actual
-            // touch looks like on this board. Remove once tuned.
-            if (reading.any_touched()) {
-                ESP_LOGI(kTag, "touch raw: front=%u middle=%u back=%u",
-                         reading.front(), reading.middle(), reading.back());
+            // Edge-triggered diagnostic — only log when the reading
+            // actually changes, otherwise a chip that gets stuck at
+            // `2 2 2` from RFI floods the serial port at 20 Hz.
+            static std::uint8_t last_logged[3] = {0xFF, 0xFF, 0xFF};
+            if (reading.front() != last_logged[0] ||
+                reading.middle() != last_logged[1] ||
+                reading.back() != last_logged[2]) {
+                if (reading.any_touched() ||
+                    last_logged[0] != 0 || last_logged[1] != 0 || last_logged[2] != 0) {
+                    ESP_LOGI(kTag, "touch raw: front=%u middle=%u back=%u",
+                             reading.front(), reading.middle(), reading.back());
+                }
+                last_logged[0] = reading.front();
+                last_logged[1] = reading.middle();
+                last_logged[2] = reading.back();
             }
             // Use firmly_touched() (intensity >= 2) so the chip's stray
             // Level-1 readings from BLE/Wi-Fi RFI don't accumulate into
