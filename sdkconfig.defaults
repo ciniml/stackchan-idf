@@ -98,6 +98,15 @@ CONFIG_HTTPD_MAX_REQ_HDR_LEN=4096
 # wants a build-time default; keep it short and meaningless.
 CONFIG_MDNS_RESOLVE_TEST_SERVICES=n
 
+# Use the BSD-socket networking backend for mDNS instead of the legacy raw-lwIP
+# path. With the raw path + Wi-Fi (and IPv6 enabled, so mDNS also joins the
+# IPv6 group) the IPv4 mDNS group 224.0.0.251 stops being delivered to the
+# station — its multicast MAC never makes it into the Wi-Fi RX filter, so the
+# responder never sees multicast queries and `stackchan-XXXXXX.local` won't
+# resolve (unicast / HTTP / RTP still work). A plain BSD socket joining the
+# same group receives it fine, so the socket backend fixes reception.
+CONFIG_MDNS_NETWORKING_SOCKET=y
+
 # Advertise preferred connection parameters via the GAP service so the
 # central can pick a tight interval from the start. Values are in
 # 1.25 ms units: 12–24 = 15–30 ms. Combined with the active update
