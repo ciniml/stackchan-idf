@@ -6,6 +6,7 @@
 #include <driver/gpio.h>
 #include <driver/uart.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -58,35 +59,51 @@ void servo_task_entry(void* arg)
     } else {
         ESP_LOGI(kTag, "pitch (id=%u) ping OK", scs_servo::kPitchId);
     }
-    if (auto r = yaw.enable_torque(true); !r) {
-        ESP_LOGW(kTag, "yaw enable_torque failed: %d", static_cast<int>(r.error()));
-    }
-    if (auto r = pitch.enable_torque(true); !r) {
-        ESP_LOGW(kTag, "pitch enable_torque failed: %d", static_cast<int>(r.error()));
-    }
+    // Torque is engaged on demand: enabled just before a move, released once
+    // the move should have completed, so the servos are silent / cool / free
+    // while the head holds still. Moves are speed-based (kGoalTime = 0), so we
+    // estimate the duration from the angular distance and goal speed. The
+    // on-device 操作 toggle's servo_enabled = false forces torque off and
+    // suppresses moves entirely (脱力).
+    constexpr float kDegPerStep = 0.3125f;      // SCS0009: 1 step ≈ 0.3125°
+    constexpr float kDegPerSpeedUnit = 0.15f;   // goal-speed unit ≈ 0.15 °/s
+    constexpr std::uint32_t kSettleMarginMs = 150; // hold a bit past the estimate
+    constexpr std::uint32_t kMinHoldMs = 120;
+    constexpr std::uint32_t kUnknownMoveMs = 1500;  // start pose / re-drive (origin unknown)
 
-    std::uint16_t last_yaw_target = scs_servo::kYawZero;
-    std::uint16_t last_pitch_target = scs_servo::kPitchZero;
+    auto move_ms = [](std::uint16_t from, std::uint16_t to, std::uint16_t speed) -> std::uint32_t {
+        const int delta = (from > to) ? (from - to) : (to - from);
+        const float dps = speed * kDegPerSpeedUnit;
+        if (dps <= 0.0f) return kMinHoldMs;
+        const std::uint32_t ms = static_cast<std::uint32_t>(delta * kDegPerStep / dps * 1000.0f);
+        return ms < kMinHoldMs ? kMinHoldMs : ms;
+    };
+    auto now_ms = [] { return static_cast<std::uint32_t>(esp_timer_get_time() / 1000); };
+
+    // Start with torque off; the first loop drives to the commanded pose.
+    std::uint16_t last_yaw_target = 0xFFFF;
+    std::uint16_t last_pitch_target = 0xFFFF;
+    bool torque_on = false;
     bool last_enabled = true;
+    std::uint32_t release_at = 0; // when to drop torque after the current move
 
     TickType_t last_wake = xTaskGetTickCount();
     for (;;) {
-        // Torque follows the shared servo_enabled flag (toggled by the
-        // on-device control screen). When disabled the head goes limp and we
-        // skip goal writes; on re-enable, force a goal write by invalidating
-        // the cached targets so the head returns to its commanded pose.
         const bool enabled = args.state->servo_enabled.load(std::memory_order_relaxed);
-        if (enabled != last_enabled) {
-            (void)yaw.enable_torque(enabled);
-            (void)pitch.enable_torque(enabled);
-            last_enabled = enabled;
-            if (enabled) {
-                last_yaw_target = last_pitch_target = 0xFFFF; // force re-issue
-            }
-        }
         if (!enabled) {
+            if (torque_on) {
+                (void)yaw.enable_torque(false);
+                (void)pitch.enable_torque(false);
+                torque_on = false;
+            }
+            last_enabled = false;
             vTaskDelayUntil(&last_wake, kPeriodTicks);
             continue;
+        }
+        if (!last_enabled) {
+            // Re-enabled (復帰): re-drive to the commanded pose.
+            last_yaw_target = last_pitch_target = 0xFFFF;
+            last_enabled = true;
         }
 
         const float yaw_deg = args.state->target_yaw_deg.load(std::memory_order_relaxed);
@@ -100,13 +117,36 @@ void servo_task_entry(void* arg)
         const std::uint16_t override = args.state->servo_speed_override.load(std::memory_order_relaxed);
         const std::uint16_t speed = override != 0 ? override : kGoalSpeed;
 
-        if (yaw_target != last_yaw_target) {
-            (void)yaw.write_goal_position(yaw_target, kGoalTime, speed);
-            last_yaw_target = yaw_target;
-        }
-        if (pitch_target != last_pitch_target) {
-            (void)pitch.write_goal_position(pitch_target, kGoalTime, speed);
-            last_pitch_target = pitch_target;
+        if (yaw_target != last_yaw_target || pitch_target != last_pitch_target) {
+            // Engage torque just before driving.
+            if (!torque_on) {
+                (void)yaw.enable_torque(true);
+                (void)pitch.enable_torque(true);
+                torque_on = true;
+            }
+            std::uint32_t mv = kMinHoldMs;
+            if (yaw_target != last_yaw_target) {
+                const std::uint32_t a = (last_yaw_target == 0xFFFF)
+                                            ? kUnknownMoveMs
+                                            : move_ms(last_yaw_target, yaw_target, speed);
+                if (a > mv) mv = a;
+                (void)yaw.write_goal_position(yaw_target, kGoalTime, speed);
+                last_yaw_target = yaw_target;
+            }
+            if (pitch_target != last_pitch_target) {
+                const std::uint32_t a = (last_pitch_target == 0xFFFF)
+                                            ? kUnknownMoveMs
+                                            : move_ms(last_pitch_target, pitch_target, speed);
+                if (a > mv) mv = a;
+                (void)pitch.write_goal_position(pitch_target, kGoalTime, speed);
+                last_pitch_target = pitch_target;
+            }
+            release_at = now_ms() + mv + kSettleMarginMs;
+        } else if (torque_on && now_ms() >= release_at) {
+            // Move complete and holding still → release torque.
+            (void)yaw.enable_torque(false);
+            (void)pitch.enable_torque(false);
+            torque_on = false;
         }
 
         vTaskDelayUntil(&last_wake, kPeriodTicks);
