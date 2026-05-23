@@ -49,6 +49,11 @@ public:
     std::atomic<bool> audio_stream_active{false};
     std::atomic<bool> conversation_yielded_i2s{false};
 
+    // On-device info/settings screen. Toggled by a tap in the LCD's top-right
+    // corner (demo_loop reads M5.Touch); the render task shows the info screen
+    // instead of the avatar while this is set.
+    std::atomic<bool> info_screen{false};
+
     // Show `text` in the balloon.
     //  - hold_ms: minimum on-screen time (0 = use avatar defaults — short
     //    text holds a few seconds, long text plays one marquee pass).

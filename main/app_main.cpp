@@ -151,6 +151,19 @@ void demo_loop(const std::string& jtts_config_json)
 
         const std::uint32_t now_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
 
+        // LCD touch (M5.Touch — the screen's capacitive touch, distinct from
+        // the Si12T head sensor). A tap in the top-right corner toggles the
+        // on-device info screen: open it from the avatar, or use the same
+        // corner as the close button while it's shown. Handled before the
+        // conversation/audio early-returns so it works in every mode.
+        {
+            const auto td = M5.Touch.getDetail();
+            if (td.wasPressed() && td.x >= M5.Display.width() - 64 && td.y < 64) {
+                const bool to_info = !g_state->info_screen.load(std::memory_order_relaxed);
+                g_state->info_screen.store(to_info, std::memory_order_relaxed);
+            }
+        }
+
         const bool conv_active = g_state->conversation_active.load(std::memory_order_relaxed);
         const bool conv_idle = g_state->conversation_idle.load(std::memory_order_relaxed);
         const bool audio_streaming = g_state->audio_stream_active.load(std::memory_order_relaxed);

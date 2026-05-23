@@ -6,6 +6,7 @@
 #include "dis.hpp"
 #include "gatt_settings.hpp"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 
@@ -37,6 +38,7 @@ constexpr const char* kTag = "cfg-svc";
 
 static uint8_t g_own_addr_type = 0;
 static char g_device_name[32] = "Stackchan";
+static std::atomic<bool> g_ble_connected{false};
 
 // Service UUID for the advertising payload (little-endian).
 // e3f0a000-7b1c-4d2a-9e6f-2c5a8d4b1f00
@@ -96,6 +98,7 @@ static int gap_event_cb(struct ble_gap_event* event, void* /*arg*/)
         if (event->connect.status == 0) {
             const uint16_t conn = event->connect.conn_handle;
             ESP_LOGI(kTag, "connected: handle=%d", conn);
+            g_ble_connected.store(true, std::memory_order_relaxed);
 
             // BLE OTA throughput tuning. Without these the link sits at
             // 27 B LL PDUs (DLE off), 1M PHY, and whatever connection
@@ -164,6 +167,7 @@ static int gap_event_cb(struct ble_gap_event* event, void* /*arg*/)
 
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI(kTag, "disconnected: reason=%d", event->disconnect.reason);
+        g_ble_connected.store(false, std::memory_order_relaxed);
         gatt::set_subscribe(BLE_HS_CONN_HANDLE_NONE, false);
         // Drop the X25519 / AES-GCM key material — the next connection runs
         // a fresh handshake. No persistent bonding, no key reuse.
@@ -327,6 +331,11 @@ tl::expected<void, Error> start(const DeviceConfig& current)
 void notify_wifi_connected(bool connected)
 {
     gatt::set_wifi_connected(connected);
+}
+
+bool ble_connected()
+{
+    return g_ble_connected.load(std::memory_order_relaxed);
 }
 
 void set_audio_stream_sink(const AudioStreamSink* sink)

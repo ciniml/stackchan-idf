@@ -64,6 +64,9 @@ tl::expected<void, Error> start(const DeviceConfig& current);
 // Thread-safe — may be called from any task.
 void notify_wifi_connected(bool connected);
 
+// True while a BLE central is connected. Thread-safe; for status display.
+bool ble_connected();
+
 // Audio playback sink. The BLE settings service streams PCM16 LE mono
 // chunks to whichever sink is registered here (set up at boot from
 // main/audio_stream_sink.cpp). Callbacks run on the NimBLE host task,
