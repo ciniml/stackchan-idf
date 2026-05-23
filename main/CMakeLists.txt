@@ -4,6 +4,7 @@ idf_component_register(
         "audio_codec.cpp"
         "audio_stream_sink.cpp"
         "conversation_task.cpp"
+        "device_ui.cpp"
         "render_task.cpp"
         "servo_task.cpp"
         "speech.cpp"

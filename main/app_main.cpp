@@ -24,6 +24,7 @@
 #include "board/si12t_touch.hpp"
 #include "config_service/config_service.hpp"
 #include "conversation_task.hpp"
+#include "device_ui.hpp"
 #include "render_task.hpp"
 #include "servo_task.hpp"
 #include "shared_state.hpp"
@@ -152,15 +153,14 @@ void demo_loop(const std::string& jtts_config_json)
         const std::uint32_t now_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
 
         // LCD touch (M5.Touch — the screen's capacitive touch, distinct from
-        // the Si12T head sensor). A tap in the top-right corner toggles the
-        // on-device info screen: open it from the avatar, or use the same
-        // corner as the close button while it's shown. Handled before the
-        // conversation/audio early-returns so it works in every mode.
+        // the Si12T head sensor) drives the on-device UI. Forward every press
+        // to the UI module, which hit-tests it against the current page.
+        // Handled before the conversation/audio early-returns so the UI opens
+        // in every mode.
         {
             const auto td = M5.Touch.getDetail();
-            if (td.wasPressed() && td.x >= M5.Display.width() - 64 && td.y < 64) {
-                const bool to_info = !g_state->info_screen.load(std::memory_order_relaxed);
-                g_state->info_screen.store(to_info, std::memory_order_relaxed);
+            if (td.wasPressed()) {
+                app::ui::handle_tap(td.x, td.y);
             }
         }
 
@@ -506,6 +506,7 @@ extern "C" void app_main()
     g_conversation_args = new stackchan::app::ConversationTaskArgs{
         .state = g_state, .api_key = api_key, .provider = cfg.provider, .touch = g_touch};
 
+    stackchan::app::ui::init(*g_state);
     stackchan::app::start_render_task(*g_render_args);
     stackchan::app::start_servo_task(*g_servo_args);
     // The conversation task waits for Wi-Fi internally, then takes over the

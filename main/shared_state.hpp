@@ -49,10 +49,9 @@ public:
     std::atomic<bool> audio_stream_active{false};
     std::atomic<bool> conversation_yielded_i2s{false};
 
-    // On-device info/settings screen. Toggled by a tap in the LCD's top-right
-    // corner (demo_loop reads M5.Touch); the render task shows the info screen
-    // instead of the avatar while this is set.
-    std::atomic<bool> info_screen{false};
+    // Servo torque enable. The on-device 操作 (control) screen toggles this;
+    // the servo task enables/disables torque to match (false = head goes limp).
+    std::atomic<bool> servo_enabled{true};
 
     // Show `text` in the balloon.
     //  - hold_ms: minimum on-screen time (0 = use avatar defaults — short

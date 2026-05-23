@@ -67,9 +67,28 @@ void servo_task_entry(void* arg)
 
     std::uint16_t last_yaw_target = scs_servo::kYawZero;
     std::uint16_t last_pitch_target = scs_servo::kPitchZero;
+    bool last_enabled = true;
 
     TickType_t last_wake = xTaskGetTickCount();
     for (;;) {
+        // Torque follows the shared servo_enabled flag (toggled by the
+        // on-device control screen). When disabled the head goes limp and we
+        // skip goal writes; on re-enable, force a goal write by invalidating
+        // the cached targets so the head returns to its commanded pose.
+        const bool enabled = args.state->servo_enabled.load(std::memory_order_relaxed);
+        if (enabled != last_enabled) {
+            (void)yaw.enable_torque(enabled);
+            (void)pitch.enable_torque(enabled);
+            last_enabled = enabled;
+            if (enabled) {
+                last_yaw_target = last_pitch_target = 0xFFFF; // force re-issue
+            }
+        }
+        if (!enabled) {
+            vTaskDelayUntil(&last_wake, kPeriodTicks);
+            continue;
+        }
+
         const float yaw_deg = args.state->target_yaw_deg.load(std::memory_order_relaxed);
         const float pitch_deg = args.state->target_pitch_deg.load(std::memory_order_relaxed);
         const std::uint16_t yaw_target = scs_servo::deg_to_raw(yaw_deg, scs_servo::kYawZero);
