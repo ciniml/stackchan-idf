@@ -28,6 +28,13 @@
                   background: #2d6cdf; color: #fff; border: none; border-radius: 6px;
                   cursor: pointer; }
   .panel button:hover { background: #3a78e8; }
+  .panel button.mini { width: auto; flex: 1; margin-bottom: 0; padding: .4rem; font-size: .82rem; }
+  .panel label.filebtn { flex: 1; text-align: center; padding: .4rem; font-size: .82rem;
+                         background: #444b54; color: #fff; border-radius: 6px; cursor: pointer; }
+  .panel label.filebtn:hover { background: #525a64; }
+  #preset-json { width: 100%; box-sizing: border-box; font-family: monospace; font-size: .75rem;
+                 background: #1b1f24; color: #e6e6e6; border: 1px solid #3a4048; border-radius: 4px;
+                 padding: .4rem; margin-bottom: .5rem; white-space: pre; }
 </style>
 </head>
 <body>
@@ -184,6 +191,24 @@
           <span class="val" id="mouth-maxh-v">60</span>
         </div>
       </fieldset>
+
+      <fieldset>
+        <legend>プリセット (インポート / エクスポート)</legend>
+        <textarea id="preset-json" rows="7" spellcheck="false"
+                  placeholder='エクスポートで現在値を JSON 出力 / JSON を貼り付けてインポート'></textarea>
+        <div class="row" style="gap:.4rem">
+          <button type="button" class="mini" id="export-btn">エクスポート</button>
+          <button type="button" class="mini" id="import-btn">インポート</button>
+        </div>
+        <div class="row" style="gap:.4rem">
+          <button type="button" class="mini" id="copy-btn">クリップボードにコピー</button>
+        </div>
+        <div class="row" style="gap:.4rem">
+          <button type="button" class="mini" id="download-btn">ファイル保存</button>
+          <label class="filebtn" for="preset-file">ファイル読込</label>
+          <input type="file" id="preset-file" accept="application/json,.json" style="display:none">
+        </div>
+      </fieldset>
     </div>
   </div>
   <div id="status">WASM 読み込み中…</div>
@@ -256,6 +281,57 @@
       applyParams();
     }
     $('reset-btn').addEventListener('click', resetDefaults);
+
+    // ---- preset import / export -------------------------------------------
+    // Snapshot of every panel control (id -> value/checked), as portable JSON.
+    function paramControls() {
+      return Array.prototype.slice.call(document.querySelectorAll('.panel select, .panel input'))
+        .filter(function (el) { return el.id && el.type !== 'button' && el.type !== 'file'; });
+    }
+    function exportParams() {
+      var o = {};
+      paramControls().forEach(function (el) { o[el.id] = (el.type === 'checkbox') ? el.checked : el.value; });
+      $('preset-json').value = JSON.stringify(o, null, 2);
+    }
+    function importParams() {
+      var obj;
+      try { obj = JSON.parse($('preset-json').value); }
+      catch (e) { status.textContent = 'JSON 解析エラー: ' + e.message; return; }
+      paramControls().forEach(function (el) {
+        if (!Object.prototype.hasOwnProperty.call(obj, el.id)) return;
+        if (el.type === 'checkbox') el.checked = !!obj[el.id];
+        else el.value = obj[el.id];
+      });
+      applyParams();
+      status.textContent = 'プリセットをインポートしました';
+    }
+    $('export-btn').addEventListener('click', exportParams);
+    $('import-btn').addEventListener('click', importParams);
+    $('copy-btn').addEventListener('click', function () {
+      exportParams();
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText($('preset-json').value).then(
+          function () { status.textContent = 'クリップボードにコピーしました'; },
+          function () { $('preset-json').select(); });
+      } else { $('preset-json').select(); }
+    });
+    $('download-btn').addEventListener('click', function () {
+      exportParams();
+      var blob = new Blob([$('preset-json').value], { type: 'application/json' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'avatar-params.json';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    });
+    $('preset-file').addEventListener('change', function (e) {
+      var f = e.target.files[0];
+      if (!f) return;
+      var r = new FileReader();
+      r.onload = function () { $('preset-json').value = r.result; importParams(); };
+      r.readAsText(f);
+      e.target.value = ''; // allow re-loading the same file
+    });
 
     // Wire every control to re-push params.
     Array.prototype.forEach.call(
