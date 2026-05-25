@@ -58,6 +58,26 @@ void draw_bubble(M5Canvas& canvas, std::int16_t x, std::int16_t y, float r, floa
     canvas.fillCircle(x, y, static_cast<std::int16_t>(r_small), color);
 }
 
+void draw_heart(M5Canvas& canvas, std::int16_t x, std::int16_t y, float r, float offset,
+                std::uint16_t color)
+{
+    const float rr = r + r * 0.4f * offset;
+    const float a = rr * 1.41421356f / 4.0f; // r * sqrt(2) / 4
+    const std::int16_t lobe_r = static_cast<std::int16_t>(std::round(rr / 2.0f));
+    // Two top lobes.
+    canvas.fillCircle(static_cast<std::int16_t>(x - rr / 2.0f), y, lobe_r, color);
+    canvas.fillCircle(static_cast<std::int16_t>(x + rr / 2.0f), y, lobe_r, color);
+    // Two triangles forming the lower point (share the wide base at y + a).
+    canvas.fillTriangle(x, y,
+                        static_cast<std::int16_t>(x - rr / 2.0f - a), static_cast<std::int16_t>(y + a),
+                        static_cast<std::int16_t>(x + rr / 2.0f + a), static_cast<std::int16_t>(y + a),
+                        color);
+    canvas.fillTriangle(x, static_cast<std::int16_t>(y + rr / 2.0f + 2.0f * a),
+                        static_cast<std::int16_t>(x - rr / 2.0f - a), static_cast<std::int16_t>(y + a),
+                        static_cast<std::int16_t>(x + rr / 2.0f + a), static_cast<std::int16_t>(y + a),
+                        color);
+}
+
 } // namespace
 
 void draw_effect(M5Canvas& canvas, const DrawContext& ctx)
@@ -78,6 +98,9 @@ void draw_effect(M5Canvas& canvas, const DrawContext& ctx)
     auto sr = [&](float r) { return r * scale; };
 
     switch (ctx.expression) {
+    case Expression::Happy:
+        draw_heart(canvas, tx(280), ty(50), sr(12.0f), offset, fg);
+        break;
     case Expression::Doubt:
         draw_sweat(canvas, tx(290), ty(110), sr(7.0f), offset, fg);
         break;
