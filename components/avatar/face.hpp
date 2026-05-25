@@ -24,6 +24,8 @@ struct Face {
     Mouth mouth{163, 148, 50, 90, 4, 60};
     Eyebrow eyebrow_left{96, 67, 32, 2, false};
     Eyebrow eyebrow_right{230, 72, 32, 2, true};
+    // Display toggle: when false the eyebrows are not drawn.
+    bool show_eyebrows{true};
 };
 
 void draw_face(M5Canvas& canvas, const Face& face, const DrawContext& ctx);

@@ -24,6 +24,10 @@
   select, input[type=number] { background: #1b1f24; color: #e6e6e6; border: 1px solid #3a4048;
            border-radius: 4px; padding: .2rem .4rem; }
   #status { font-size: .8rem; color: #8a929b; padding: 0 1rem 1rem; }
+  .panel button { width: 100%; margin-bottom: .8rem; padding: .5rem; font-size: .9rem;
+                  background: #2d6cdf; color: #fff; border: none; border-radius: 6px;
+                  cursor: pointer; }
+  .panel button:hover { background: #3a78e8; }
 </style>
 </head>
 <body>
@@ -33,6 +37,7 @@
       <canvas id="screen" width="320" height="240"></canvas>
     </div>
     <div class="panel">
+      <button type="button" id="reset-btn">すべてデフォルトに戻す</button>
       <fieldset>
         <legend>表情 / 口</legend>
         <div class="row">
@@ -119,6 +124,66 @@
         <div class="row"><label for="col-face">顔の色</label><input type="color" id="col-face" value="#ffffff"></div>
         <div class="row"><label for="col-bg">背景色</label><input type="color" id="col-bg" value="#000000"></div>
       </fieldset>
+
+      <fieldset>
+        <legend>表示パラメータ (レイアウト)</legend>
+        <div class="row"><label for="brow-show">眉を表示</label><input type="checkbox" id="brow-show" checked></div>
+        <div class="row">
+          <label for="eye-r">目の半径</label>
+          <input type="range" id="eye-r" min="2" max="20" step="0.5" value="8">
+          <span class="val" id="eye-r-v">8.0</span>
+        </div>
+        <div class="row">
+          <label for="eye-ox">目 横オフセット</label>
+          <input type="range" id="eye-ox" min="-40" max="40" step="1" value="0">
+          <span class="val" id="eye-ox-v">0</span>
+        </div>
+        <div class="row">
+          <label for="eye-oy">目 縦オフセット</label>
+          <input type="range" id="eye-oy" min="-40" max="40" step="1" value="0">
+          <span class="val" id="eye-oy-v">0</span>
+        </div>
+        <div class="row">
+          <label for="brow-ox">眉 横オフセット</label>
+          <input type="range" id="brow-ox" min="-40" max="40" step="1" value="0">
+          <span class="val" id="brow-ox-v">0</span>
+        </div>
+        <div class="row">
+          <label for="brow-oy">眉 縦オフセット</label>
+          <input type="range" id="brow-oy" min="-40" max="40" step="1" value="0">
+          <span class="val" id="brow-oy-v">0</span>
+        </div>
+        <div class="row">
+          <label for="mouth-ox">口 横オフセット</label>
+          <input type="range" id="mouth-ox" min="-60" max="60" step="1" value="0">
+          <span class="val" id="mouth-ox-v">0</span>
+        </div>
+        <div class="row">
+          <label for="mouth-oy">口 縦オフセット</label>
+          <input type="range" id="mouth-oy" min="-60" max="60" step="1" value="0">
+          <span class="val" id="mouth-oy-v">0</span>
+        </div>
+        <div class="row">
+          <label for="mouth-minw">口 最小幅</label>
+          <input type="range" id="mouth-minw" min="4" max="160" step="1" value="50">
+          <span class="val" id="mouth-minw-v">50</span>
+        </div>
+        <div class="row">
+          <label for="mouth-maxw">口 最大幅</label>
+          <input type="range" id="mouth-maxw" min="4" max="200" step="1" value="90">
+          <span class="val" id="mouth-maxw-v">90</span>
+        </div>
+        <div class="row">
+          <label for="mouth-minh">開口 最小 (閉)</label>
+          <input type="range" id="mouth-minh" min="1" max="60" step="1" value="4">
+          <span class="val" id="mouth-minh-v">4</span>
+        </div>
+        <div class="row">
+          <label for="mouth-maxh">開口 最大 (開)</label>
+          <input type="range" id="mouth-maxh" min="2" max="120" step="1" value="60">
+          <span class="val" id="mouth-maxh-v">60</span>
+        </div>
+      </fieldset>
     </div>
   </div>
   <div id="status">WASM 読み込み中…</div>
@@ -153,17 +218,48 @@
         parseInt($('blink-cmin').value, 10), parseInt($('blink-cmax').value, 10));
       Module._avatar_set_breath($('breath-en').checked ? 1 : 0);
       Module._avatar_set_colors(hexToRgbInt($('col-face').value), hexToRgbInt($('col-bg').value));
+      // layout tuning
+      Module._avatar_set_eyebrows_visible($('brow-show').checked ? 1 : 0);
+      Module._avatar_set_eye_params(parseFloat($('eye-r').value),
+        parseFloat($('eye-ox').value), parseFloat($('eye-oy').value));
+      Module._avatar_set_eyebrow_params(parseFloat($('brow-ox').value), parseFloat($('brow-oy').value));
+      Module._avatar_set_mouth_params(parseFloat($('mouth-ox').value), parseFloat($('mouth-oy').value),
+        parseInt($('mouth-minw').value, 10), parseInt($('mouth-maxw').value, 10),
+        parseInt($('mouth-minh').value, 10), parseInt($('mouth-maxh').value, 10));
       // mirror slider values into their readouts
       [['mouth', 2], ['sac-min', 0], ['sac-max', 0], ['sac-amp', 2],
        ['mg-h', 2], ['mg-v', 2], ['blink-omin', 0], ['blink-omax', 0],
-       ['blink-cmin', 0], ['blink-cmax', 0]].forEach(function (e) {
+       ['blink-cmin', 0], ['blink-cmax', 0],
+       ['eye-r', 1], ['eye-ox', 0], ['eye-oy', 0], ['brow-ox', 0], ['brow-oy', 0],
+       ['mouth-ox', 0], ['mouth-oy', 0], ['mouth-minw', 0], ['mouth-maxw', 0],
+       ['mouth-minh', 0], ['mouth-maxh', 0]].forEach(function (e) {
         var el = $(e[0] + '-v'); if (el) el.textContent = parseFloat($(e[0]).value).toFixed(e[1]);
       });
     }
 
+    // Restore every control to its HTML default (value/checked/selected) and
+    // re-apply. Defaults come from the markup, so URL presets don't affect it.
+    function resetDefaults() {
+      Array.prototype.forEach.call(
+        document.querySelectorAll('.panel select, .panel input'),
+        function (el) {
+          if (el.type === 'checkbox') {
+            el.checked = el.defaultChecked;
+          } else if (el.tagName === 'SELECT') {
+            var idx = 0;
+            for (var i = 0; i < el.options.length; i++) if (el.options[i].defaultSelected) idx = i;
+            el.selectedIndex = idx;
+          } else {
+            el.value = el.defaultValue;
+          }
+        });
+      applyParams();
+    }
+    $('reset-btn').addEventListener('click', resetDefaults);
+
     // Wire every control to re-push params.
     Array.prototype.forEach.call(
-      document.querySelectorAll('select, input'),
+      document.querySelectorAll('.panel select, .panel input'),
       function (el) { el.addEventListener('input', applyParams); });
 
     // Optional URL params seed the controls by element id, e.g.

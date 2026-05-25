@@ -17,7 +17,7 @@ OUT_REL="build/avatar_web/avatar.html"
 
 mkdir -p "$ROOT/build/avatar_web" "$ROOT/build/emcache"
 
-EXPORTS='_avatar_init,_avatar_width,_avatar_height,_avatar_framebuffer,_avatar_set_expression,_avatar_set_mouth,_avatar_set_manual_gaze,_avatar_set_saccade,_avatar_set_blink,_avatar_set_breath,_avatar_set_colors,_avatar_tick'
+EXPORTS='_avatar_init,_avatar_width,_avatar_height,_avatar_framebuffer,_avatar_set_expression,_avatar_set_mouth,_avatar_set_manual_gaze,_avatar_set_saccade,_avatar_set_blink,_avatar_set_breath,_avatar_set_colors,_avatar_set_eyebrows_visible,_avatar_set_eye_params,_avatar_set_eyebrow_params,_avatar_set_mouth_params,_avatar_tick'
 
 echo "[avatar-wasm] building with $IMAGE -> $OUT_REL"
 docker run --rm \

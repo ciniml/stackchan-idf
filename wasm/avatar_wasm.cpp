@@ -33,6 +33,38 @@ float g_gaze_h = 0.0f;
 float g_gaze_v = 0.0f;
 
 std::uint32_t clamp_u32(int v) { return v < 0 ? 0u : static_cast<std::uint32_t>(v); }
+
+// Adjustable face layout. Defaults mirror the firmware's internal::Face so the
+// initial render is identical. Positions are derived from the same base layout
+// as components/avatar/face.hpp; horizontal offsets are applied symmetrically
+// (positive = eyes/brows spread apart).
+struct FaceTuning {
+    bool eyebrows_visible = true;
+    float eye_radius = 8.0f;
+    float eye_off_x = 0.0f, eye_off_y = 0.0f;
+    float brow_off_x = 0.0f, brow_off_y = 0.0f;
+    float mouth_off_x = 0.0f, mouth_off_y = 0.0f;
+    int mouth_min_w = 50, mouth_max_w = 90; // resting/open width range
+    int mouth_min_h = 4, mouth_max_h = 60;  // closed/open height range
+};
+FaceTuning g_tune;
+
+void rebuild_face()
+{
+    using namespace internal;
+    auto i16 = [](float v) { return static_cast<std::int16_t>(v); };
+    auto u16 = [](int v) { return static_cast<std::uint16_t>(v < 0 ? 0 : v); };
+
+    g_face.eye_left = Eye{i16(230 + g_tune.eye_off_x), i16(96 + g_tune.eye_off_y), g_tune.eye_radius, false};
+    g_face.eye_right = Eye{i16(90 - g_tune.eye_off_x), i16(93 + g_tune.eye_off_y), g_tune.eye_radius, true};
+    g_face.eyebrow_left = Eyebrow{i16(96 - g_tune.brow_off_x), i16(67 + g_tune.brow_off_y), 32, 2, false};
+    g_face.eyebrow_right = Eyebrow{i16(230 + g_tune.brow_off_x), i16(72 + g_tune.brow_off_y), 32, 2, true};
+    const int max_w = g_tune.mouth_max_w < g_tune.mouth_min_w ? g_tune.mouth_min_w : g_tune.mouth_max_w;
+    const int max_h = g_tune.mouth_max_h < g_tune.mouth_min_h ? g_tune.mouth_min_h : g_tune.mouth_max_h;
+    g_face.mouth = Mouth{i16(163 + g_tune.mouth_off_x), i16(148 + g_tune.mouth_off_y),
+                         u16(g_tune.mouth_min_w), u16(max_w), u16(g_tune.mouth_min_h), u16(max_h)};
+    g_face.show_eyebrows = g_tune.eyebrows_visible;
+}
 } // namespace
 
 extern "C" {
@@ -43,6 +75,7 @@ EMSCRIPTEN_KEEPALIVE int avatar_init()
         return 0;
     }
     g_ctx = DrawContext{};
+    rebuild_face();
     return 1;
 }
 
@@ -93,6 +126,45 @@ EMSCRIPTEN_KEEPALIVE void avatar_set_blink(int enabled, int open_min, int open_m
 EMSCRIPTEN_KEEPALIVE void avatar_set_breath(int enabled)
 {
     g_anim.params.breath_enabled = enabled != 0;
+}
+
+// ---- face layout tuning ------------------------------------------------
+
+EMSCRIPTEN_KEEPALIVE void avatar_set_eyebrows_visible(int on)
+{
+    g_tune.eyebrows_visible = on != 0;
+    rebuild_face();
+}
+
+// radius = eye size; off_x spreads the eyes apart (symmetric), off_y moves
+// both vertically.
+EMSCRIPTEN_KEEPALIVE void avatar_set_eye_params(float radius, float off_x, float off_y)
+{
+    g_tune.eye_radius = radius < 1.0f ? 1.0f : radius;
+    g_tune.eye_off_x = off_x;
+    g_tune.eye_off_y = off_y;
+    rebuild_face();
+}
+
+EMSCRIPTEN_KEEPALIVE void avatar_set_eyebrow_params(float off_x, float off_y)
+{
+    g_tune.brow_off_x = off_x;
+    g_tune.brow_off_y = off_y;
+    rebuild_face();
+}
+
+// off_x/off_y move the mouth; min_w/max_w set the (closed/open) width range;
+// min_h/max_h set the open-amount (closed/fully-open height) range.
+EMSCRIPTEN_KEEPALIVE void avatar_set_mouth_params(float off_x, float off_y,
+                                                  int min_w, int max_w, int min_h, int max_h)
+{
+    g_tune.mouth_off_x = off_x;
+    g_tune.mouth_off_y = off_y;
+    g_tune.mouth_min_w = min_w;
+    g_tune.mouth_max_w = max_w;
+    g_tune.mouth_min_h = min_h;
+    g_tune.mouth_max_h = max_h;
+    rebuild_face();
 }
 
 // Set the RGB565 face / background colours (0xRRGGBB inputs converted here).
