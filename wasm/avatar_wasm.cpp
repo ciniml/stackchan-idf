@@ -6,6 +6,7 @@
 // rendering into an in-memory RGB565 canvas (see wasm/shim/M5GFX.h). The
 // browser reads the framebuffer each frame and blits it to a <canvas>.
 
+#include <algorithm>
 #include <cstdint>
 
 #include <emscripten/emscripten.h>
@@ -20,8 +21,15 @@
 using namespace stackchan::avatar;
 
 namespace {
-constexpr std::int32_t kWidth = 320;
-constexpr std::int32_t kHeight = 240;
+// Design resolution the face layout is authored for; the layout is scaled to
+// the actual canvas size (g_w x g_h) and centred.
+constexpr float kBaseW = 320.0f;
+constexpr float kBaseH = 240.0f;
+constexpr float kBaseCx = 160.0f;
+constexpr float kBaseCy = 120.0f;
+
+std::int32_t g_w = 320;
+std::int32_t g_h = 240;
 
 M5Canvas g_canvas;
 DrawContext g_ctx;
@@ -52,17 +60,26 @@ FaceTuning g_tune;
 void rebuild_face()
 {
     using namespace internal;
-    auto i16 = [](float v) { return static_cast<std::int16_t>(v); };
-    auto u16 = [](int v) { return static_cast<std::uint16_t>(v < 0 ? 0 : v); };
-
-    g_face.eye_left = Eye{i16(230 + g_tune.eye_off_x), i16(96 + g_tune.eye_off_y), g_tune.eye_radius, false};
-    g_face.eye_right = Eye{i16(90 - g_tune.eye_off_x), i16(93 + g_tune.eye_off_y), g_tune.eye_radius, true};
-    g_face.eyebrow_left = Eyebrow{i16(96 - g_tune.brow_off_x), i16(67 + g_tune.brow_off_y), 32, 2, false};
-    g_face.eyebrow_right = Eyebrow{i16(230 + g_tune.brow_off_x), i16(72 + g_tune.brow_off_y), 32, 2, true};
+    // Uniform scale (preserve aspect) of the base layout to the canvas, centred.
+    const float scale = std::min(static_cast<float>(g_w) / kBaseW, static_cast<float>(g_h) / kBaseH);
+    const float cx = g_w / 2.0f;
+    const float cy = g_h / 2.0f;
+    auto tx = [&](float bx) { return static_cast<std::int16_t>(cx + (bx - kBaseCx) * scale); };
+    auto ty = [&](float by) { return static_cast<std::int16_t>(cy + (by - kBaseCy) * scale); };
+    auto sz = [&](float base) {
+        const float v = base * scale;
+        return static_cast<std::uint16_t>(v < 1.0f ? 1.0f : v);
+    };
+    const float radius = g_tune.eye_radius * scale < 1.0f ? 1.0f : g_tune.eye_radius * scale;
     const int max_w = g_tune.mouth_max_w < g_tune.mouth_min_w ? g_tune.mouth_min_w : g_tune.mouth_max_w;
     const int max_h = g_tune.mouth_max_h < g_tune.mouth_min_h ? g_tune.mouth_min_h : g_tune.mouth_max_h;
-    g_face.mouth = Mouth{i16(163 + g_tune.mouth_off_x), i16(148 + g_tune.mouth_off_y),
-                         u16(g_tune.mouth_min_w), u16(max_w), u16(g_tune.mouth_min_h), u16(max_h)};
+
+    g_face.eye_left = Eye{tx(230 + g_tune.eye_off_x), ty(96 + g_tune.eye_off_y), radius, false};
+    g_face.eye_right = Eye{tx(90 - g_tune.eye_off_x), ty(93 + g_tune.eye_off_y), radius, true};
+    g_face.eyebrow_left = Eyebrow{tx(96 - g_tune.brow_off_x), ty(67 + g_tune.brow_off_y), sz(32), sz(2), false};
+    g_face.eyebrow_right = Eyebrow{tx(230 + g_tune.brow_off_x), ty(72 + g_tune.brow_off_y), sz(32), sz(2), true};
+    g_face.mouth = Mouth{tx(163 + g_tune.mouth_off_x), ty(148 + g_tune.mouth_off_y),
+                         sz(g_tune.mouth_min_w), sz(max_w), sz(g_tune.mouth_min_h), sz(max_h)};
     g_face.show_eyebrows = g_tune.eyebrows_visible;
 }
 } // namespace
@@ -71,7 +88,7 @@ extern "C" {
 
 EMSCRIPTEN_KEEPALIVE int avatar_init()
 {
-    if (g_canvas.createSprite(kWidth, kHeight) == nullptr) {
+    if (g_canvas.createSprite(g_w, g_h) == nullptr) {
         return 0;
     }
     g_ctx = DrawContext{};
@@ -79,8 +96,30 @@ EMSCRIPTEN_KEEPALIVE int avatar_init()
     return 1;
 }
 
-EMSCRIPTEN_KEEPALIVE int avatar_width() { return kWidth; }
-EMSCRIPTEN_KEEPALIVE int avatar_height() { return kHeight; }
+// Resize the render canvas (clamped 64..1280 x 32..720). Reallocates the
+// framebuffer (callers must re-read avatar_framebuffer()) and rescales the
+// face layout to fill the new size. Returns 1 on success.
+EMSCRIPTEN_KEEPALIVE int avatar_set_size(int w, int h)
+{
+    if (w < 64) w = 64;
+    if (w > 1280) w = 1280;
+    if (h < 32) h = 32;
+    if (h > 720) h = 720;
+    if (w == g_w && h == g_h) {
+        return 1;
+    }
+    g_w = w;
+    g_h = h;
+    g_canvas.deleteSprite();
+    if (g_canvas.createSprite(g_w, g_h) == nullptr) {
+        return 0;
+    }
+    rebuild_face();
+    return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE int avatar_width() { return g_w; }
+EMSCRIPTEN_KEEPALIVE int avatar_height() { return g_h; }
 EMSCRIPTEN_KEEPALIVE std::uint16_t* avatar_framebuffer() { return g_canvas.getBuffer(); }
 
 // expression: 0=Neutral 1=Happy 2=Sad 3=Angry 4=Doubt 5=Sleepy

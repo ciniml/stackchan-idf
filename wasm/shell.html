@@ -13,6 +13,15 @@
   .stage { flex: 0 0 auto; }
   canvas { width: 640px; height: 480px; max-width: 90vw; image-rendering: pixelated;
            background: #000; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,.5); }
+  .sizebar { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: 0 0 .6rem;
+             font-size: .82rem; color: #cdd3da; }
+  .sizebar input[type=number] { width: 5rem; background: #1b1f24; color: #e6e6e6;
+             border: 1px solid #3a4048; border-radius: 4px; padding: .2rem .4rem; }
+  .sizebar button { background: #444b54; color: #fff; border: none; border-radius: 5px;
+             padding: .25rem .6rem; font-size: .8rem; cursor: pointer; }
+  .sizebar button:hover { background: #525a64; }
+  .sizebar #size-apply { background: #2d6cdf; }
+  .sizebar .presets { display: inline-flex; gap: .3rem; flex-wrap: wrap; }
   .panel { flex: 1 1 320px; min-width: 300px; max-width: 480px; background: #262b31;
            border-radius: 8px; padding: 1rem; }
   fieldset { border: 1px solid #3a4048; border-radius: 6px; margin: 0 0 .8rem; padding: .5rem .7rem; }
@@ -41,6 +50,18 @@
   <div class="wrap">
     <div class="stage">
       <h1>Stack-chan Avatar — ブラウザ描画 (Emscripten/WASM)</h1>
+      <div class="sizebar">
+        画面サイズ
+        <input type="number" id="scr-w" min="64" max="1280" step="1" value="320"> ×
+        <input type="number" id="scr-h" min="32" max="720" step="1" value="240">
+        <button type="button" id="size-apply">適用</button>
+        <span class="presets">
+          <button type="button" data-w="64" data-h="32">64×32</button>
+          <button type="button" data-w="128" data-h="128">128×128</button>
+          <button type="button" data-w="320" data-h="240">320×240</button>
+          <button type="button" data-w="1280" data-h="720">1280×720</button>
+        </span>
+      </div>
       <canvas id="screen" width="320" height="240"></canvas>
     </div>
     <div class="panel">
@@ -228,6 +249,32 @@
     var ctx2d = cnv.getContext('2d');
     var img = ctx2d.createImageData(W, H);
 
+    // Fit the (variable-resolution) canvas into a ~640x480 box, preserving
+    // aspect; image-rendering:pixelated keeps small renders crisp when upscaled.
+    function fitDisplay() {
+      var s = Math.min(640 / W, 480 / H);
+      cnv.style.width = Math.round(W * s) + 'px';
+      cnv.style.height = Math.round(H * s) + 'px';
+    }
+    function resize(w, h) {
+      if (!Module._avatar_set_size(w, h)) { status.textContent = 'リサイズ失敗 (' + w + '×' + h + ')'; return; }
+      W = Module._avatar_width(); H = Module._avatar_height();
+      cnv.width = W; cnv.height = H;
+      img = ctx2d.createImageData(W, H);   // framebuffer was reallocated
+      fitDisplay();
+      $('scr-w').value = W; $('scr-h').value = H; // reflect clamped values
+      status.textContent = '画面サイズ: ' + W + '×' + H;
+    }
+    function applySize() {
+      resize(parseInt($('scr-w').value, 10) || 320, parseInt($('scr-h').value, 10) || 240);
+    }
+    $('size-apply').addEventListener('click', applySize);
+    $('scr-w').addEventListener('change', applySize);
+    $('scr-h').addEventListener('change', applySize);
+    Array.prototype.forEach.call(document.querySelectorAll('.sizebar button[data-w]'), function (b) {
+      b.addEventListener('click', function () { resize(+b.dataset.w, +b.dataset.h); });
+    });
+
     function hexToRgbInt(hex) { return parseInt(hex.replace('#', ''), 16) | 0; }
 
     function applyParams() {
@@ -348,6 +395,7 @@
     });
 
     applyParams();
+    applySize(); // apply the initial (or URL-seeded) screen size + fit display
 
     function frame() {
       Module._avatar_tick(performance.now());
