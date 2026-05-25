@@ -55,9 +55,12 @@ void draw_eye(M5Canvas& canvas, const Eye& eye, const DrawContext& ctx, std::int
         canvas.fillRect(static_cast<std::int16_t>(cx - r), static_cast<std::int16_t>(cy - r + y_offset),
                         static_cast<std::int16_t>(w), static_cast<std::int16_t>(h), bg);
         if (ctx.expression == Expression::Happy) {
+            // Carve a background circle out of the centre so the remaining
+            // top arc reads as a happy "^" eye (m5stack-avatar-rs draws this
+            // circle in the mask/background colour, not the foreground).
             const float small_r = r / 1.5f;
             canvas.fillCircle(static_cast<std::int16_t>(cx), static_cast<std::int16_t>(cy),
-                              static_cast<std::int16_t>(std::round(small_r)), fg);
+                              static_cast<std::int16_t>(std::round(small_r)), bg);
         }
         break;
     }

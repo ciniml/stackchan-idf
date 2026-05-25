@@ -30,11 +30,14 @@ void draw_anger(M5Canvas& canvas, std::int16_t cx, std::int16_t cy, float r, flo
                     static_cast<std::int16_t>(rr * 2.0f / 3.0f), static_cast<std::int16_t>(rr * 2.0f), fg);
     canvas.fillRect(static_cast<std::int16_t>(cx - rr), static_cast<std::int16_t>(cy - rr / 3.0f),
                     static_cast<std::int16_t>(rr * 2.0f), static_cast<std::int16_t>(rr * 2.0f / 3.0f), fg);
-    // Inner cutout
+    // Inner cutout — hollow BOTH bars symmetrically so the mark reads as a
+    // clean "#". (m5stack-avatar-rs only cuts the left third of the horizontal
+    // bar — its width is r*2/3 instead of r*2 — leaving the right side a solid
+    // block; we cut the full width here.)
     canvas.fillRect(static_cast<std::int16_t>(cx - rr / 3.0f + 2.0f), static_cast<std::int16_t>(cy - rr),
                     static_cast<std::int16_t>(rr * 2.0f / 3.0f - 4.0f), static_cast<std::int16_t>(rr * 2.0f), bg);
     canvas.fillRect(static_cast<std::int16_t>(cx - rr), static_cast<std::int16_t>(cy - rr / 3.0f + 2.0f),
-                    static_cast<std::int16_t>(rr * 2.0f / 3.0f), static_cast<std::int16_t>(rr * 2.0f / 3.0f - 4.0f), bg);
+                    static_cast<std::int16_t>(rr * 2.0f), static_cast<std::int16_t>(rr * 2.0f / 3.0f - 4.0f), bg);
 }
 
 void draw_chill(M5Canvas& canvas, std::int16_t x, std::int16_t y, float r, float offset, std::uint16_t color)

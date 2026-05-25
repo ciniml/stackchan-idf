@@ -16,11 +16,14 @@ namespace stackchan::avatar::internal {
 // m5stack-avatar-rs::Face::default. "left" / "right" follow the avatar's
 // own anatomy, so eye_left is at the viewer's right.
 struct Face {
-    Eye eye_left{230, 96, 8.0f, true};
-    Eye eye_right{90, 93, 8.0f, false};
+    // is_left follows m5stack-avatar-rs: the eye/eyebrow at the viewer's RIGHT
+    // (x≈230) carry is_left=false, those at the viewer's LEFT (x≈90) carry
+    // is_left=true. (The earlier flipped flags mirrored the Angry/Sad tilts.)
+    Eye eye_left{230, 96, 8.0f, false};
+    Eye eye_right{90, 93, 8.0f, true};
     Mouth mouth{163, 148, 50, 90, 4, 60};
-    Eyebrow eyebrow_left{96, 67, 32, 2, true};
-    Eyebrow eyebrow_right{230, 72, 32, 2, false};
+    Eyebrow eyebrow_left{96, 67, 32, 2, false};
+    Eyebrow eyebrow_right{230, 72, 32, 2, true};
 };
 
 void draw_face(M5Canvas& canvas, const Face& face, const DrawContext& ctx);
