@@ -5,6 +5,7 @@ idf_component_register(
         "audio_stream_sink.cpp"
         "conversation_task.cpp"
         "device_ui.cpp"
+        "face_config.cpp"
         "render_task.cpp"
         "servo_task.cpp"
         "speech.cpp"

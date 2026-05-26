@@ -44,6 +44,17 @@ stackchan::app::ServoTaskArgs* g_servo_args = nullptr;
 stackchan::app::ConversationTaskArgs* g_conversation_args = nullptr;
 stackchan::board::Si12tTouch* g_touch = nullptr;
 
+// Live face-config sink: invoked from the BLE host task on each FaceConfig
+// WRITE. Just stashes the raw JSON in SharedState (cheap, host-task-safe); the
+// render task parses + applies it. config_service guarantees g_state is set
+// before BLE comes online (see boot order in app_main).
+void on_face_config(std::string_view json)
+{
+    if (g_state != nullptr) {
+        g_state->set_face_config(json);
+    }
+}
+
 // CoreS3 mic + speaker share I2S_NUM_1, so we have to hand the bus around
 // explicitly. Records `seconds` of audio at 16 kHz then plays it straight
 // back. Blocks the caller for ~2 * seconds.
@@ -470,6 +481,11 @@ extern "C" void app_main()
     // the entire audio session is silently dropped — every subsequent
     // audio_data write sees g_audio_sink == nullptr and bails.
     g_state = new stackchan::app::SharedState{};
+    // Seed the avatar face tuning from NVS (empty → built-in default face) and
+    // register the live BLE update sink, both before config::start brings the
+    // GATT service online so an early client write is applied immediately.
+    g_state->set_face_config(cfg.face_config_json);
+    stackchan::config::set_face_config_sink(&on_face_config);
     // BLE audio streaming and the realtime voice conversation are mutually
     // exclusive — both saturate the radio/CPU and running them together
     // makes streaming playback choppy. Pass the conversation-enabled flag

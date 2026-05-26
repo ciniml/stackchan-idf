@@ -52,6 +52,13 @@ public:
 
     DrawContext& context() noexcept { return context_; }
 
+    void set_face_tuning(const FaceTuning& tuning)
+    {
+        face_ = internal::build_face(tuning, kCanvasWidth, kCanvasHeight);
+        context_.palette.primary = tuning.face_color;
+        context_.palette.background = tuning.bg_color;
+    }
+
 private:
     M5GFX& display_;
     M5Canvas canvas_;
@@ -94,6 +101,11 @@ void Avatar::set_gaze(float horizontal, float vertical) noexcept
 void Avatar::set_palette(const Palette& palette) noexcept
 {
     impl_->context().palette = palette;
+}
+
+void Avatar::set_face_tuning(const FaceTuning& tuning) noexcept
+{
+    impl_->set_face_tuning(tuning);
 }
 
 void Avatar::set_balloon_text(std::string_view text, std::uint32_t hold_ms)

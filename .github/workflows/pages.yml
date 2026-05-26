@@ -11,6 +11,10 @@ on:
       # into _site/. Without this trigger the hosted settings page stays
       # stale when settings.html is the only file that changed.
       - 'tools/settings.html'
+      # The avatar preview module (avatar_module.js) embedded in settings.html
+      # is built from these on every deploy; rebuild when the source changes.
+      - 'wasm/**'
+      - 'components/avatar/**'
       - '.github/workflows/pages.yml'
   release:
     types: [published]
@@ -33,8 +37,20 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # build.sh stamps nothing from git, but the avatar sources live in
+          # submodule-free paths, so a shallow checkout is fine.
+          submodules: false
 
-      - name: Stage docs/ + tools/settings.html into _site/
+      - name: Build avatar preview module (Emscripten/WASM)
+        run: |
+          set -euo pipefail
+          # Same Docker image + script used locally (wasm/build.sh). Produces
+          # build/avatar_web/avatar_module.js (single-file, wasm embedded).
+          bash wasm/build.sh
+          test -f build/avatar_web/avatar_module.js
+
+      - name: Stage docs/ + tools/settings.html + avatar module into _site/
         run: |
           mkdir -p _site
           cp -a docs/. _site/
@@ -43,6 +59,8 @@ jobs:
           # hosted site so users can reach it from the same domain as the
           # web flasher without keeping two copies in git.
           cp tools/settings.html _site/settings.html
+          # Avatar preview module embedded by settings.html (built above).
+          cp build/avatar_web/avatar_module.js _site/avatar_module.js
 
       - name: Stage release firmware ZIPs into _site/firmware/<tag>/
         env:

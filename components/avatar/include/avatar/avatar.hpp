@@ -11,6 +11,7 @@
 
 #include "avatar/draw_context.hpp"
 #include "avatar/expression.hpp"
+#include "avatar/face_tuning.hpp"
 #include "avatar/palette.hpp"
 
 namespace stackchan::avatar {
@@ -31,6 +32,10 @@ public:
     void set_mouth_open(float ratio) noexcept;
     void set_gaze(float horizontal, float vertical) noexcept;
     void set_palette(const Palette& palette) noexcept;
+    // Rebuild the face layout from user tuning (eye/eyebrow/mouth geometry) and
+    // apply its face/background colours. Takes effect on the next tick(); safe
+    // to call live (e.g. from the render task on a config change).
+    void set_face_tuning(const FaceTuning& tuning) noexcept;
     // Show `text` in the balloon. `hold_ms` overrides the default display
     // time (0 = use balloon defaults: short text holds for a few seconds,
     // long text plays one full marquee pass).

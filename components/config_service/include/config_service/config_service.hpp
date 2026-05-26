@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <tl/expected.hpp>
 
 namespace stackchan::config {
@@ -53,6 +54,11 @@ struct DeviceConfig {
     // (all providers), e.g. a Cloudflare Access service token in front of a
     // proxied endpoint. Newline-separated "Name: value" lines. Settable over Wi-Fi.
     std::string conv_extra_headers;
+    // Compact JSON describing the avatar face tuning (eye/eyebrow/mouth geometry
+    // + face/background colours), as written by the settings UI's avatar editor.
+    // Empty → built-in default face. Applied live over BLE and restored at boot.
+    // See main/face_config.hpp for the schema.
+    std::string face_config_json;
 };
 
 enum class Error {
@@ -118,5 +124,13 @@ struct AudioStreamSink {
 // Register the audio sink. nullptr unregisters. Last writer wins; not
 // thread-safe to call concurrently with the GATT host task.
 void set_audio_stream_sink(const AudioStreamSink* sink);
+
+// Live avatar face-tuning callback. Invoked from the GATT host task on every
+// FaceConfig WRITE with the raw (decrypted) JSON, so the application can apply
+// it without waiting for Apply/reboot. The callback must be cheap and must NOT
+// parse on the host task (its stack is small) — hand the string to a worker /
+// shared state and parse there. nullptr unregisters.
+using FaceConfigSink = void (*)(std::string_view json);
+void set_face_config_sink(FaceConfigSink sink);
 
 } // namespace stackchan::config

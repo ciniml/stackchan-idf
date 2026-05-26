@@ -14,6 +14,7 @@
 #include "animation.hpp"
 #include "avatar/draw_context.hpp"
 #include "avatar/expression.hpp"
+#include "avatar/face_tuning.hpp"
 #include "avatar/palette.hpp"
 #include "effect.hpp"
 #include "face.hpp"
@@ -21,12 +22,6 @@
 using namespace stackchan::avatar;
 
 namespace {
-// Design resolution the face layout is authored for; the layout is scaled to
-// the actual canvas size (g_w x g_h) and centred.
-constexpr float kBaseW = 320.0f;
-constexpr float kBaseH = 240.0f;
-constexpr float kBaseCx = 160.0f;
-constexpr float kBaseCy = 120.0f;
 
 std::int32_t g_w = 320;
 std::int32_t g_h = 240;
@@ -43,44 +38,14 @@ float g_gaze_v = 0.0f;
 std::uint32_t clamp_u32(int v) { return v < 0 ? 0u : static_cast<std::uint32_t>(v); }
 
 // Adjustable face layout. Defaults mirror the firmware's internal::Face so the
-// initial render is identical. Positions are derived from the same base layout
-// as components/avatar/face.hpp; horizontal offsets are applied symmetrically
-// (positive = eyes/brows spread apart).
-struct FaceTuning {
-    bool eyebrows_visible = true;
-    float eye_radius = 8.0f;
-    float eye_off_x = 0.0f, eye_off_y = 0.0f;
-    float brow_off_x = 0.0f, brow_off_y = 0.0f;
-    float mouth_off_x = 0.0f, mouth_off_y = 0.0f;
-    int mouth_min_w = 50, mouth_max_w = 90; // resting/open width range
-    int mouth_min_h = 4, mouth_max_h = 60;  // closed/open height range
-};
+// initial render is identical. Colours are driven separately via
+// avatar_set_colors (g_ctx.palette), so g_tune's colour fields are unused here.
 FaceTuning g_tune;
 
 void rebuild_face()
 {
-    using namespace internal;
-    // Uniform scale (preserve aspect) of the base layout to the canvas, centred.
-    const float scale = std::min(static_cast<float>(g_w) / kBaseW, static_cast<float>(g_h) / kBaseH);
-    const float cx = g_w / 2.0f;
-    const float cy = g_h / 2.0f;
-    auto tx = [&](float bx) { return static_cast<std::int16_t>(cx + (bx - kBaseCx) * scale); };
-    auto ty = [&](float by) { return static_cast<std::int16_t>(cy + (by - kBaseCy) * scale); };
-    auto sz = [&](float base) {
-        const float v = base * scale;
-        return static_cast<std::uint16_t>(v < 1.0f ? 1.0f : v);
-    };
-    const float radius = g_tune.eye_radius * scale < 1.0f ? 1.0f : g_tune.eye_radius * scale;
-    const int max_w = g_tune.mouth_max_w < g_tune.mouth_min_w ? g_tune.mouth_min_w : g_tune.mouth_max_w;
-    const int max_h = g_tune.mouth_max_h < g_tune.mouth_min_h ? g_tune.mouth_min_h : g_tune.mouth_max_h;
-
-    g_face.eye_left = Eye{tx(230 + g_tune.eye_off_x), ty(96 + g_tune.eye_off_y), radius, false};
-    g_face.eye_right = Eye{tx(90 - g_tune.eye_off_x), ty(93 + g_tune.eye_off_y), radius, true};
-    g_face.eyebrow_left = Eyebrow{tx(96 - g_tune.brow_off_x), ty(67 + g_tune.brow_off_y), sz(32), sz(2), false};
-    g_face.eyebrow_right = Eyebrow{tx(230 + g_tune.brow_off_x), ty(72 + g_tune.brow_off_y), sz(32), sz(2), true};
-    g_face.mouth = Mouth{tx(163 + g_tune.mouth_off_x), ty(148 + g_tune.mouth_off_y),
-                         sz(g_tune.mouth_min_w), sz(max_w), sz(g_tune.mouth_min_h), sz(max_h)};
-    g_face.show_eyebrows = g_tune.eyebrows_visible;
+    g_face = internal::build_face(g_tune, static_cast<std::int16_t>(g_w),
+                                  static_cast<std::int16_t>(g_h));
 }
 } // namespace
 

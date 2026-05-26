@@ -143,6 +143,29 @@ public:
         }
     }
 
+    // Live avatar face tuning (eye/eyebrow/mouth geometry + colours), carried
+    // as the compact JSON the settings UI sends over BLE. Stored as a raw
+    // string + version counter; the render task parses it (off the BLE host
+    // task) and applies it via Avatar::set_face_tuning when the version bumps.
+    // Set at boot from NVS and live on every BLE write.
+    void set_face_config(std::string_view json)
+    {
+        std::lock_guard lock{face_config_mutex_};
+        face_config_json_.assign(json);
+        face_config_version_.fetch_add(1, std::memory_order_release);
+    }
+
+    std::uint32_t face_config_version() const noexcept
+    {
+        return face_config_version_.load(std::memory_order_acquire);
+    }
+
+    std::string snapshot_face_config() const
+    {
+        std::lock_guard lock{face_config_mutex_};
+        return face_config_json_;
+    }
+
     // Returns the current balloon version (incremented on every change).
     std::uint32_t balloon_version() const noexcept
     {
@@ -169,6 +192,10 @@ private:
     BalloonCompletionCallback balloon_callback_{};
     std::atomic<std::uint32_t> balloon_version_{0};
     std::atomic<bool> balloon_visible_{false};
+
+    mutable std::mutex face_config_mutex_;
+    std::string face_config_json_;
+    std::atomic<std::uint32_t> face_config_version_{0};
 };
 
 } // namespace stackchan::app

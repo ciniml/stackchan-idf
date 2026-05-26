@@ -156,13 +156,20 @@ static const ble_uuid128_t kXiaozhiUrlUuid = BLE_UUID128_INIT(
 static const ble_uuid128_t kXiaozhiTokenUuid = BLE_UUID128_INIT(
     0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
     0x2a, 0x4d, 0x1c, 0x7b, 0x14, 0xa0, 0xf0, 0xe3);
+// FaceConfig — encrypted compact JSON describing the avatar face tuning
+// (eye/eyebrow/mouth geometry + face/background colours). WRITE applies live
+// (no reboot) via the registered FaceConfigSink and stages the value for Apply
+// (NVS persist). READ returns the active JSON so the editor seeds its controls.
+static const ble_uuid128_t kFaceConfigUuid = BLE_UUID128_INIT(
+    0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
+    0x2a, 0x4d, 0x1c, 0x7b, 0x15, 0xa0, 0xf0, 0xe3);
 
 // --- Mutable state guarded by g_mutex ---
 static SemaphoreHandle_t g_mutex = nullptr;
 
 struct StagingBuffer {
     std::optional<std::string> ssid, password, api_key, jtts_config, gemini_api_key;
-    std::optional<std::string> xiaozhi_url, xiaozhi_token;
+    std::optional<std::string> xiaozhi_url, xiaozhi_token, face_config;
     std::optional<bool> openai_enabled;
     std::optional<bool> rtp_audio_enabled;
     std::optional<Provider> provider;
@@ -190,6 +197,7 @@ static uint16_t g_provider_handle = 0;
 static uint16_t g_gemini_key_handle = 0;
 static uint16_t g_xiaozhi_url_handle = 0;
 static uint16_t g_xiaozhi_token_handle = 0;
+static uint16_t g_face_config_handle = 0;
 static uint16_t g_wifi_ip_handle = 0;
 static uint16_t g_wifi_mac_handle = 0;
 static uint16_t g_audio_ctrl_handle = 0;
@@ -203,6 +211,11 @@ static const AudioStreamSink* g_audio_sink = nullptr;
 // Tracks whether the current connection has an active begin() so we can fire
 // on_abort() on disconnect even without an explicit end/abort command.
 static bool g_audio_session_active = false;
+
+// Live face-config callback, owned by main/app_main. nullptr → live updates are
+// dropped (the value is still staged + persisted on Apply). Called from the
+// GATT host task; the callback must not parse JSON there (small stack).
+static FaceConfigSink g_face_config_sink = nullptr;
 
 // Largest plaintext payload we accept on a single write — chosen to fit the
 // jtts config JSON comfortably. The encrypted wire form adds 12 (nonce) + 16
@@ -396,6 +409,19 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             }
             const std::uint8_t byte = static_cast<std::uint8_t>(g_active.provider);
             const bool ok = append_encrypted(ctxt->om, {&byte, 1});
+            xSemaphoreGive(g_mutex);
+            return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
+        }
+        if (attr_handle == g_face_config_handle) {
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            if (!g_session.is_established()) {
+                xSemaphoreGive(g_mutex);
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            const std::string json = g_active.face_config_json;
+            const bool ok = append_encrypted(
+                ctxt->om,
+                {reinterpret_cast<const std::uint8_t*>(json.data()), json.size()});
             xSemaphoreGive(g_mutex);
             return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
         }
@@ -626,6 +652,18 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             xSemaphoreGive(g_mutex);
             return 0;
         }
+        if (attr_handle == g_face_config_handle) {
+            if (pt.size() > kMaxJttsConfigBytes) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            g_staging.face_config = val; // stage for Apply (NVS persist)
+            FaceConfigSink sink = g_face_config_sink;
+            xSemaphoreGive(g_mutex);
+            // Live apply (no reboot). Hand the raw JSON to the app; it must not
+            // parse on this (small) host-task stack.
+            if (sink != nullptr) sink(val);
+            return 0;
+        }
         if (attr_handle == g_apply_handle) {
             if (pt.empty()) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
 
@@ -640,6 +678,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (g_staging.gemini_api_key) merged.gemini_api_key = *g_staging.gemini_api_key;
             if (g_staging.xiaozhi_url) merged.xiaozhi_url = *g_staging.xiaozhi_url;
             if (g_staging.xiaozhi_token) merged.xiaozhi_token = *g_staging.xiaozhi_token;
+            if (g_staging.face_config) merged.face_config_json = *g_staging.face_config;
             if (g_staging.provider) merged.provider = *g_staging.provider;
             xSemaphoreGive(g_mutex);
 
@@ -775,6 +814,12 @@ static ble_gatt_chr_def kChrs[] = {
         .val_handle = &g_xiaozhi_token_handle,
     },
     {
+        .uuid = &kFaceConfigUuid.u,
+        .access_cb = gatt_access_cb,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+        .val_handle = &g_face_config_handle,
+    },
+    {
         .uuid = &kWifiIpUuid.u,
         .access_cb = gatt_access_cb,
         .flags = BLE_GATT_CHR_F_READ,
@@ -907,6 +952,14 @@ void reset_session()
 void set_audio_stream_sink(const AudioStreamSink* sink)
 {
     g_audio_sink = sink;
+}
+
+void set_face_config_sink(FaceConfigSink sink)
+{
+    // Plain write (no g_mutex): like set_audio_stream_sink, this may run before
+    // gatt::init() creates the mutex, and it's not on a hot path. The WRITE
+    // handler snapshots g_face_config_sink under g_mutex before calling it.
+    g_face_config_sink = sink;
 }
 
 } // namespace stackchan::config::gatt

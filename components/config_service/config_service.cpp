@@ -343,4 +343,9 @@ void set_audio_stream_sink(const AudioStreamSink* sink)
     gatt::set_audio_stream_sink(sink);
 }
 
+void set_face_config_sink(FaceConfigSink sink)
+{
+    gatt::set_face_config_sink(sink);
+}
+
 } // namespace stackchan::config

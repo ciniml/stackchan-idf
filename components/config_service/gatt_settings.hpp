@@ -29,4 +29,7 @@ void reset_session();
 // Register the audio playback sink. See config_service.hpp for the contract.
 void set_audio_stream_sink(const AudioStreamSink* sink);
 
+// Register the live face-config callback. See config_service.hpp for the contract.
+void set_face_config_sink(FaceConfigSink sink);
+
 } // namespace stackchan::config::gatt

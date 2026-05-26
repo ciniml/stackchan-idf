@@ -233,6 +233,13 @@
     text-align: right;
     word-break: break-all;
   }
+  #avatar-section .av-row { display:flex; align-items:center; gap:0.5rem; margin:0.35rem 0; }
+  #avatar-section .av-row label { flex:0 0 9rem; margin:0; font-size:0.85rem; }
+  #avatar-section .av-row input[type=range] { flex:1 1 auto; min-width:0; }
+  #avatar-section .av-row .av-val {
+    flex:0 0 3rem; text-align:right;
+    font-family: ui-monospace, SFMono-Regular, monospace; font-size:0.8rem; color:#555;
+  }
 </style>
 </head>
 <body>
@@ -409,6 +416,62 @@
     </div>
   </details>
 
+  <details class="jtts-section" id="avatar-section">
+    <summary>アバターの顔を調整する (ライブプレビュー)</summary>
+    <p class="hint" style="margin-bottom:0.5rem">
+      スライダーを動かすと下のプレビューと、接続中は<strong>実機の顔がリアルタイム</strong>に
+      変化します（再起動不要）。気に入った設定を残すには「保存 &amp; 再起動」を押してください
+      (再起動して確定します)。
+    </p>
+    <div style="text-align:center;margin-bottom:0.75rem">
+      <canvas id="av-preview" width="320" height="240"
+              style="width:320px;height:240px;max-width:100%;background:#000;border-radius:8px;image-rendering:pixelated"></canvas>
+      <p class="hint" id="av-preview-note" style="margin-top:0.25rem">プレビュー読み込み中…</p>
+    </div>
+
+    <div class="av-row"><label for="av-brow-show">眉を表示</label>
+      <input type="checkbox" id="av-brow-show" checked></div>
+    <div class="av-row"><label for="av-eye-r">目の半径</label>
+      <input type="range" id="av-eye-r" min="2" max="20" step="0.5" value="8">
+      <span class="av-val" id="av-eye-r-v">8.0</span></div>
+    <div class="av-row"><label for="av-eye-ox">目 横オフセット</label>
+      <input type="range" id="av-eye-ox" min="-40" max="40" step="1" value="0">
+      <span class="av-val" id="av-eye-ox-v">0</span></div>
+    <div class="av-row"><label for="av-eye-oy">目 縦オフセット</label>
+      <input type="range" id="av-eye-oy" min="-40" max="40" step="1" value="0">
+      <span class="av-val" id="av-eye-oy-v">0</span></div>
+    <div class="av-row"><label for="av-brow-ox">眉 横オフセット</label>
+      <input type="range" id="av-brow-ox" min="-40" max="40" step="1" value="0">
+      <span class="av-val" id="av-brow-ox-v">0</span></div>
+    <div class="av-row"><label for="av-brow-oy">眉 縦オフセット</label>
+      <input type="range" id="av-brow-oy" min="-40" max="40" step="1" value="0">
+      <span class="av-val" id="av-brow-oy-v">0</span></div>
+    <div class="av-row"><label for="av-mouth-ox">口 横オフセット</label>
+      <input type="range" id="av-mouth-ox" min="-60" max="60" step="1" value="0">
+      <span class="av-val" id="av-mouth-ox-v">0</span></div>
+    <div class="av-row"><label for="av-mouth-oy">口 縦オフセット</label>
+      <input type="range" id="av-mouth-oy" min="-60" max="60" step="1" value="0">
+      <span class="av-val" id="av-mouth-oy-v">0</span></div>
+    <div class="av-row"><label for="av-mouth-minw">口 最小幅</label>
+      <input type="range" id="av-mouth-minw" min="4" max="160" step="1" value="50">
+      <span class="av-val" id="av-mouth-minw-v">50</span></div>
+    <div class="av-row"><label for="av-mouth-maxw">口 最大幅</label>
+      <input type="range" id="av-mouth-maxw" min="4" max="200" step="1" value="90">
+      <span class="av-val" id="av-mouth-maxw-v">90</span></div>
+    <div class="av-row"><label for="av-mouth-minh">開口 最小 (閉)</label>
+      <input type="range" id="av-mouth-minh" min="1" max="60" step="1" value="4">
+      <span class="av-val" id="av-mouth-minh-v">4</span></div>
+    <div class="av-row"><label for="av-mouth-maxh">開口 最大 (開)</label>
+      <input type="range" id="av-mouth-maxh" min="2" max="120" step="1" value="60">
+      <span class="av-val" id="av-mouth-maxh-v">60</span></div>
+    <div class="av-row"><label for="av-col-face">顔の色</label>
+      <input type="color" id="av-col-face" value="#ffffff"></div>
+    <div class="av-row"><label for="av-col-bg">背景色</label>
+      <input type="color" id="av-col-bg" value="#000000"></div>
+
+    <button id="av-reset" type="button" style="margin-top:0.5rem">デフォルトに戻す</button>
+  </details>
+
   <div class="actions">
     <button id="btn-connect">BLE 接続</button>
     <button id="btn-apply" disabled>保存 &amp; 再起動</button>
@@ -424,6 +487,11 @@
   </p>
 </div>
 
+<!-- Embeddable avatar render module (built by wasm/build.sh, deployed next to
+     this page by pages.yml). MODULARIZE → defines window.AvatarModule. Optional:
+     if absent (e.g. local file:// without a build) the avatar preview is skipped
+     and BLE tuning still works (see setupAvatarPreview's guard). -->
+<script src="avatar_module.js" onerror="window.__avatarModuleMissing=true"></script>
 <script>
 // --- UUIDs ---
 const SVC_UUID    = 'e3f0a000-7b1c-4d2a-9e6f-2c5a8d4b1f00';
@@ -442,6 +510,9 @@ const CHR_PROVIDER = 'e3f0a00b-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_GEMINI_KEY = 'e3f0a00c-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_XIAOZHI_URL = 'e3f0a013-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_XIAOZHI_TOKEN = 'e3f0a014-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+// FaceConfig — encrypted compact JSON of the avatar face tuning. WRITE applies
+// live (no reboot) and stages for Apply; READ returns the active value.
+const CHR_FACE_CONFIG = 'e3f0a015-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_WIFI_IP = 'e3f0a00d-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_WIFI_MAC = 'e3f0a012-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_AUDIO_CTRL = 'e3f0a00e-7b1c-4d2a-9e6f-2c5a8d4b1f00';
@@ -475,7 +546,7 @@ const DIS_CHRS = {
 
 // --- State ---
 let bleDevice = null, bleServer = null, svc = null;
-let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null;
+let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null;
 let jttsInitialJson = '';  // last read JSON, used to detect Apply-time changes
 let otaInFlight = false;
 let aesKey = null;  // CryptoKey for AES-256-GCM, derived per connection
@@ -1427,6 +1498,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       ['geminiKey',  CHR_GEMINI_KEY],
       ['xiaozhiUrl', CHR_XIAOZHI_URL],
       ['xiaozhiToken', CHR_XIAOZHI_TOKEN],
+      ['faceConfig', CHR_FACE_CONFIG],
       ['wifiIp',     CHR_WIFI_IP],
       ['wifiMac',    CHR_WIFI_MAC],
       ['audioCtrl',  CHR_AUDIO_CTRL],
@@ -1457,6 +1529,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
     chrGeminiKey= found.geminiKey?? null;
     chrXiaozhiUrl = found.xiaozhiUrl ?? null;
     chrXiaozhiToken = found.xiaozhiToken ?? null;
+    chrFaceConfig = found.faceConfig ?? null;
     chrWifiIp   = found.wifiIp   ?? null;
     chrWifiMac  = found.wifiMac  ?? null;
     chrAudioCtrl= found.audioCtrl?? null;
@@ -1559,6 +1632,17 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       }
     }
 
+    if (chrFaceConfig) {
+      try {
+        const faceBytes = await readEncrypted(chrFaceConfig);
+        const faceJson = dec.decode(faceBytes);
+        seedAvatarControls(faceJson); // sets controls + updates preview, no write-back
+        log(faceJson ? `アバター調整を読み込み: ${faceBytes.length}B` : 'アバター調整: ファーム既定値');
+      } catch (e) {
+        log(`アバター調整の取得失敗: ${e.message}`, 'err');
+      }
+    }
+
     // Subscribe to Status notifications — payloads are encrypted too.
     if (chrStatus) {
       await chrStatus.startNotifications();
@@ -1593,7 +1677,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
 function onDisconnected() {
   log('切断されました', 'err');
   setBleUi(false);
-  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = null;
+  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = null;
   aesKey = null;
   clearDeviceInfo();
   delete document.getElementById('openai-enabled').dataset.initial;
@@ -1794,6 +1878,143 @@ document.getElementById('btn-ota').addEventListener('click', async () => {
 
 // Kick off the release list early — independent of BLE connect.
 loadOtaReleases();
+
+// ===== Avatar face tuning (in-page live preview + BLE mirror) ================
+// Slider/colour changes update the embedded WASM preview and, while connected,
+// are mirrored to the device over the FaceConfig characteristic (debounced, no
+// reboot). "保存 & 再起動" persists the last value to NVS device-side.
+const AV_READOUT = { 'av-eye-r': 1, 'av-eye-ox': 0, 'av-eye-oy': 0,
+  'av-brow-ox': 0, 'av-brow-oy': 0, 'av-mouth-ox': 0, 'av-mouth-oy': 0,
+  'av-mouth-minw': 0, 'av-mouth-maxw': 0, 'av-mouth-minh': 0, 'av-mouth-maxh': 0 };
+const AV_CONTROL_IDS = ['av-brow-show', 'av-eye-r', 'av-eye-ox', 'av-eye-oy',
+  'av-brow-ox', 'av-brow-oy', 'av-mouth-ox', 'av-mouth-oy',
+  'av-mouth-minw', 'av-mouth-maxw', 'av-mouth-minh', 'av-mouth-maxh',
+  'av-col-face', 'av-col-bg'];
+
+let avModule = null;     // resolved AvatarModule instance, or null when absent
+let avWriteTimer = null; // debounce handle for the BLE write
+let avSeeding = false;   // suppress the BLE write while seeding from the device
+
+function avEl(id) { return document.getElementById(id); }
+function avNum(id) { return parseFloat(avEl(id).value); }
+function avInt(id) { return parseInt(avEl(id).value, 10); }
+function avHexRgb(hex) { return parseInt(hex.replace('#', ''), 16) | 0; }
+
+function avUpdateReadouts() {
+  for (const id in AV_READOUT) {
+    const v = avEl(id + '-v');
+    if (v) v.textContent = parseFloat(avEl(id).value).toFixed(AV_READOUT[id]);
+  }
+}
+
+// Push the current control values into the in-page preview module.
+function avPushPreview() {
+  const m = avModule;
+  if (!m) return;
+  m._avatar_set_eyebrows_visible(avEl('av-brow-show').checked ? 1 : 0);
+  m._avatar_set_eye_params(avNum('av-eye-r'), avNum('av-eye-ox'), avNum('av-eye-oy'));
+  m._avatar_set_eyebrow_params(avNum('av-brow-ox'), avNum('av-brow-oy'));
+  m._avatar_set_mouth_params(avNum('av-mouth-ox'), avNum('av-mouth-oy'),
+    avInt('av-mouth-minw'), avInt('av-mouth-maxw'), avInt('av-mouth-minh'), avInt('av-mouth-maxh'));
+  m._avatar_set_colors(avHexRgb(avEl('av-col-face').value), avHexRgb(avEl('av-col-bg').value));
+}
+
+// Compact JSON matching main/face_config.hpp's parse_face_tuning schema.
+function avFaceConfigJson() {
+  return JSON.stringify({
+    brow: avEl('av-brow-show').checked ? 1 : 0,
+    eye_r: avNum('av-eye-r'), eye_ox: avNum('av-eye-ox'), eye_oy: avNum('av-eye-oy'),
+    brow_ox: avNum('av-brow-ox'), brow_oy: avNum('av-brow-oy'),
+    mouth_ox: avNum('av-mouth-ox'), mouth_oy: avNum('av-mouth-oy'),
+    mouth_minw: avInt('av-mouth-minw'), mouth_maxw: avInt('av-mouth-maxw'),
+    mouth_minh: avInt('av-mouth-minh'), mouth_maxh: avInt('av-mouth-maxh'),
+    face_color: avEl('av-col-face').value, bg_color: avEl('av-col-bg').value });
+}
+
+function avScheduleWrite() {
+  if (avSeeding || !chrFaceConfig || !aesKey) return;
+  clearTimeout(avWriteTimer);
+  avWriteTimer = setTimeout(async () => {
+    try { await writeEncrypted(chrFaceConfig, strToBytes(avFaceConfigJson())); }
+    catch (e) { log(`アバター調整の送信失敗: ${e.message}`, 'err'); }
+  }, 120);
+}
+
+function avOnInput() {
+  avUpdateReadouts();
+  avPushPreview();
+  avScheduleWrite();
+}
+
+// Apply a device-provided JSON to the controls + preview WITHOUT writing back.
+// Called from the connect flow after the FaceConfig read. Empty/invalid JSON
+// leaves the HTML defaults (which match the firmware's built-in face).
+function seedAvatarControls(json) {
+  let o = {};
+  if (json) { try { o = JSON.parse(json); } catch (e) { o = {}; } }
+  avSeeding = true;
+  const set = (id, v) => { if (v !== undefined && v !== null && avEl(id)) avEl(id).value = v; };
+  if ('brow' in o) avEl('av-brow-show').checked = !!o.brow;
+  set('av-eye-r', o.eye_r); set('av-eye-ox', o.eye_ox); set('av-eye-oy', o.eye_oy);
+  set('av-brow-ox', o.brow_ox); set('av-brow-oy', o.brow_oy);
+  set('av-mouth-ox', o.mouth_ox); set('av-mouth-oy', o.mouth_oy);
+  set('av-mouth-minw', o.mouth_minw); set('av-mouth-maxw', o.mouth_maxw);
+  set('av-mouth-minh', o.mouth_minh); set('av-mouth-maxh', o.mouth_maxh);
+  if (typeof o.face_color === 'string') set('av-col-face', o.face_color);
+  if (typeof o.bg_color === 'string') set('av-col-bg', o.bg_color);
+  avUpdateReadouts();
+  avPushPreview();
+  avSeeding = false;
+}
+
+function avReset() {
+  AV_CONTROL_IDS.forEach((id) => {
+    const el = avEl(id);
+    if (el.type === 'checkbox') el.checked = el.defaultChecked;
+    else el.value = el.defaultValue;
+  });
+  avOnInput(); // refresh preview + (if connected) push the defaults to the device
+}
+
+AV_CONTROL_IDS.forEach((id) => avEl(id).addEventListener('input', avOnInput));
+avEl('av-reset').addEventListener('click', avReset);
+avUpdateReadouts();
+
+// Load the optional preview module and start its render loop (320x240, fixed —
+// matches the device canvas). Absence (404 / unsupported) degrades gracefully.
+function setupAvatarPreview() {
+  const note = avEl('av-preview-note');
+  if (typeof AvatarModule === 'undefined' || window.__avatarModuleMissing) {
+    note.textContent = 'プレビュー モジュール (avatar_module.js) が見つかりません — BLE 調整のみ利用できます';
+    return;
+  }
+  AvatarModule().then((m) => {
+    if (!m._avatar_init()) { note.textContent = 'avatar_init 失敗'; return; }
+    avModule = m;
+    const cnv = avEl('av-preview');
+    const W = m._avatar_width(), H = m._avatar_height();
+    cnv.width = W; cnv.height = H;
+    const ctx2d = cnv.getContext('2d');
+    const img = ctx2d.createImageData(W, H);
+    avPushPreview();
+    note.textContent = 'プレビュー描画中 (現行 C++ コードを WASM 実行)';
+    (function frame() {
+      m._avatar_tick(performance.now());
+      const fb = new Uint16Array(m.HEAPU16.buffer, m._avatar_framebuffer(), W * H);
+      const d = img.data;
+      for (let i = 0, o = 0; i < W * H; i++, o += 4) {
+        const p = fb[i];
+        d[o]     = ((p >> 11) & 0x1f) * 255 / 31 | 0;
+        d[o + 1] = ((p >> 5) & 0x3f) * 255 / 63 | 0;
+        d[o + 2] = (p & 0x1f) * 255 / 31 | 0;
+        d[o + 3] = 255;
+      }
+      ctx2d.putImageData(img, 0, 0);
+      requestAnimationFrame(frame);
+    })();
+  }).catch((e) => { note.textContent = 'プレビュー初期化エラー: ' + e.message; });
+}
+setupAvatarPreview();
 </script>
 </body>
 </html>

@@ -6,6 +6,7 @@
 #include <M5GFX.h>
 
 #include "avatar/draw_context.hpp"
+#include "avatar/face_tuning.hpp"
 #include "eye.hpp"
 #include "eyebrow.hpp"
 #include "mouth.hpp"
@@ -29,5 +30,11 @@ struct Face {
 };
 
 void draw_face(M5Canvas& canvas, const Face& face, const DrawContext& ctx);
+
+// Build a Face from user tuning, scaled + centred onto a canvas_w x canvas_h
+// target. The base layout is authored for 320x240; a uniform scale (preserving
+// aspect) maps it to the canvas. Shared by the firmware (Avatar::set_face_tuning,
+// 320x240) and the WASM preview (any size) so both render identically.
+Face build_face(const FaceTuning& tuning, std::int16_t canvas_w, std::int16_t canvas_h);
 
 } // namespace stackchan::avatar::internal
