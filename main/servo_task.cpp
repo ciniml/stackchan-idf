@@ -29,14 +29,7 @@ void servo_task_entry(void* arg)
 {
     auto& args = *static_cast<ServoTaskArgs*>(arg);
 
-    scs_servo::ScsBus::Config bus_cfg{
-        .uart = UART_NUM_1,
-        .tx = GPIO_NUM_6,
-        .rx = GPIO_NUM_7,
-        .baud = 1'000'000,
-        .timeout_ms = 20,
-    };
-    auto bus_result = scs_servo::ScsBus::create(bus_cfg);
+    auto bus_result = scs_servo::ScsBus::create(args.bus_cfg);
     if (!bus_result) {
         ESP_LOGE(kTag, "ScsBus::create failed: %d", static_cast<int>(bus_result.error()));
         vTaskDelete(nullptr);

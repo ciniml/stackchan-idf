@@ -61,11 +61,12 @@ tl::expected<ScsBus, ScsError> ScsBus::create(const Config& config)
     ScsBus bus;
     bus.uart_ = config.uart;
     bus.timeout_ms_ = config.timeout_ms;
+    bus.echo_cancel_ = config.echo_cancel;
     return bus;
 }
 
 ScsBus::ScsBus(ScsBus&& other) noexcept
-    : uart_{other.uart_}, timeout_ms_{other.timeout_ms_}
+    : uart_{other.uart_}, timeout_ms_{other.timeout_ms_}, echo_cancel_{other.echo_cancel_}
 {
     other.uart_ = kInvalidUart;
 }
@@ -76,6 +77,7 @@ ScsBus& ScsBus::operator=(ScsBus&& other) noexcept
         release();
         uart_ = other.uart_;
         timeout_ms_ = other.timeout_ms_;
+        echo_cancel_ = other.echo_cancel_;
         other.uart_ = kInvalidUart;
     }
     return *this;
@@ -118,6 +120,16 @@ ScsBus::send(std::uint8_t id, std::uint8_t instruction, std::span<const std::uin
     }
     if (uart_wait_tx_done(uart_, pdMS_TO_TICKS(timeout_ms_)) != ESP_OK) {
         return tl::unexpected{ScsError::Timeout};
+    }
+    if (echo_cancel_) {
+        // Half-duplex: our own transmission echoes back onto RX. Read and drop
+        // exactly the bytes we just sent so the caller (transact / next send)
+        // sees only the servo's response.
+        std::array<std::uint8_t, kMaxParams + 6> echo{};
+        const int got = uart_read_bytes(uart_, echo.data(), total, pdMS_TO_TICKS(timeout_ms_));
+        if (got != static_cast<int>(total)) {
+            return tl::unexpected{ScsError::Timeout};
+        }
     }
     return {};
 }

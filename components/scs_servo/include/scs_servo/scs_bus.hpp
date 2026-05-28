@@ -22,6 +22,10 @@ public:
         gpio_num_t rx;
         std::uint32_t baud = 1'000'000;
         std::uint32_t timeout_ms = 20;
+        // Half-duplex buses (e.g. the Takao base) feed the controller's own TX
+        // back onto RX. When true, each send() drains that echo (the bytes it
+        // just transmitted) before any response is read.
+        bool echo_cancel = false;
     };
 
     static tl::expected<ScsBus, ScsError> create(const Config& config);
@@ -54,6 +58,7 @@ private:
 
     uart_port_t uart_{kInvalidUart};
     std::uint32_t timeout_ms_{20};
+    bool echo_cancel_{false};
 };
 
 } // namespace stackchan::scs_servo

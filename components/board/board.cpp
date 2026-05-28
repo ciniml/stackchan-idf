@@ -22,16 +22,19 @@ constexpr const char* kTag = "board";
 
 class Board::Impl {
 public:
-    Impl(Py32Expander&& expander, std::optional<Si12tTouch>&& touch) noexcept
-        : expander_{std::move(expander)}, touch_{std::move(touch)}
+    Impl(BoardKind kind, std::optional<Py32Expander>&& expander,
+         std::optional<Si12tTouch>&& touch) noexcept
+        : kind_{kind}, expander_{std::move(expander)}, touch_{std::move(touch)}
     {
     }
 
-    Py32Expander& expander() noexcept { return expander_; }
+    BoardKind kind() const noexcept { return kind_; }
+    std::optional<Py32Expander>& expander() noexcept { return expander_; }
     Si12tTouch* touch() noexcept { return touch_ ? &*touch_ : nullptr; }
 
 private:
-    Py32Expander expander_;
+    BoardKind kind_;
+    std::optional<Py32Expander> expander_;
     std::optional<Si12tTouch> touch_;
 };
 
@@ -41,34 +44,34 @@ tl::expected<Board, Error> Board::begin()
     M5.begin(cfg);
     M5.Display.setRotation(1);
 
-    // PY32 can take up to ~1.2 s to come up after a cold reset. Match the
-    // BSP's polling pattern: try once every 200 ms for ~1.2 s.
-    tl::expected<Py32Expander, Error> expander = tl::unexpected{Error::ExpanderProbe};
-    for (int attempt = 0; attempt < 6; ++attempt) {
+    // Base-board detection: the M5 Stack-chan base carries a PY32 IO expander at
+    // 0x6F (servo-power EN); the Takao base has none. PY32 can take up to ~1.2 s
+    // after a cold reset, so poll once every 200 ms for ~1.2 s before deciding.
+    std::optional<Py32Expander> expander;
+    for (int attempt = 0; attempt < 6 && !expander; ++attempt) {
         vTaskDelay(pdMS_TO_TICKS(200));
-        expander = Py32Expander::probe();
-        if (expander) {
-            break;
+        if (auto e = Py32Expander::probe(); e) {
+            expander.emplace(std::move(*e));
         }
     }
-    if (!expander) {
-        ESP_LOGE(kTag, "PY32 IO expander probe failed at 0x%02X", Py32Expander::kAddress);
-        return tl::unexpected{expander.error()};
+
+    BoardKind kind = expander ? BoardKind::M5Base : BoardKind::TakaoBase;
+    if (kind == BoardKind::M5Base) {
+        // Configure the servo-power EN pin (start OFF). A failure here is fatal
+        // on the M5 base since the servos would never get power.
+        if (auto r = expander->set_direction(Py32Expander::kPinServoPowerEnable, /*output=*/true); !r)
+            return tl::unexpected{r.error()};
+        if (auto r = expander->set_pull_up(Py32Expander::kPinServoPowerEnable, true); !r)
+            return tl::unexpected{r.error()};
+        if (auto r = expander->digital_write(Py32Expander::kPinServoPowerEnable, false); !r)
+            return tl::unexpected{r.error()};
+    } else {
+        ESP_LOGI(kTag, "PY32 not found at 0x%02X -> Takao base (no servo-power / battery control)",
+                 Py32Expander::kAddress);
     }
 
-    if (auto r = expander->set_direction(Py32Expander::kPinServoPowerEnable, /*output=*/true); !r) {
-        return tl::unexpected{r.error()};
-    }
-    if (auto r = expander->set_pull_up(Py32Expander::kPinServoPowerEnable, true); !r) {
-        return tl::unexpected{r.error()};
-    }
-    if (auto r = expander->digital_write(Py32Expander::kPinServoPowerEnable, false); !r) {
-        return tl::unexpected{r.error()};
-    }
-
-    // Top-mounted touch sensor (Si12T at 0x68). Optional — older bases
-    // without the chip should still boot, so we just log a warning and
-    // carry on if it doesn't respond.
+    // Top-mounted touch sensor (Si12T at 0x68). Optional on either base — boot
+    // anyway and just warn if it doesn't respond.
     std::optional<Si12tTouch> touch;
     if (auto t = Si12tTouch::probe(); t) {
         touch.emplace(std::move(*t));
@@ -77,8 +80,9 @@ tl::expected<Board, Error> Board::begin()
     }
 
     Board board;
-    board.impl_ = std::make_shared<Impl>(std::move(*expander), std::move(touch));
-    ESP_LOGI(kTag, "board initialized (servo power: OFF)");
+    board.impl_ = std::make_shared<Impl>(kind, std::move(expander), std::move(touch));
+    ESP_LOGI(kTag, "board initialized: kind=%s (servo power: OFF)",
+             kind == BoardKind::M5Base ? "M5Base" : "TakaoBase");
     return board;
 }
 
@@ -87,9 +91,35 @@ M5GFX& Board::display() noexcept
     return M5.Display;
 }
 
+BoardKind Board::kind() const noexcept
+{
+    return impl_->kind();
+}
+
+ServoBusConfig Board::servo_bus_config() const noexcept
+{
+    if (impl_->kind() == BoardKind::TakaoBase) {
+        // Takao base on CoreS3 port A (G1/G2), half-duplex (TX echoes onto RX).
+        // TX/RX assignment is provisional — verify against the Takao wiring on
+        // hardware bring-up (swap, or use a single shared pin, if needed).
+        return {UART_NUM_1, GPIO_NUM_1, GPIO_NUM_2, 1'000'000u, /*echo_cancel=*/true};
+    }
+    // M5 base: dedicated servo UART on G6/G7, no echo.
+    return {UART_NUM_1, GPIO_NUM_6, GPIO_NUM_7, 1'000'000u, /*echo_cancel=*/false};
+}
+
+bool Board::has_battery() const noexcept
+{
+    return impl_->kind() == BoardKind::M5Base; // INA226 only on the M5 base
+}
+
 tl::expected<void, Error> Board::set_servo_power(bool on)
 {
-    return impl_->expander().digital_write(Py32Expander::kPinServoPowerEnable, on);
+    auto& expander = impl_->expander();
+    if (!expander) {
+        return {}; // Takao base: no servo-power control line — always powered.
+    }
+    return expander->digital_write(Py32Expander::kPinServoPowerEnable, on);
 }
 
 Si12tTouch* Board::touch_sensor() noexcept

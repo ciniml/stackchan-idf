@@ -93,7 +93,7 @@ void record_and_playback(std::uint32_t seconds, const char* label)
     ESP_LOGI(kTag, "%s: done", label);
 }
 
-void demo_loop(const std::string& jtts_config_json)
+void demo_loop(const std::string& jtts_config_json, bool has_battery)
 {
     using namespace stackchan;
 
@@ -130,10 +130,13 @@ void demo_loop(const std::string& jtts_config_json)
 
     // Base-board battery monitor (INA226 on the internal I2C bus). Read here —
     // the only task that touches m5::In_I2C — and published to SharedState +
-    // the BLE / Wi-Fi services. Safe if the chip is absent (read() → nullopt).
+    // the BLE / Wi-Fi services. Only the M5 base has the INA226; on boards
+    // without it (Takao) skip entirely, leaving battery_* = -1 ("—" everywhere).
     constexpr std::uint32_t kBatteryPeriodMs = 5000;
     app::BatteryMonitor battery;
-    battery.begin();
+    if (has_battery) {
+        battery.begin();
+    }
     std::uint32_t next_battery_ms = 0;
 
     // Nadenade (head-petting) detection on the top-mounted Si12T sensor.
@@ -176,7 +179,7 @@ void demo_loop(const std::string& jtts_config_json)
 
         // Battery: sample the INA226 every few seconds and fan the result out to
         // the device UI (SharedState) + the BLE / Wi-Fi settings services.
-        if (now_ms >= next_battery_ms) {
+        if (has_battery && now_ms >= next_battery_ms) {
             next_battery_ms = now_ms + kBatteryPeriodMs;
             if (auto r = battery.read()) {
                 const int mv = static_cast<int>(r->voltage * 1000.0f + 0.5f);
@@ -541,7 +544,12 @@ extern "C" void app_main()
     vTaskDelay(pdMS_TO_TICKS(1500));
 
     g_render_args = new stackchan::app::RenderTaskArgs{.display = &board.display(), .state = g_state};
-    g_servo_args = new stackchan::app::ServoTaskArgs{.state = g_state};
+    const auto sb = board.servo_bus_config();
+    g_servo_args = new stackchan::app::ServoTaskArgs{
+        .state = g_state,
+        .bus_cfg = {.uart = sb.uart, .tx = sb.tx, .rx = sb.rx, .baud = sb.baud,
+                    .timeout_ms = 20, .echo_cancel = sb.echo_cancel},
+    };
     g_touch = board.touch_sensor();
 
     // API key + provider: pick whichever backend the user configured. The
@@ -589,5 +597,5 @@ extern "C" void app_main()
     stackchan::app::start_conversation_task(*g_conversation_args);
 
     ESP_LOGI(kTag, "ready");
-    demo_loop(cfg.jtts_config_json);
+    demo_loop(cfg.jtts_config_json, board.has_battery());
 }
