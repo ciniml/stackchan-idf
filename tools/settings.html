@@ -479,6 +479,42 @@
     <button id="av-reset" type="button" style="margin-top:0.5rem">デフォルトに戻す</button>
   </details>
 
+  <details class="jtts-section" id="servo-section">
+    <summary>サーボ原点・可動範囲 (Takao base 等の自作版向け)</summary>
+    <p class="hint" style="margin-bottom:0.5rem">
+      サーボの取り付け向きや可動範囲はベース基板で異なります。原点(0..1023)と可動範囲(度)を
+      設定して「保存 &amp; 再起動」で反映してください。既定は M5 base の値です。
+    </p>
+    <div class="grid2">
+      <div>
+        <label for="sv-yaw-zero">Yaw 原点 (raw)</label>
+        <input type="number" id="sv-yaw-zero" min="0" max="1023" step="1" placeholder="460">
+      </div>
+      <div></div>
+      <div>
+        <label for="sv-yaw-min">Yaw 最小 (°)</label>
+        <input type="number" id="sv-yaw-min" min="-90" max="90" step="1" placeholder="-40">
+      </div>
+      <div>
+        <label for="sv-yaw-max">Yaw 最大 (°)</label>
+        <input type="number" id="sv-yaw-max" min="-90" max="90" step="1" placeholder="40">
+      </div>
+      <div>
+        <label for="sv-pitch-zero">Pitch 原点 (raw)</label>
+        <input type="number" id="sv-pitch-zero" min="0" max="1023" step="1" placeholder="620">
+      </div>
+      <div></div>
+      <div>
+        <label for="sv-pitch-min">Pitch 最小 (°)</label>
+        <input type="number" id="sv-pitch-min" min="-90" max="90" step="1" placeholder="-10">
+      </div>
+      <div>
+        <label for="sv-pitch-max">Pitch 最大 (°)</label>
+        <input type="number" id="sv-pitch-max" min="-90" max="90" step="1" placeholder="25">
+      </div>
+    </div>
+  </details>
+
   <div class="actions">
     <button id="btn-connect">BLE 接続</button>
     <button id="btn-apply" disabled>保存 &amp; 再起動</button>
@@ -512,6 +548,8 @@ const CHR_EN      = 'e3f0a007-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_RTP_EN  = 'e3f0a011-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // BatteryGauge — encrypted 1-byte flag (show/hide the top-left battery gauge).
 const CHR_BAT_GAUGE = 'e3f0a017-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+// ServoLimits — encrypted compact JSON of per-servo zero + motion range.
+const CHR_SERVO_LIMITS = 'e3f0a018-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_JTTS    = 'e3f0a008-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_OTA_CTRL = 'e3f0a009-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_OTA_DATA = 'e3f0a00a-7b1c-4d2a-9e6f-2c5a8d4b1f00';
@@ -557,9 +595,10 @@ const DIS_CHRS = {
 
 // --- State ---
 let bleDevice = null, bleServer = null, svc = null;
-let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null;
+let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrServoLimits = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null;
 let batteryPollTimer = null;  // setInterval handle while connected
 let jttsInitialJson = '';  // last read JSON, used to detect Apply-time changes
+let servoLimitsInitial = ''; // last read servo-limits JSON (Apply-time change detection)
 let otaInFlight = false;
 let aesKey = null;  // CryptoKey for AES-256-GCM, derived per connection
 
@@ -1508,6 +1547,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       ['en',         CHR_EN],
       ['rtpEn',      CHR_RTP_EN],
       ['batGauge',   CHR_BAT_GAUGE],
+      ['servoLimits',CHR_SERVO_LIMITS],
       ['jtts',       CHR_JTTS],
       ['otaCtrl',    CHR_OTA_CTRL],
       ['otaData',    CHR_OTA_DATA],
@@ -1541,6 +1581,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
     chrEn       = found.en       ?? null;
     chrRtpEn    = found.rtpEn    ?? null;
     chrBatGauge = found.batGauge ?? null;
+    chrServoLimits = found.servoLimits ?? null;
     chrJtts     = found.jtts     ?? null;
     chrOtaCtrl  = found.otaCtrl  ?? null;
     chrOtaData  = found.otaData  ?? null;
@@ -1635,6 +1676,17 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       }
     }
 
+    if (chrServoLimits) {
+      try {
+        const slBytes = await readEncrypted(chrServoLimits);
+        const slJson = dec.decode(slBytes);
+        seedServoLimits(slJson); // populate inputs + remember initial
+        log(slJson ? `サーボ設定を読み込み: ${slBytes.length}B` : 'サーボ設定: ファーム既定値');
+      } catch (e) {
+        log(`サーボ設定の取得失敗: ${e.message}`, 'err');
+      }
+    }
+
     if (chrProvider) {
       try {
         const provBytes = await readEncrypted(chrProvider);
@@ -1717,7 +1769,7 @@ function onDisconnected() {
   log('切断されました', 'err');
   setBleUi(false);
   clearInterval(batteryPollTimer); batteryPollTimer = null;
-  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = null;
+  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoLimits = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = null;
   aesKey = null;
   clearDeviceInfo();
   delete document.getElementById('openai-enabled').dataset.initial;
@@ -1725,6 +1777,7 @@ function onDisconnected() {
   delete document.getElementById('bat-gauge-enabled').dataset.initial;
   delete document.getElementById('provider').dataset.initial;
   jttsInitialJson = '';
+  servoLimitsInitial = '';
   writeJttsForm('');
   document.getElementById('btn-ota').disabled = true;
   if (!otaInFlight) {
@@ -1820,6 +1873,15 @@ document.getElementById('btn-apply').addEventListener('click', async () => {
     if (chrBatGauge && bgInitial !== undefined && bgInitial !== bgWanted) {
       await writeEncrypted(chrBatGauge, new Uint8Array([bgCheckbox.checked ? 1 : 0]));
       log(`バッテリーゲージ表示を ${bgCheckbox.checked ? '有効' : '無効'} に切り替え`, 'ok');
+    }
+
+    // Servo limits: write the JSON if any field changed.
+    if (chrServoLimits) {
+      const slCanonical = canonicaliseServoLimits();
+      if (slCanonical !== servoLimitsInitial) {
+        await writeEncrypted(chrServoLimits, strToBytes(slCanonical));
+        log(`サーボ設定 書き込み完了 (${slCanonical.length}B)`, 'ok');
+      }
     }
 
     // jtts: only write if the form contents differ AND chr is present.
@@ -2065,6 +2127,38 @@ function setupAvatarPreview() {
   }).catch((e) => { note.textContent = 'プレビュー初期化エラー: ' + e.message; });
 }
 setupAvatarPreview();
+
+// ===== Servo limits (per-servo zero + motion range) =========================
+// Defaults match the M5-base values baked into the firmware so an empty config
+// reproduces the original head behaviour.
+const SV_DEFAULTS = { yaw_zero: 460, yaw_min: -40, yaw_max: 40,
+                      pitch_zero: 620, pitch_min: -10, pitch_max: 25 };
+function readServoLimitsForm() {
+  const num = (id, def) => {
+    const v = parseInt(document.getElementById(id).value, 10);
+    return Number.isFinite(v) ? v : def;
+  };
+  return {
+    yaw_zero: num('sv-yaw-zero', SV_DEFAULTS.yaw_zero),
+    yaw_min:  num('sv-yaw-min',  SV_DEFAULTS.yaw_min),
+    yaw_max:  num('sv-yaw-max',  SV_DEFAULTS.yaw_max),
+    pitch_zero: num('sv-pitch-zero', SV_DEFAULTS.pitch_zero),
+    pitch_min:  num('sv-pitch-min',  SV_DEFAULTS.pitch_min),
+    pitch_max:  num('sv-pitch-max',  SV_DEFAULTS.pitch_max),
+  };
+}
+function canonicaliseServoLimits() { return JSON.stringify(readServoLimitsForm()); }
+function seedServoLimits(json) {
+  let o = { ...SV_DEFAULTS };
+  if (json) { try { Object.assign(o, JSON.parse(json)); } catch (e) {} }
+  document.getElementById('sv-yaw-zero').value   = o.yaw_zero;
+  document.getElementById('sv-yaw-min').value    = o.yaw_min;
+  document.getElementById('sv-yaw-max').value    = o.yaw_max;
+  document.getElementById('sv-pitch-zero').value = o.pitch_zero;
+  document.getElementById('sv-pitch-min').value  = o.pitch_min;
+  document.getElementById('sv-pitch-max').value  = o.pitch_max;
+  servoLimitsInitial = canonicaliseServoLimits();
+}
 
 // ===== Battery (READ + poll) ================================================
 // Decode the 5-byte Battery payload [mV u16 LE][mA i16 LE][pct i8] into a label.

@@ -42,7 +42,7 @@ constexpr const char* kTag = "cfg-http";
 SemaphoreHandle_t g_mutex = nullptr;
 
 struct StagingBuffer {
-    std::optional<std::string> ssid, password, api_key, jtts_config, gemini_api_key;
+    std::optional<std::string> ssid, password, api_key, jtts_config, gemini_api_key, servo_limits;
     std::optional<std::string> xiaozhi_url, xiaozhi_token, system_prompt, conv_headers;
     std::optional<bool> openai_enabled;
     std::optional<bool> rtp_audio_enabled;
@@ -219,6 +219,7 @@ esp_err_t handle_status_get(httpd_req_t* req)
     body += "\"battery_gauge_enabled\":" + std::string(cfg.battery_gauge_enabled ? "true" : "false") + ",";
     body += "\"provider\":" + std::to_string(static_cast<int>(cfg.provider)) + ",";
     body += "\"jtts_config\":\"" + escape_json(cfg.jtts_config_json) + "\",";
+    body += "\"servo_limits\":\"" + escape_json(cfg.servo_limits_json) + "\",";
     body += "\"system_prompt\":\"" + escape_json(cfg.system_prompt) + "\",";
     body += "\"conv_extra_headers\":\"" + escape_json(cfg.conv_extra_headers) + "\",";
     body += "\"battery_mv\":" + std::to_string(bat_mv) + ",";
@@ -349,6 +350,16 @@ esp_err_t handle_jtts_config_post(httpd_req_t* req)
     return send_empty(req);
 }
 
+esp_err_t handle_servo_limits_post(httpd_req_t* req)
+{
+    std::string body;
+    if (read_body_str(req, body, kMaxJttsConfig) != ESP_OK) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_staging.servo_limits = std::move(body);
+    xSemaphoreGive(g_mutex);
+    return send_empty(req);
+}
+
 esp_err_t handle_system_prompt_post(httpd_req_t* req)
 {
     std::string body;
@@ -380,6 +391,7 @@ esp_err_t handle_apply_post(httpd_req_t* req)
     if (g_staging.rtp_audio_enabled) merged.rtp_audio_enabled = *g_staging.rtp_audio_enabled;
     if (g_staging.battery_gauge_enabled) merged.battery_gauge_enabled = *g_staging.battery_gauge_enabled;
     if (g_staging.jtts_config)     merged.jtts_config_json = *g_staging.jtts_config;
+    if (g_staging.servo_limits)    merged.servo_limits_json = *g_staging.servo_limits;
     if (g_staging.gemini_api_key)  merged.gemini_api_key = *g_staging.gemini_api_key;
     if (g_staging.xiaozhi_url)     merged.xiaozhi_url = *g_staging.xiaozhi_url;
     if (g_staging.xiaozhi_token)   merged.xiaozhi_token = *g_staging.xiaozhi_token;
@@ -469,6 +481,7 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/battery-gauge",   HTTP_POST, handle_battery_gauge_post);
     add(server, "/api/provider",        HTTP_POST, handle_provider_post);
     add(server, "/api/jtts-config",     HTTP_POST, handle_jtts_config_post);
+    add(server, "/api/servo-limits",    HTTP_POST, handle_servo_limits_post);
     add(server, "/api/system-prompt",   HTTP_POST, handle_system_prompt_post);
     add(server, "/api/conv-headers",     HTTP_POST, handle_conv_headers_post);
     add(server, "/api/apply",           HTTP_POST, handle_apply_post);

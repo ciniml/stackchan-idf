@@ -63,6 +63,11 @@ struct DeviceConfig {
     // true for backwards compatibility with NVS contents that pre-date the flag.
     // Takes effect after the Apply reboot.
     bool battery_gauge_enabled = true;
+    // Compact JSON describing per-servo zero position (raw SCS step) and motion
+    // range (degrees relative to zero). Empty → built-in M5-base defaults. The
+    // Takao base mounts the head differently so these are configurable + saved.
+    // Takes effect after the Apply reboot. See main/servo_limits.hpp for the schema.
+    std::string servo_limits_json;
 };
 
 enum class Error {

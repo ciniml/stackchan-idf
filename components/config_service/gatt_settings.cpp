@@ -176,13 +176,19 @@ static const ble_uuid128_t kBatteryUuid = BLE_UUID128_INIT(
 static const ble_uuid128_t kBatteryGaugeUuid = BLE_UUID128_INIT(
     0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
     0x2a, 0x4d, 0x1c, 0x7b, 0x17, 0xa0, 0xf0, 0xe3);
+// ServoLimits — encrypted compact JSON of per-servo zero position + motion
+// range. READ returns the active JSON; WRITE stages for Apply (reboot → servo
+// task reads at startup). See main/servo_limits.hpp for the schema.
+static const ble_uuid128_t kServoLimitsUuid = BLE_UUID128_INIT(
+    0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
+    0x2a, 0x4d, 0x1c, 0x7b, 0x18, 0xa0, 0xf0, 0xe3);
 
 // --- Mutable state guarded by g_mutex ---
 static SemaphoreHandle_t g_mutex = nullptr;
 
 struct StagingBuffer {
     std::optional<std::string> ssid, password, api_key, jtts_config, gemini_api_key;
-    std::optional<std::string> xiaozhi_url, xiaozhi_token, face_config;
+    std::optional<std::string> xiaozhi_url, xiaozhi_token, face_config, servo_limits;
     std::optional<bool> openai_enabled;
     std::optional<bool> rtp_audio_enabled;
     std::optional<bool> battery_gauge_enabled;
@@ -210,6 +216,7 @@ static uint16_t g_kx_handle = 0;
 static uint16_t g_enabled_handle = 0;
 static uint16_t g_rtp_enabled_handle = 0;
 static uint16_t g_bat_gauge_handle = 0;
+static uint16_t g_servo_limits_handle = 0;
 static uint16_t g_jtts_handle = 0;
 static uint16_t g_ota_ctrl_handle = 0;
 static uint16_t g_ota_data_handle = 0;
@@ -451,6 +458,19 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
                 return BLE_ATT_ERR_UNLIKELY;
             }
             const std::string json = g_active.face_config_json;
+            const bool ok = append_encrypted(
+                ctxt->om,
+                {reinterpret_cast<const std::uint8_t*>(json.data()), json.size()});
+            xSemaphoreGive(g_mutex);
+            return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
+        }
+        if (attr_handle == g_servo_limits_handle) {
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            if (!g_session.is_established()) {
+                xSemaphoreGive(g_mutex);
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            const std::string json = g_active.servo_limits_json;
             const bool ok = append_encrypted(
                 ctxt->om,
                 {reinterpret_cast<const std::uint8_t*>(json.data()), json.size()});
@@ -724,6 +744,14 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (sink != nullptr) sink(val);
             return 0;
         }
+        if (attr_handle == g_servo_limits_handle) {
+            if (pt.size() > kMaxJttsConfigBytes) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            g_staging.servo_limits = std::move(val); // stage for Apply (reboot reloads)
+            xSemaphoreGive(g_mutex);
+            return 0;
+        }
         if (attr_handle == g_apply_handle) {
             if (pt.empty()) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
 
@@ -740,6 +768,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (g_staging.xiaozhi_url) merged.xiaozhi_url = *g_staging.xiaozhi_url;
             if (g_staging.xiaozhi_token) merged.xiaozhi_token = *g_staging.xiaozhi_token;
             if (g_staging.face_config) merged.face_config_json = *g_staging.face_config;
+            if (g_staging.servo_limits) merged.servo_limits_json = *g_staging.servo_limits;
             if (g_staging.provider) merged.provider = *g_staging.provider;
             xSemaphoreGive(g_mutex);
 
@@ -831,6 +860,12 @@ static ble_gatt_chr_def kChrs[] = {
         .access_cb = gatt_access_cb,
         .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
         .val_handle = &g_bat_gauge_handle,
+    },
+    {
+        .uuid = &kServoLimitsUuid.u,
+        .access_cb = gatt_access_cb,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+        .val_handle = &g_servo_limits_handle,
     },
     {
         .uuid = &kJttsConfigUuid.u,

@@ -29,6 +29,7 @@
 #include "conversation_task.hpp"
 #include "device_ui.hpp"
 #include "render_task.hpp"
+#include "servo_limits.hpp"
 #include "servo_task.hpp"
 #include "shared_state.hpp"
 #include "speech.hpp"
@@ -93,7 +94,7 @@ void record_and_playback(std::uint32_t seconds, const char* label)
     ESP_LOGI(kTag, "%s: done", label);
 }
 
-void demo_loop(const std::string& jtts_config_json, bool has_battery)
+void demo_loop(const std::string& jtts_config_json, bool has_battery, const stackchan::app::ServoLimits& limits)
 {
     using namespace stackchan;
 
@@ -102,10 +103,13 @@ void demo_loop(const std::string& jtts_config_json, bool has_battery)
         avatar::Expression::Sad,     avatar::Expression::Angry, avatar::Expression::Sleepy,
     };
 
-    // Random head pose targets, redrawn every kPoseMinMs..kPoseMaxMs.
-    constexpr float kYawMaxDeg = 40.0f;          // ±40°
-    constexpr float kPitchMinDeg = -10.0f;       // little down
-    constexpr float kPitchMaxDeg =  25.0f;       // more up
+    // Random head pose targets, redrawn every kPoseMinMs..kPoseMaxMs. The
+    // ranges come from the per-device ServoLimits so the demo respects the
+    // configured motion (servo_task also clamps defensively).
+    const float kYawMinDeg = static_cast<float>(limits.yaw_min_deg);
+    const float kYawMaxDeg = static_cast<float>(limits.yaw_max_deg);
+    const float kPitchMinDeg = static_cast<float>(limits.pitch_min_deg);
+    const float kPitchMaxDeg = static_cast<float>(limits.pitch_max_deg);
     constexpr std::uint32_t kPoseMinMs = 10000;
     constexpr std::uint32_t kPoseMaxMs = 20000;
     constexpr std::uint32_t kExpressionPeriodMs = 5000;
@@ -382,7 +386,7 @@ void demo_loop(const std::string& jtts_config_json, bool has_battery)
 
         // Random yaw + pitch every 10–20 s.
         if (now_ms >= next_pose_ms) {
-            g_state->target_yaw_deg.store(rand_in(-kYawMaxDeg, kYawMaxDeg), std::memory_order_relaxed);
+            g_state->target_yaw_deg.store(rand_in(kYawMinDeg, kYawMaxDeg), std::memory_order_relaxed);
             g_state->target_pitch_deg.store(rand_in(kPitchMinDeg, kPitchMaxDeg), std::memory_order_relaxed);
             next_pose_ms = now_ms + rand_range_ms(kPoseMinMs, kPoseMaxMs);
         }
@@ -545,10 +549,12 @@ extern "C" void app_main()
 
     g_render_args = new stackchan::app::RenderTaskArgs{.display = &board.display(), .state = g_state};
     const auto sb = board.servo_bus_config();
+    const auto servo_limits = stackchan::app::parse_servo_limits(cfg.servo_limits_json);
     g_servo_args = new stackchan::app::ServoTaskArgs{
         .state = g_state,
         .bus_cfg = {.uart = sb.uart, .tx = sb.tx, .rx = sb.rx, .baud = sb.baud,
                     .timeout_ms = 20, .echo_cancel = sb.echo_cancel},
+        .limits = servo_limits,
     };
     g_touch = board.touch_sensor();
 
@@ -597,5 +603,5 @@ extern "C" void app_main()
     stackchan::app::start_conversation_task(*g_conversation_args);
 
     ESP_LOGI(kTag, "ready");
-    demo_loop(cfg.jtts_config_json, board.has_battery());
+    demo_loop(cfg.jtts_config_json, board.has_battery(), servo_limits);
 }

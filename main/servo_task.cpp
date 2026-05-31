@@ -115,10 +115,14 @@ void servo_task_entry(void* arg)
             continue;
         }
 
-        const float yaw_deg = args.state->target_yaw_deg.load(std::memory_order_relaxed);
-        const float pitch_deg = args.state->target_pitch_deg.load(std::memory_order_relaxed);
-        const std::uint16_t yaw_target = scs_servo::deg_to_raw(yaw_deg, scs_servo::kYawZero);
-        const std::uint16_t pitch_target = scs_servo::deg_to_raw(pitch_deg, scs_servo::kPitchZero);
+        // Clamp commanded angles to the configured motion range so callers
+        // (demo, conversation, future UI) all stay within the per-device limits.
+        const float yaw_deg = clamp_deg(args.state->target_yaw_deg.load(std::memory_order_relaxed),
+                                        args.limits.yaw_min_deg, args.limits.yaw_max_deg);
+        const float pitch_deg = clamp_deg(args.state->target_pitch_deg.load(std::memory_order_relaxed),
+                                          args.limits.pitch_min_deg, args.limits.pitch_max_deg);
+        const std::uint16_t yaw_target = scs_servo::deg_to_raw(yaw_deg, args.limits.yaw_zero);
+        const std::uint16_t pitch_target = scs_servo::deg_to_raw(pitch_deg, args.limits.pitch_zero);
 
         // Non-zero servo_speed_override lets the demo task drive snappy
         // gestures (e.g. head shake on nadenade) without permanently raising

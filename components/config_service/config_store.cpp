@@ -30,6 +30,7 @@ constexpr const char* kKeySystemPrompt = "sys_prompt";
 constexpr const char* kKeyConvHeaders = "conv_hdrs";
 constexpr const char* kKeyFaceConfig = "face_cfg";
 constexpr const char* kKeyBatteryGauge = "bat_gauge";
+constexpr const char* kKeyServoLimits = "srv_lim";
 
 std::string nvs_read_str(nvs_handle_t h, const char* key)
 {
@@ -73,6 +74,7 @@ DeviceConfig load()
     cfg.system_prompt = nvs_read_str(h, kKeySystemPrompt);
     cfg.conv_extra_headers = nvs_read_str(h, kKeyConvHeaders);
     cfg.face_config_json = nvs_read_str(h, kKeyFaceConfig);
+    cfg.servo_limits_json = nvs_read_str(h, kKeyServoLimits);
     // Default to enabled when the key is missing (pre-flag NVS contents).
     std::uint8_t enabled = 1;
     esp_err_t en_err = nvs_get_u8(h, kKeyOpenAiEnabled, &enabled);
@@ -130,6 +132,7 @@ tl::expected<void, Error> save(const DeviceConfig& cfg)
         {kKeySystemPrompt, cfg.system_prompt},
         {kKeyConvHeaders, cfg.conv_extra_headers},
         {kKeyFaceConfig, cfg.face_config_json},
+        {kKeyServoLimits, cfg.servo_limits_json},
     };
     for (const auto& [key, value] : entries) {
         err = nvs_set_str(h, key, value.c_str());

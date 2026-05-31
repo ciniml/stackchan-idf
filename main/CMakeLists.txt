@@ -8,6 +8,7 @@ idf_component_register(
         "device_ui.cpp"
         "face_config.cpp"
         "render_task.cpp"
+        "servo_limits.cpp"
         "servo_task.cpp"
         "speech.cpp"
         "wifi_audio.cpp"

@@ -362,6 +362,30 @@
     <textarea id="jtts-phrases" rows="6" placeholder="こんにちわー&#10;おはよー&#10;..."></textarea>
   </details>
 
+  <details class="jtts-section" id="servo-section">
+    <summary>サーボ原点・可動範囲 (Takao base 等の自作版向け)</summary>
+    <p class="hint" style="margin-bottom:0.5rem">
+      サーボの取り付け向きや可動範囲はベース基板で異なります。原点(0..1023)と可動範囲(度)を
+      設定して「保存して再起動」で反映してください。既定は M5 base の値です。
+    </p>
+    <div class="grid2">
+      <div><label for="sv-yaw-zero">Yaw 原点 (raw)</label>
+        <input type="number" id="sv-yaw-zero" min="0" max="1023" step="1" placeholder="460"></div>
+      <div></div>
+      <div><label for="sv-yaw-min">Yaw 最小 (°)</label>
+        <input type="number" id="sv-yaw-min" min="-90" max="90" step="1" placeholder="-40"></div>
+      <div><label for="sv-yaw-max">Yaw 最大 (°)</label>
+        <input type="number" id="sv-yaw-max" min="-90" max="90" step="1" placeholder="40"></div>
+      <div><label for="sv-pitch-zero">Pitch 原点 (raw)</label>
+        <input type="number" id="sv-pitch-zero" min="0" max="1023" step="1" placeholder="620"></div>
+      <div></div>
+      <div><label for="sv-pitch-min">Pitch 最小 (°)</label>
+        <input type="number" id="sv-pitch-min" min="-90" max="90" step="1" placeholder="-10"></div>
+      <div><label for="sv-pitch-max">Pitch 最大 (°)</label>
+        <input type="number" id="sv-pitch-max" min="-90" max="90" step="1" placeholder="25"></div>
+    </div>
+  </details>
+
   <details class="jtts-section" id="ota-section">
     <summary>ファームウェア更新 (OTA)</summary>
     <p class="hint" style="margin-bottom:0.5rem">
@@ -489,6 +513,34 @@ function applyJttsToForm(json) {
   if (Array.isArray(obj.phrases)) $('jtts-phrases').value = obj.phrases.join('\n');
 }
 
+// --- Servo limits ---
+const SV_DEFAULTS = { yaw_zero: 460, yaw_min: -40, yaw_max: 40,
+                      pitch_zero: 620, pitch_min: -10, pitch_max: 25 };
+function applyServoLimitsToForm(json) {
+  let o = { ...SV_DEFAULTS };
+  if (json) { try { Object.assign(o, JSON.parse(json)); } catch {} }
+  $('sv-yaw-zero').value = o.yaw_zero;
+  $('sv-yaw-min').value = o.yaw_min;
+  $('sv-yaw-max').value = o.yaw_max;
+  $('sv-pitch-zero').value = o.pitch_zero;
+  $('sv-pitch-min').value = o.pitch_min;
+  $('sv-pitch-max').value = o.pitch_max;
+}
+function servoLimitsJson() {
+  const num = (id, def) => {
+    const v = parseInt($(id).value, 10);
+    return Number.isFinite(v) ? v : def;
+  };
+  return JSON.stringify({
+    yaw_zero: num('sv-yaw-zero', SV_DEFAULTS.yaw_zero),
+    yaw_min:  num('sv-yaw-min',  SV_DEFAULTS.yaw_min),
+    yaw_max:  num('sv-yaw-max',  SV_DEFAULTS.yaw_max),
+    pitch_zero: num('sv-pitch-zero', SV_DEFAULTS.pitch_zero),
+    pitch_min:  num('sv-pitch-min',  SV_DEFAULTS.pitch_min),
+    pitch_max:  num('sv-pitch-max',  SV_DEFAULTS.pitch_max),
+  });
+}
+
 // --- Status refresh ---
 
 async function refresh() {
@@ -518,6 +570,7 @@ async function refresh() {
       `# mu-law (OBS)  udp/6970\n` +
       `ffmpeg -re -i IN -ac 1 -ar 8000 -c:a pcm_mulaw -f rtp rtp://${h}:6970`;
     applyJttsToForm(s.jtts_config || '');
+    applyServoLimitsToForm(s.servo_limits || '');
     $('xiaozhi-url').value = s.xiaozhi_url || '';
     $('system-prompt').value = s.system_prompt || '';
     $('system-prompt').dataset.initial = s.system_prompt || '';
@@ -577,6 +630,8 @@ async function apply() {
     await postText('/api/rtp-enabled', rtpEnabled ? '1' : '0');
     await postText('/api/battery-gauge', batGauge ? '1' : '0');
     if (jtts)      { await postText('/api/jtts-config', jtts);                log('jtts 設定送信', 'ok'); }
+    // Servo limits: send the canonical JSON every Apply (cheap; server-side merge ignores no-ops).
+    await postText('/api/servo-limits', servoLimitsJson());                   log('サーボ設定送信', 'ok');
     // System prompt: send only when changed (empty after a change = reset to
     // the firmware default; unchanged = leave the stored prompt untouched).
     const sysPrompt = $('system-prompt').value;
