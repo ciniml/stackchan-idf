@@ -96,6 +96,17 @@ public:
     std::atomic<std::int16_t> servo_yaw_raw{-1};
     std::atomic<std::int16_t> servo_pitch_raw{-1};
 
+    // Back-panel NeoPixel strip (M5 base only). The led task reads these
+    // fields and animates accordingly; on the Takao base (no strip) the task
+    // never starts and these are inert. Single u32 payload keeps the colour
+    // load lock-free (0x00RRGGBB).
+    //   mode = 0: off, 1: solid, 2: breath (single-colour sine fade),
+    //          3: gradient (rainbow cycle).
+    //   brightness: 0..255 master gain applied after mode → strip.
+    std::atomic<std::uint8_t> led_mode{1};
+    std::atomic<std::uint32_t> led_color{0x00404040u};
+    std::atomic<std::uint8_t> led_brightness{96};
+
     // Servo motion mask: true while audible speech output is in progress, so
     // the servo task holds the head perfectly still (no goal writes, no torque
     // toggles). The servos and the speaker amp/codec share a power rail, and a

@@ -28,6 +28,7 @@
 #include <wifi_config_service/wifi_config_service.hpp>
 #include "conversation_task.hpp"
 #include "device_ui.hpp"
+#include "led_task.hpp"
 #include "render_task.hpp"
 #include "servo_limits.hpp"
 #include "servo_task.hpp"
@@ -45,6 +46,7 @@ stackchan::app::SharedState* g_state = nullptr;
 stackchan::app::RenderTaskArgs* g_render_args = nullptr;
 stackchan::app::ServoTaskArgs* g_servo_args = nullptr;
 stackchan::app::ConversationTaskArgs* g_conversation_args = nullptr;
+stackchan::app::LedTaskArgs* g_led_args = nullptr;
 stackchan::board::Si12tTouch* g_touch = nullptr;
 
 // Live face-config sink: invoked from the BLE host task on each FaceConfig
@@ -621,6 +623,13 @@ extern "C" void app_main()
     stackchan::app::ui::init(*g_state);
     stackchan::app::start_render_task(*g_render_args);
     stackchan::app::start_servo_task(*g_servo_args);
+    // NeoPixel animation task — only runs on boards that expose a strip
+    // (M5 base, 12 × WS2812 driven by the PY32). Takao base returns nullptr
+    // and we skip starting the task entirely.
+    if (auto* led = board.led_strip()) {
+        g_led_args = new stackchan::app::LedTaskArgs{.state = g_state, .strip = led};
+        stackchan::app::start_led_task(*g_led_args);
+    }
     // The conversation task waits for Wi-Fi internally, then takes over the
     // I2S bus for always-on voice chat. Started after the boot-time mic test
     // so the two never contend for the bus.

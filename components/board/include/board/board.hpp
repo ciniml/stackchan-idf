@@ -39,6 +39,7 @@ struct ServoBusConfig {
 };
 
 class Si12tTouch;
+class LedStrip;
 
 class Board {
 public:
@@ -67,6 +68,11 @@ public:
     // boot (e.g. older base hardware without the sensor); callers should
     // null-check before using.
     Si12tTouch* touch_sensor() noexcept;
+
+    // NeoPixel strip on the M5 base back panel (12 × WS2812 driven by the
+    // PY32 over I2C). nullptr on the Takao base, which has no strip. Callers
+    // should null-check (animation tasks skip themselves when absent).
+    LedStrip* led_strip() noexcept;
 
 private:
     Board() = default;

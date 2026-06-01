@@ -12,12 +12,16 @@
 #include <freertos/task.h>
 
 #include "board/io_expander_py32.hpp"
+#include "board/led_strip.hpp"
 #include "board/si12t_touch.hpp"
 
 namespace stackchan::board {
 
 namespace {
 constexpr const char* kTag = "board";
+// M5 Stack-chan back-panel NeoPixel count. (BSP exposes setLedCount but doesn't
+// hardcode this — the physical strip is 12.)
+constexpr std::uint8_t kM5LedCount = 12;
 } // namespace
 
 class Board::Impl {
@@ -26,16 +30,24 @@ public:
          std::optional<Si12tTouch>&& touch) noexcept
         : kind_{kind}, expander_{std::move(expander)}, touch_{std::move(touch)}
     {
+        if (expander_) {
+            led_.emplace(*expander_, kM5LedCount);
+        }
     }
 
     BoardKind kind() const noexcept { return kind_; }
     std::optional<Py32Expander>& expander() noexcept { return expander_; }
     Si12tTouch* touch() noexcept { return touch_ ? &*touch_ : nullptr; }
+    LedStrip* led() noexcept { return led_ ? &*led_ : nullptr; }
 
 private:
     BoardKind kind_;
     std::optional<Py32Expander> expander_;
     std::optional<Si12tTouch> touch_;
+    // Constructed iff PY32 is present (M5 base). LedStrip holds a reference to
+    // the expander, so it lives in Impl alongside the expander itself — never
+    // moved independently, never outlives the expander.
+    std::optional<LedStrip> led_;
 };
 
 tl::expected<Board, Error> Board::begin()
@@ -81,8 +93,18 @@ tl::expected<Board, Error> Board::begin()
 
     Board board;
     board.impl_ = std::make_shared<Impl>(kind, std::move(expander), std::move(touch));
-    ESP_LOGI(kTag, "board initialized: kind=%s (servo power: OFF)",
-             kind == BoardKind::M5Base ? "M5Base" : "TakaoBase");
+    // Bring the NeoPixel strip up (M5 base only). Push count + an all-off
+    // frame so the strip starts blank instead of holding whatever colours the
+    // PY32 was last asked for — that's most visible at OTA-then-soft-reboot,
+    // when the PY32 keeps state across the ESP reset.
+    if (auto* led = board.impl_->led()) {
+        if (auto r = led->begin(); !r) {
+            ESP_LOGW(kTag, "LedStrip::begin failed: %d", static_cast<int>(r.error()));
+        }
+    }
+    ESP_LOGI(kTag, "board initialized: kind=%s (servo power: OFF, leds: %s)",
+             kind == BoardKind::M5Base ? "M5Base" : "TakaoBase",
+             board.impl_->led() ? "12 NeoPixels" : "none");
     return board;
 }
 
@@ -128,6 +150,11 @@ tl::expected<void, Error> Board::set_servo_power(bool on)
 Si12tTouch* Board::touch_sensor() noexcept
 {
     return impl_->touch();
+}
+
+LedStrip* Board::led_strip() noexcept
+{
+    return impl_->led();
 }
 
 } // namespace stackchan::board

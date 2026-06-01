@@ -7,6 +7,7 @@ idf_component_register(
         "conversation_task.cpp"
         "device_ui.cpp"
         "face_config.cpp"
+        "led_task.cpp"
         "render_task.cpp"
         "servo_limits.cpp"
         "servo_task.cpp"
