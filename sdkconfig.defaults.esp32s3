@@ -1,13 +1,17 @@
-# M5Stack CoreS3 (ESP32-S3) specific defaults.
+# ESP32-S3 family common defaults — shared between the CoreS3 (M5/Takao base)
+# and AtomS3R (Atomic ECHO BASE) builds. Per-board overrides go in
+# sdkconfig.defaults.cores3 / sdkconfig.defaults.atoms3r (chained last). PSRAM
+# mode in particular is per-board because it cannot be switched at runtime
+# (the bootloader needs to know Quad vs Octal at link time).
 
 CONFIG_IDF_TARGET="esp32s3"
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
-CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+# Flash size is per-board (CoreS3 16 MB / AtomS3R 8 MB) — set in the
+# sdkconfig.defaults.<board> overlay that's chained after this file. A
+# mismatch makes the SPI flash size header reject boot.
 
-# CoreS3 has 8 MB quad-SPI PSRAM. The avatar canvas (320*240*2 = 150 KB) lives there.
+# Both boards carry 8 MB PSRAM; the host-side malloc behaviour is identical.
+# The wire mode (Quad vs Octal) and clock speed are the per-board overrides.
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_QUAD=y
-CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_USE_MALLOC=y
 # NOTE: SPIRAM_MALLOC_ALWAYSINTERNAL is intentionally NOT set here. The
 # value lives in the common sdkconfig.defaults (=1024) — this per-target

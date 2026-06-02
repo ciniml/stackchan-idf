@@ -59,7 +59,6 @@ tl::expected<Board, Error> Board::begin()
     // AtomS3R + ECHO BASE combo without us having to detect that beforehand.
     cfg.external_speaker.atomic_echo = 1;
     M5.begin(cfg);
-    M5.Display.setRotation(1);
 
     // AtomS3R variants (Atom-nyan) — picked up from M5Unified's board ID
     // after M5.begin. No PY32, no Si12T, no servo/battery/LED on this combo;
@@ -71,6 +70,11 @@ tl::expected<Board, Error> Board::begin()
         m5_board == m5::board_t::board_M5AtomEchoS3R ||
         m5_board == m5::board_t::board_M5AtomS3RCam;
     if (is_atom_s3r) {
+        // AtomS3R: square 128x128 GC9107, base rotation (0) lands the way the
+        // user holds the device. The CoreS3 default of 1 came up 90° CW, and
+        // 3 ended up at the same wrong orientation (only 0 / 2 differ on this
+        // panel's mapping) — 0 was the correct one.
+        M5.Display.setRotation(0);
         Board board;
         board.impl_ = std::make_shared<Impl>(BoardKind::AtomNyan,
                                              std::optional<Py32Expander>{},
@@ -78,6 +82,8 @@ tl::expected<Board, Error> Board::begin()
         ESP_LOGI(kTag, "board initialized: kind=AtomNyan (AtomS3R + Atomic ECHO BASE)");
         return board;
     }
+    // CoreS3: landscape, USB-C on the right edge.
+    M5.Display.setRotation(1);
 
     // CoreS3 variants — discriminate M5 base vs Takao base by probing the PY32
     // IO expander at 0x6F (M5 base only). PY32 can take up to ~1.2 s after a

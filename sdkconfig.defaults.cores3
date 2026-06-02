@@ -1,0 +1,12 @@
+# M5Stack CoreS3 (ESP32-S3R8 — Quad SPI PSRAM) board-specific overrides.
+# Selected by `make build BOARD=cores3` (default).
+#
+# CoreS3 uses the ESP32-S3R8 in-package PSRAM in Quad mode @ 80 MHz. Octal
+# would not even ID-probe on this chip — picking the right mode is a
+# build-time decision (handled in the bootloader before app code runs).
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# 16 MB external SPI flash (W25Q128 footprint on the CoreS3 PCB).
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"

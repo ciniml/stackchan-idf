@@ -1,0 +1,18 @@
+# M5Stack AtomS3R + Atomic ECHO BASE — Atom-nyan board profile.
+# Selected by `make build BOARD=atoms3r`.
+#
+# AtomS3R is built on the ESP32-S3-PICO-1-N8R8 module, whose 8 MB PSRAM is
+# wired as Octal (OPI). The bootloader picks the mode at link time and a
+# Quad-mode firmware can't probe the chip at all (PSRAM ID read error 0xff),
+# so this is a separate firmware image from the CoreS3 one.
+CONFIG_SPIRAM_MODE_OCT=y
+# Octal PSRAM on the S3 supports 80 MHz reliably with the standard 40 MHz
+# flash. (120 MHz is possible but requires CONFIG_ESPTOOLPY_FLASH_SAMPLE_MODE
+# tuning that we don't need for the small avatar canvas.)
+CONFIG_SPIRAM_SPEED_80M=y
+
+# 8 MB external SPI flash (N8 half of the ESP32-S3-PICO-1-N8R8 module).
+# Our partitions.csv uses 0x710000 of flash (bootloader + nvs + 2× 3 MB OTA
+# + 1 MB storage), comfortably under 8 MB.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"

@@ -2,6 +2,15 @@ IDF_PATH    ?= $(HOME)/esp-idf/5.4.2
 IDF_EXPORTS  = $(IDF_PATH)/export.sh
 TARGET      ?= esp32s3
 
+# Board variant. Selects the PSRAM mode (Quad vs Octal) and per-board sdkconfig
+# overrides; the resulting firmware is NOT cross-compatible because PSRAM mode
+# is locked in at boot by the bootloader.
+#   cores3   — M5Stack CoreS3 + M5/Takao base (Quad PSRAM, 320x240, ES8311 N/A)
+#   atoms3r  — AtomS3R + Atomic ECHO BASE (Octal PSRAM, 128x128, ES8311)
+# Default cores3 keeps `make build` backward-compatible.
+BOARD       ?= cores3
+BUILD_DIR    = build-$(BOARD)
+
 # Serial port for flash / monitor / erase-flash. Leave unset to let idf.py
 # auto-detect; pass on the command line (`make flash PORT=/dev/ttyACM0`) or
 # pin in Makefile.local.
@@ -13,15 +22,18 @@ IDFPY_PORT   = $(if $(PORT),-p $(PORT))
 
 # Build sdkconfig defaults chains.
 #   - sdkconfig.defaults                  (committed, common)
-#   - sdkconfig.defaults.<target>         (committed, per-target — picked up
-#     automatically by IDF, but listed explicitly here so we can chain
-#     sdkconfig.defaults.local after it)
+#   - sdkconfig.defaults.<target>         (committed, per-chip — esp32s3 here)
+#   - sdkconfig.defaults.<board>          (committed, per-board variant — cores3
+#     / atoms3r; PSRAM mode lives here)
 #   - sdkconfig.defaults.local            (gitignored, host-specific overrides;
 #     the last entry wins for duplicate keys so local values trump committed
 #     defaults)
 SDKCONFIG_DEFAULTS_HW   = sdkconfig.defaults
 ifneq (,$(wildcard sdkconfig.defaults.$(TARGET)))
 SDKCONFIG_DEFAULTS_HW  := $(SDKCONFIG_DEFAULTS_HW);sdkconfig.defaults.$(TARGET)
+endif
+ifneq (,$(wildcard sdkconfig.defaults.$(BOARD)))
+SDKCONFIG_DEFAULTS_HW  := $(SDKCONFIG_DEFAULTS_HW);sdkconfig.defaults.$(BOARD)
 endif
 ifneq (,$(wildcard sdkconfig.defaults.local))
 SDKCONFIG_DEFAULTS_HW  := $(SDKCONFIG_DEFAULTS_HW);sdkconfig.defaults.local
@@ -38,16 +50,16 @@ MONITOR_LOG_SECONDS ?= 8
 # --- Target builds ----------------------------------------------------------
 
 set-target:
-	bash -c "source $(IDF_EXPORTS) && idf.py -DSDKCONFIG_DEFAULTS='$(SDKCONFIG_DEFAULTS_HW)' set-target $(TARGET)"
+	bash -c "source $(IDF_EXPORTS) && idf.py -B $(BUILD_DIR) -DSDKCONFIG=$(BUILD_DIR)/sdkconfig -DSDKCONFIG_DEFAULTS='$(SDKCONFIG_DEFAULTS_HW)' set-target $(TARGET)"
 
 build:
-	bash -c "source $(IDF_EXPORTS) && idf.py -DSDKCONFIG_DEFAULTS='$(SDKCONFIG_DEFAULTS_HW)' build"
+	bash -c "source $(IDF_EXPORTS) && idf.py -B $(BUILD_DIR) -DSDKCONFIG=$(BUILD_DIR)/sdkconfig -DSDKCONFIG_DEFAULTS='$(SDKCONFIG_DEFAULTS_HW)' build"
 
 flash:
-	bash -c "source $(IDF_EXPORTS) && idf.py $(IDFPY_PORT) flash"
+	bash -c "source $(IDF_EXPORTS) && idf.py -B $(BUILD_DIR) $(IDFPY_PORT) flash"
 
 monitor:
-	bash -c "source $(IDF_EXPORTS) && idf.py $(IDFPY_PORT) monitor"
+	bash -c "source $(IDF_EXPORTS) && idf.py -B $(BUILD_DIR) $(IDFPY_PORT) monitor"
 
 # Non-interactive log capture: resets the target and reads stdout for
 # MONITOR_LOG_SECONDS seconds. Requires pyserial.
@@ -57,13 +69,13 @@ monitor-log:
 # Convenience: flash + monitor in a single idf.py invocation (faster than
 # `make flash monitor` because the IDF env is sourced once).
 flash-monitor:
-	bash -c "source $(IDF_EXPORTS) && idf.py $(IDFPY_PORT) flash monitor"
+	bash -c "source $(IDF_EXPORTS) && idf.py -B $(BUILD_DIR) $(IDFPY_PORT) flash monitor"
 
 erase-flash:
-	bash -c "source $(IDF_EXPORTS) && idf.py $(IDFPY_PORT) erase-flash"
+	bash -c "source $(IDF_EXPORTS) && idf.py -B $(BUILD_DIR) $(IDFPY_PORT) erase-flash"
 
 clean:
-	bash -c "source $(IDF_EXPORTS) && idf.py fullclean"
+	bash -c "source $(IDF_EXPORTS) && idf.py -B $(BUILD_DIR) fullclean"
 
 # --- Docker build (mirrors CI) ----------------------------------------------
 DOCKER_IMAGE         ?= espressif/idf:release-v6.0

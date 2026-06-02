@@ -1,7 +1,7 @@
 PLAN.md
 
 build/
-build-host/
+build-*/
 
 sdkconfig
 sdkconfig.old
