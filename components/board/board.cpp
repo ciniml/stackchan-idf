@@ -53,12 +53,35 @@ private:
 tl::expected<Board, Error> Board::begin()
 {
     auto cfg = M5.config();
+    // Always-on Atomic ECHO BASE codec hint. M5Unified only consults this flag
+    // inside the AtomS3R-family case branch (M5Unified.cpp:2113), so it's a
+    // no-op on CoreS3 and just makes ES8311 init automatic when we boot on an
+    // AtomS3R + ECHO BASE combo without us having to detect that beforehand.
+    cfg.external_speaker.atomic_echo = 1;
     M5.begin(cfg);
     M5.Display.setRotation(1);
 
-    // Base-board detection: the M5 Stack-chan base carries a PY32 IO expander at
-    // 0x6F (servo-power EN); the Takao base has none. PY32 can take up to ~1.2 s
-    // after a cold reset, so poll once every 200 ms for ~1.2 s before deciding.
+    // AtomS3R variants (Atom-nyan) — picked up from M5Unified's board ID
+    // after M5.begin. No PY32, no Si12T, no servo/battery/LED on this combo;
+    // bail out of the probe phases entirely to keep boot fast.
+    const auto m5_board = M5.getBoard();
+    const bool is_atom_s3r =
+        m5_board == m5::board_t::board_M5AtomS3R    ||
+        m5_board == m5::board_t::board_M5AtomS3RExt ||
+        m5_board == m5::board_t::board_M5AtomEchoS3R ||
+        m5_board == m5::board_t::board_M5AtomS3RCam;
+    if (is_atom_s3r) {
+        Board board;
+        board.impl_ = std::make_shared<Impl>(BoardKind::AtomNyan,
+                                             std::optional<Py32Expander>{},
+                                             std::optional<Si12tTouch>{});
+        ESP_LOGI(kTag, "board initialized: kind=AtomNyan (AtomS3R + Atomic ECHO BASE)");
+        return board;
+    }
+
+    // CoreS3 variants — discriminate M5 base vs Takao base by probing the PY32
+    // IO expander at 0x6F (M5 base only). PY32 can take up to ~1.2 s after a
+    // cold reset, so poll once every 200 ms for ~1.2 s before deciding.
     std::optional<Py32Expander> expander;
     for (int attempt = 0; attempt < 6 && !expander; ++attempt) {
         vTaskDelay(pdMS_TO_TICKS(200));
@@ -118,6 +141,12 @@ BoardKind Board::kind() const noexcept
 
 ServoBusConfig Board::servo_bus_config() const noexcept
 {
+    if (impl_->kind() == BoardKind::AtomNyan) {
+        // Atom-nyan has no on-board servo bus; the servo task is not started.
+        // Return a syntactically valid but inert config so callers that read
+        // this defensively don't see junk.
+        return {UART_NUM_1, GPIO_NUM_NC, GPIO_NUM_NC, 0u, /*echo_cancel=*/false};
+    }
     if (impl_->kind() == BoardKind::TakaoBase) {
         // Takao base on CoreS3 port A: TX=G2, RX=G1. (Port A naming wasn't a
         // reliable guide to which physical pin carries which signal; this

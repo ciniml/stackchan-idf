@@ -19,6 +19,7 @@
 #include <esp_ota_ops.h>
 #include <esp_heap_caps.h>
 
+#include "atom_status.hpp"
 #include "audio_stream_sink.hpp"
 #include "avatar/expression.hpp"
 #include "battery.hpp"
@@ -112,7 +113,7 @@ void record_and_playback(std::uint32_t seconds, const char* label)
     ESP_LOGI(kTag, "%s: done", label);
 }
 
-void demo_loop(const std::string& jtts_config_json, bool has_battery, const stackchan::app::ServoLimits& limits)
+void demo_loop(const std::string& jtts_config_json, bool has_battery, bool is_atom_nyan, const stackchan::app::ServoLimits& limits)
 {
     using namespace stackchan;
 
@@ -220,7 +221,10 @@ void demo_loop(const std::string& jtts_config_json, bool has_battery, const stac
         // to the UI module, which hit-tests it against the current page.
         // Handled before the conversation/audio early-returns so the UI opens
         // in every mode.
-        {
+        if (is_atom_nyan) {
+            // AtomS3R: no LCD touch, single USER_BUT toggles the status overlay.
+            app::atom_status::poll_button();
+        } else {
             const auto td = M5.Touch.getDetail();
             if (td.wasPressed()) {
                 const bool ui_before = app::ui::active();
@@ -566,22 +570,33 @@ extern "C" void app_main()
     // Mic / loopback sanity check at startup.
     record_and_playback(2, "mic test");
 
-    if (auto r = board.set_servo_power(true); !r) {
-        ESP_LOGE(kTag, "set_servo_power(true) failed: %d", static_cast<int>(r.error()));
+    const bool is_atom_nyan =
+        board.kind() == stackchan::board::BoardKind::AtomNyan;
+
+    // Servo bring-up is only meaningful on boards that actually have a servo
+    // bus (CoreS3 + M5/Takao). Atom-nyan has no servos in Phase 1 scope; skip
+    // both the power-rail enable and the 1.5 s settle wait.
+    if (!is_atom_nyan) {
+        if (auto r = board.set_servo_power(true); !r) {
+            ESP_LOGE(kTag, "set_servo_power(true) failed: %d", static_cast<int>(r.error()));
+        }
+        // Allow the servo bus rail to settle before the servo task starts
+        // driving UART. SCS0009 needs ~1 s after Vmotor comes up before it
+        // answers PING.
+        vTaskDelay(pdMS_TO_TICKS(1500));
     }
-    // Allow the servo bus rail to settle before the servo task starts driving
-    // UART. SCS0009 needs ~1 s after Vmotor comes up before it answers PING.
-    vTaskDelay(pdMS_TO_TICKS(1500));
 
     g_render_args = new stackchan::app::RenderTaskArgs{.display = &board.display(), .state = g_state};
-    const auto sb = board.servo_bus_config();
     const auto servo_limits = stackchan::app::parse_servo_limits(cfg.servo_limits_json);
-    g_servo_args = new stackchan::app::ServoTaskArgs{
-        .state = g_state,
-        .bus_cfg = {.uart = sb.uart, .tx = sb.tx, .rx = sb.rx, .baud = sb.baud,
-                    .timeout_ms = 20, .echo_cancel = sb.echo_cancel},
-        .limits = servo_limits,
-    };
+    if (!is_atom_nyan) {
+        const auto sb = board.servo_bus_config();
+        g_servo_args = new stackchan::app::ServoTaskArgs{
+            .state = g_state,
+            .bus_cfg = {.uart = sb.uart, .tx = sb.tx, .rx = sb.rx, .baud = sb.baud,
+                        .timeout_ms = 20, .echo_cancel = sb.echo_cancel},
+            .limits = servo_limits,
+        };
+    }
     g_touch = board.touch_sensor();
 
     // API key + provider: pick whichever backend the user configured. The
@@ -620,9 +635,18 @@ extern "C" void app_main()
         .system_prompt = cfg.system_prompt.c_str(),
         .extra_headers = cfg.conv_extra_headers.c_str()};
 
-    stackchan::app::ui::init(*g_state);
+    // On-device UI is per-board: CoreS3 gets the 5-tab touchscreen settings UI,
+    // Atom-nyan gets the minimal status overlay toggled by USER_BUT. Only one
+    // is initialised; render_task dispatches based on which one's active().
+    if (is_atom_nyan) {
+        stackchan::app::atom_status::init(*g_state);
+    } else {
+        stackchan::app::ui::init(*g_state);
+    }
     stackchan::app::start_render_task(*g_render_args);
-    stackchan::app::start_servo_task(*g_servo_args);
+    if (!is_atom_nyan) {
+        stackchan::app::start_servo_task(*g_servo_args);
+    }
     // NeoPixel animation task disabled while we figure out the right PY32 LED
     // register map — writes to the BSP-documented 0x24 / 0x30 area corrupted
     // the LCD backlight on this firmware revision, so the task is intentionally
@@ -634,5 +658,5 @@ extern "C" void app_main()
     stackchan::app::start_conversation_task(*g_conversation_args);
 
     ESP_LOGI(kTag, "ready");
-    demo_loop(cfg.jtts_config_json, board.has_battery(), servo_limits);
+    demo_loop(cfg.jtts_config_json, board.has_battery(), is_atom_nyan, servo_limits);
 }

@@ -22,11 +22,13 @@ enum class Error {
     TouchRead,
 };
 
-// Which Stack-chan base board the CoreS3 is mounted on. Detected at begin() by
-// the presence of the M5 base's PY32 IO expander (0x6F).
+// Which Stack-chan base board the SoC is mounted on. Detected at begin() —
+// CoreS3 variants discriminate on the M5 base's PY32 IO expander (0x6F);
+// AtomS3R variants ("Atom-nyan") are picked up from M5Unified's chip ID.
 enum class BoardKind {
     M5Base,    // M5Stack Stack-chan base: PY32 servo-power EN, INA226 battery, servo on G6/G7.
     TakaoBase, // Takao Base (CoreS3 SE port A): half-duplex servos on port A, no power/battery control.
+    AtomNyan,  // AtomS3R + Atomic ECHO BASE: 128x128 LCD, ES8311 codec, no servo/battery/LED/touch.
 };
 
 // SCS servo bus wiring for the detected board. Maps 1:1 onto scs_servo::ScsBus::Config.

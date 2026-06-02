@@ -12,14 +12,12 @@
 
 namespace stackchan::avatar {
 
-namespace {
-constexpr std::int16_t kCanvasWidth = 320;
-constexpr std::int16_t kCanvasHeight = 240;
-} // namespace
-
 // Avatar is a pure renderer: it owns no display or framebuffer. The caller (the
 // render task in main) owns the canvas and pushes it to the panel; tick() only
-// composes the frame into the borrowed canvas.
+// composes the frame into the borrowed canvas. The face layout is rebuilt the
+// first time tick() is called and whenever the canvas changes size — which
+// lets the same Avatar drive both the CoreS3 (320x240) and AtomS3R (128x128)
+// LCDs without per-board ifdefs.
 class Avatar::Impl {
 public:
     Impl() noexcept = default;
@@ -28,6 +26,18 @@ public:
     {
         animator_.tick(now_ms, context_);
         context_.now_ms = now_ms;
+
+        // Lazy / size-tracked face rebuild — first tick or canvas dim change
+        // re-runs build_face() against the live tuning so the geometry is
+        // always in sync with the canvas size we're about to draw into.
+        const std::int16_t cw = static_cast<std::int16_t>(canvas.width());
+        const std::int16_t ch = static_cast<std::int16_t>(canvas.height());
+        if (cw != last_canvas_w_ || ch != last_canvas_h_) {
+            face_ = internal::build_face(tuning_, cw, ch);
+            last_canvas_w_ = cw;
+            last_canvas_h_ = ch;
+            full_repaint_pending_ = true;
+        }
 
         // A pending full repaint (expression / layout / palette change, or a
         // return from the on-device UI) is forwarded to the canvas so the
@@ -50,16 +60,22 @@ public:
 
     void set_face_tuning(const FaceTuning& tuning)
     {
-        face_ = internal::build_face(tuning, kCanvasWidth, kCanvasHeight);
+        tuning_ = tuning;
         context_.palette.primary = tuning.face_color;
         context_.palette.background = tuning.bg_color;
+        // Force a rebuild on the next tick (canvas size still valid).
+        last_canvas_w_ = 0;
+        last_canvas_h_ = 0;
         full_repaint_pending_ = true;
     }
 
 private:
     DrawContext context_{};
+    FaceTuning tuning_{};
     internal::Face face_{};
     internal::FaceAnimator animator_{};
+    std::int16_t last_canvas_w_ = 0;
+    std::int16_t last_canvas_h_ = 0;
     bool full_repaint_pending_ = true;
 };
 

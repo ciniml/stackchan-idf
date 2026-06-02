@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "app_main.cpp"
+        "atom_status.cpp"
         "audio_codec.cpp"
         "battery.cpp"
         "audio_stream_sink.cpp"

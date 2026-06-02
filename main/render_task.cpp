@@ -12,6 +12,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include "atom_status.hpp"
 #include "avatar/avatar.hpp"
 #include "avatar/canvas.hpp"
 #include "avatar/canvas_m5gfx.hpp"
@@ -24,8 +25,6 @@ namespace {
 
 constexpr const char* kTag = "render";
 constexpr TickType_t kPeriodTicks = pdMS_TO_TICKS(33);
-constexpr std::int32_t kCanvasWidth = 320;
-constexpr std::int32_t kCanvasHeight = 240;
 
 using avatar::RichCanvas;
 
@@ -81,16 +80,23 @@ void render_task_entry(void* arg)
     //   - PSRAM absent:  DirectCanvas   — draw to the panel + small scratch.
     // Both objects are cheap to construct (no buffer until used), so we hold
     // both and bind the base reference to the chosen one.
+    // Canvas dims follow the display at runtime (CoreS3 = 320x240,
+    // AtomS3R = 128x128) so the avatar / device-UI / balloon all adapt
+    // without per-board ifdefs.
+    const std::int32_t canvas_w = display.width();
+    const std::int32_t canvas_h = display.height();
     avatar::BufferedCanvas buffered{display};
     avatar::DirectCanvas direct{display};
     avatar::RichCanvas* cv = nullptr;
-    if (esp_psram_get_size() > 0 && buffered.begin(kCanvasWidth, kCanvasHeight)) {
+    if (esp_psram_get_size() > 0 && buffered.begin(canvas_w, canvas_h)) {
         cv = &buffered;
-        ESP_LOGI(kTag, "PSRAM detected: buffered full-screen framebuffer");
+        ESP_LOGI(kTag, "PSRAM detected: buffered full-screen framebuffer (%dx%d)",
+                 static_cast<int>(canvas_w), static_cast<int>(canvas_h));
     } else {
         direct.begin();
         cv = &direct;
-        ESP_LOGI(kTag, "no PSRAM framebuffer: direct + partial-buffer rendering");
+        ESP_LOGI(kTag, "no PSRAM framebuffer: direct + partial-buffer rendering (%dx%d)",
+                 static_cast<int>(canvas_w), static_cast<int>(canvas_h));
     }
     RichCanvas& canvas = *cv;
 
@@ -106,13 +112,15 @@ void render_task_entry(void* arg)
     for (;;) {
         const std::uint32_t now_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
 
-        // On-device touchscreen UI takes over the display while shown. It draws
-        // into the shared canvas (lazily — only when something changed); push
-        // only when it actually repainted.
-        if (ui::active()) {
-            // device_ui clears + draws itself (lazily); present only when it
-            // repainted this frame.
-            if (ui::draw(canvas)) {
+        // Either of the two on-device overlays (CoreS3 5-tab settings UI or
+        // AtomS3R minimal status screen) takes over the display while shown.
+        // Only one is ever initialized in a given boot, so at most one is
+        // active(). Both render lazily and return whether they repainted.
+        const bool ui_on = ui::active();
+        const bool atom_on = atom_status::active();
+        if (ui_on || atom_on) {
+            const bool repainted = ui_on ? ui::draw(canvas) : atom_status::draw(canvas);
+            if (repainted) {
                 canvas.end_frame();
             }
             ui_was_active = true;
