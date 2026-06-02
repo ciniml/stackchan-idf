@@ -3,6 +3,12 @@ name: Build and Release Firmware
 # Tag-driven release: push `vX.Y.Z` to build the firmware in the official
 # ESP-IDF container and attach the artifacts to a GitHub Release. Manual
 # dispatch is supported too for smoke-testing the CI without cutting a tag.
+#
+# The build is fanned out across `BOARD` variants — cores3 (CoreS3 + M5/Takao
+# base, 16 MB / Quad PSRAM) and atoms3r (AtomS3R + Atomic ECHO BASE, 8 MB /
+# Octal PSRAM) — because the PSRAM mode is locked in by the bootloader at
+# link time and cannot be switched at runtime. Each board ships as its own
+# ZIP attached to the same Release.
 on:
   push:
     tags:
@@ -18,8 +24,15 @@ permissions:
 
 jobs:
   build:
-    name: Build Firmware
+    name: Build Firmware (${{ matrix.board }})
     runs-on: ubuntu-latest
+    strategy:
+      # Don't cancel cores3 just because atoms3r failed (and vice-versa); we
+      # still want a partial release if one board's build hits a transient
+      # issue.
+      fail-fast: false
+      matrix:
+        board: [cores3, atoms3r]
     container:
       # Pinned to v5.4 to match local development. v6.0 dropped the built-in
       # `json` (cJSON) component in favour of an IDF component-manager
@@ -45,6 +58,7 @@ jobs:
           git rev-parse --short HEAD
           git diff-index --quiet HEAD -- && echo "Working tree clean" || echo "Working tree dirty"
           echo "Current ref: ${GITHUB_REF}"
+          echo "Board: ${{ matrix.board }}"
 
       - name: Apply M5Unified patches
         shell: bash
@@ -71,18 +85,20 @@ jobs:
           echo "$VERSION" > version.txt
           echo "version.txt contents: $(cat version.txt)"
 
-      - name: Build firmware
+      - name: Build firmware (BOARD=${{ matrix.board }})
         shell: bash
         env:
           CI: true
         run: |
           . $IDF_PATH/export.sh
-          idf.py set-target esp32s3
-          idf.py build
+          make set-target BOARD=${{ matrix.board }}
+          make build BOARD=${{ matrix.board }}
 
       - name: Generate single firmware image
         run: |
-          python3 script/pack_firmware.py
+          python3 script/pack_firmware.py \
+            --build-dir build-${{ matrix.board }} \
+            --out firmware.bin
           ls -lh firmware.bin
 
       - name: Extract version from tag
@@ -102,65 +118,80 @@ jobs:
 
       - name: Prepare release artifacts
         shell: bash
+        env:
+          BUILD_DIR: build-${{ matrix.board }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BOARD: ${{ matrix.board }}
         run: |
           mkdir -p release
-          cp build/bootloader/bootloader.bin              release/
-          cp build/partition_table/partition-table.bin    release/
-          cp build/ota_data_initial.bin                   release/
-          cp build/stackchan_idf.bin                      release/
-          cp firmware.bin release/firmware-${{ steps.version.outputs.version }}.bin
-          cp build/flash_args release/
+          cp "$BUILD_DIR/bootloader/bootloader.bin"              release/
+          cp "$BUILD_DIR/partition_table/partition-table.bin"    release/
+          cp "$BUILD_DIR/ota_data_initial.bin"                   release/
+          cp "$BUILD_DIR/stackchan_idf.bin"                      release/
+          cp firmware.bin release/firmware-${VERSION}-${BOARD}.bin
+          cp "$BUILD_DIR/flash_args" release/
           cp README.md release/ 2>/dev/null || true
 
-          echo "=== Firmware Size Information ==="
-          python3 -m esp_idf_size build/stackchan_idf.map --format=text || true
+          echo "=== Firmware Size Information (BOARD=${BOARD}) ==="
+          python3 -m esp_idf_size "$BUILD_DIR/stackchan_idf.map" --format=text || true
 
           ls -lh release/
 
       - name: Create firmware ZIP
         shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BOARD: ${{ matrix.board }}
         run: |
           cd release
-          zip -r ../firmware-${{ steps.version.outputs.version }}.zip .
+          zip -r "../firmware-${VERSION}-${BOARD}.zip" .
           cd ..
-          ls -lh firmware-${{ steps.version.outputs.version }}.zip
+          ls -lh "firmware-${VERSION}-${BOARD}.zip"
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-${{ steps.version.outputs.version }}
+          name: firmware-${{ steps.version.outputs.version }}-${{ matrix.board }}
           path: release/
           retention-days: 90
 
-      - name: Create Release
+      - name: Create / update Release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v1
         with:
-          files: firmware-${{ steps.version.outputs.version }}.zip
+          # Each matrix leg uploads its own zip into the same Release; the
+          # action merges by tag name and skips duplicates.
+          files: firmware-${{ steps.version.outputs.version }}-${{ matrix.board }}.zip
           body: |
             # Stack-chan Firmware ${{ steps.version.outputs.version }}
 
-            M5Stack CoreS3 向けスタックチャン ファームウェア。
+            Stack-chan firmware (M5Stack CoreS3 / AtomS3R 両対応)。
+
+            ## 対応ボード
+            - **CoreS3 + M5/Takao ベース** (`firmware-${{ steps.version.outputs.version }}-cores3.zip`、16 MB flash / Quad PSRAM)
+            - **AtomS3R + Atomic ECHO BASE** "アトムニャン" (`firmware-${{ steps.version.outputs.version }}-atoms3r.zip`、8 MB flash / Octal PSRAM)
+
+            PSRAM モードは bootloader レベルで確定するため、ボードごとに別 firmware です。
 
             ## Features
             - **OpenAI Realtime API / Google Gemini Live API** どちらかでリアルタイム音声会話
             - **BLE 経由の設定 / プロビジョニング** (X25519 + AES-256-GCM 暗号化セッション)
             - **BLE OTA アップデート**(再ビルド不要で次回からはブラウザから直接書き込み)
             - **jtts ボイス カスタマイズ**(声・フレーズを設定画面から変更)
-            - **タッチセンサによる barge-in / なでなで応答**
+            - **タッチセンサによる barge-in / なでなで応答** (CoreS3 のみ)
 
             ## Installation
 
             ### Web Flasher (Chrome / Edge)
             <https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/>
-            にアクセスして本リリースを選択し、Stack-chan を USB 接続後に書き込みボタンを押してください。
+            にアクセスして本リリースを選択し、ボードを選んでから書き込んでください。
 
             ### コマンドラインから初回書き込み
-            1. 下の `firmware-${{ steps.version.outputs.version }}.zip` をダウンロード・展開
+            1. ボードに合った ZIP (`-cores3` / `-atoms3r`) をダウンロード・展開
             2. esptool で書き込み:
                ```bash
                esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 460800 write_flash \
-                 0x0 firmware-${{ steps.version.outputs.version }}.bin
+                 0x0 firmware-${{ steps.version.outputs.version }}-<board>.bin
                ```
 
             ### BLE 経由の OTA(既に動いている場合)

@@ -67,6 +67,14 @@
     <label>Version: <select id="selVersion"><option>loading…</option></select></label>
     <button id="btnReload" title="Reload release list">↻</button>
   </div>
+  <div class="row" style="margin-top:.3rem">
+    <label>Board:
+      <select id="selBoard">
+        <option value="cores3">CoreS3 + M5/Takao ベース</option>
+        <option value="atoms3r">AtomS3R + Atomic ECHO BASE (アトムニャン)</option>
+      </select>
+    </label>
+  </div>
   <div id="assetInfo" class="small"></div>
 </fieldset>
 
@@ -249,21 +257,43 @@ function selectedRelease() {
   return releases.find((r) => r.tag === tag);
 }
 
-function zipUrlFor(rel) {
-  return rel ? `./firmware/${rel.tag}/${rel.zip}` : null;
+// Resolve the ZIP for the selected release + board. Newer releases publish
+// per-board zips under .boards.<board>; legacy releases used a single .zip
+// field (we map those to cores3 only — AtomS3R support didn't exist yet,
+// so picking atoms3r on a legacy release returns null and the UI says so).
+function zipFor(rel, board) {
+  if (!rel) return null;
+  if (rel.boards && rel.boards[board]) return rel.boards[board];
+  if (rel.zip && board === 'cores3') return rel.zip;
+  return null;
+}
+function zipUrlFor(rel, board) {
+  const z = zipFor(rel, board);
+  return z ? `./firmware/${rel.tag}/${z}` : null;
 }
 
 function showAssetSummary() {
   const rel = selectedRelease();
+  const board = $('selBoard').value;
   assetInfoEl.innerHTML = '';
   if (!rel) return;
+  const zip = zipFor(rel, board);
   const span = document.createElement('span');
-  span.className = 'ok';
-  span.textContent = `ZIP: ${rel.zip}`;
+  if (zip) {
+    span.className = 'ok';
+    span.textContent = `ZIP: ${zip}`;
+    $('btnFlash').disabled = !loader; // only block on missing serial port
+  } else {
+    span.className = 'warn';
+    span.textContent =
+      `このリリース (${rel.tag}) には ${board} 向けのファームウェアが含まれていません。別のバージョンを選んでください。`;
+    $('btnFlash').disabled = true;
+  }
   assetInfoEl.appendChild(span);
 }
 
 $('selVersion').addEventListener('change', showAssetSummary);
+$('selBoard').addEventListener('change', showAssetSummary);
 $('btnReload').addEventListener('click', loadReleases);
 
 // --- Connect / Disconnect ---
@@ -309,7 +339,13 @@ $('btnFlash').addEventListener('click', async () => {
   if (!loader) { log('Not connected.', 'warn'); return; }
   const rel = selectedRelease();
   if (!rel) { log('No release selected.', 'warn'); return; }
-  const zipUrl = zipUrlFor(rel);
+  const board = $('selBoard').value;
+  const zip = zipFor(rel, board);
+  const zipUrl = zipUrlFor(rel, board);
+  if (!zipUrl) {
+    log(`このリリース (${rel.tag}) には ${board} 向け firmware がありません。`, 'warn');
+    return;
+  }
 
   $('btnFlash').disabled = true;
   $('btnDisconnect').disabled = true;
@@ -317,7 +353,7 @@ $('btnFlash').addEventListener('click', async () => {
 
   let entries;
   try {
-    log(`Downloading ${rel.zip}…`);
+    log(`Downloading ${zip}…`);
     const r = await fetch(zipUrl);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const zipBuf = await r.arrayBuffer();

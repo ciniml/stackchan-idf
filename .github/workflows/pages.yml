@@ -72,25 +72,40 @@ jobs:
                         --json tagName,isDraft,isPrerelease)
           mapfile -t tags < <(echo "$tags_json" | jq -r '.[] | select(.isDraft|not) | .tagName')
 
-          : > /tmp/staged.tsv
+          # Per-tag JSON object. For each tag we stage every firmware-*.zip
+          # asset and classify it by board suffix in the filename:
+          #   firmware-vX.Y.Z-cores3.zip   → boards.cores3
+          #   firmware-vX.Y.Z-atoms3r.zip  → boards.atoms3r
+          #   firmware-vX.Y.Z.zip          → boards.cores3 (legacy single-zip releases)
+          : > /tmp/per_tag.ndjson
           for tag in "${tags[@]}"; do
-            asset=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
-                    --jq '.assets[] | select(.name|test("^firmware-.*\\.zip$")) | .name' \
-                    | head -n1 || true)
-            if [ -z "$asset" ]; then
+            assets=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
+                     --jq '.assets[] | select(.name|test("^firmware-.*\\.zip$")) | .name')
+            if [ -z "$assets" ]; then
               echo "[skip] $tag: no firmware ZIP asset"
               continue
             fi
             dest="_site/firmware/$tag"
             mkdir -p "$dest"
-            gh release download "$tag" --repo "$GITHUB_REPOSITORY" -p "$asset" -D "$dest"
-            echo -e "$tag\t$asset" >> /tmp/staged.tsv
-            echo "[ok] $tag -> $dest/$asset"
+            boards_json='{}'
+            while IFS= read -r asset; do
+              [ -z "$asset" ] && continue
+              gh release download "$tag" --repo "$GITHUB_REPOSITORY" -p "$asset" -D "$dest" --clobber
+              # Extract board suffix; legacy un-suffixed zips map to cores3.
+              base="${asset%.zip}"
+              suffix="${base##*-}"
+              case "$suffix" in
+                cores3|atoms3r) board="$suffix" ;;
+                *)              board="cores3" ;; # legacy fallback
+              esac
+              boards_json=$(echo "$boards_json" | jq --arg b "$board" --arg z "$asset" '.[$b] = $z')
+              echo "[ok] $tag/$board -> $dest/$asset"
+            done <<< "$assets"
+            echo "{\"tag\":\"$tag\",\"boards\":$boards_json}" >> /tmp/per_tag.ndjson
           done
 
-          # versions.json: ordered list of {tag, zip} for tags whose ZIP was staged.
-          jq -Rn '[inputs | split("\t") | {tag: .[0], zip: .[1]}]' \
-            < /tmp/staged.tsv > _site/versions.json
+          # versions.json: ordered list of {tag, boards: {cores3?, atoms3r?}}.
+          jq -s '.' < /tmp/per_tag.ndjson > _site/versions.json
           echo "--- versions.json ---"
           cat _site/versions.json
           echo "--- _site/firmware ---"
