@@ -20,8 +20,10 @@
 --   3. リングの上半分を bg 矩形でマスク → 下半分の弧 (∪) が残る
 --   4. 2 つの ∪ の間に bg 三角形を上向きに置いて中央の谷を作る
 --      → ω の中央ピーク (細い ∧)
---   結果: ∪∧∪ の連なりが ω に読める。
---   mouth_open が大きくなるとロブ自体が縦に伸びて口が「開いた」感じになる。
+--   5. mouth_open > 0 のとき:
+--      - ロブ半径と中央ピーク高さを少し増やす
+--      - ω の左右外端から下に「壁」と、最下端を結ぶ「床」を追加
+--        → ω の下に「開いた口の内部」が現れて全体が縦に伸びる。
 
 ----------------------------------------------------------------------
 -- 共通パーツ (default_face.avdsl から流用)
@@ -158,15 +160,18 @@ end
 -- 喋ると ω が開閉する。
 
 fn mouth_omega(cx, cy, color, bg, bo)
-  let m = mouth_open                 -- 0..1
-  let r = sz(8 + m * 4)              -- ロブ半径 (開くと大きく)
-  let dx = sz(9 + m * 2)             -- 中心からロブ中心までの距離
-  let thick = max(1, round(r * 0.35))-- リングの線太さ
+  let m = mouth_open                  -- 0..1
+  let r = sz(8 + m * 3)               -- ロブ半径 (開くとやや大きく)
+  let dx = sz(9 + m * 2)              -- 中心からロブ中心までの距離
+  let thick = max(1, round(r * 0.35)) -- リングの線太さ
   let my = cy + bo
+  let ext = sz(m * 22)                -- 縦方向の伸び (m=0 で 0、m=1 で大きく)
 
-  -- グループ bbox: 開ききった時の最大範囲 + 余白 を覆う
+  -- グループ bbox: ω 本体 + 下方への伸び ext + 床 thick + 余白 を覆う。
+  -- ※ DirectCanvas (PSRAM 無) はこの bbox 内のみクリアするので、開閉で
+  --    最大に伸びる範囲を漏らさず覆っておかないと前フレームの残骸が出る。
   let gw_half = dx + r + 2
-  begin_group(cx - gw_half, my - r - 2, gw_half * 2, r * 2 + 6)
+  begin_group(cx - gw_half, my - r - 2, gw_half * 2, r + ext + thick + 6)
 
   -- 1) 左右に塗りつぶし円 (ロブ本体)
   fill_circle(cx - dx, my, r, color)
@@ -182,11 +187,32 @@ fn mouth_omega(cx, cy, color, bg, bo)
   fill_rect(cx + dx - r, my - r, r * 2, r, bg)
 
   -- 4) 2 つの ∪ の間に三角形を上向きに → 中央ピーク (∧)
-  --    foot は ロブ外周 と ぶつからない位置に。
-  let peak_h = sz(5 + m * 3)
+  --    foot は ロブ外周 と ぶつからない位置に。開くと中央ピークも少し高く。
+  let peak_h = sz(5 + m * 4)
   let foot_l = cx - dx + r - max(1, thick - 1)
   let foot_r = cx + dx - r + max(1, thick - 1)
   fill_triangle(foot_l, my, foot_r, my, cx, my - peak_h, color)
+
+  -- 5) 開口部 (mouth_open による縦伸び)
+  --    壁 + 床。ただし「床の自然位置 (my + 1 + ext)」が ω 下端 (my + r)
+  --    を超えるまでは何も描かない — そうしないと小さな開きで床がロブの
+  --    途中を横切って見栄えが悪い。条件成立後は:
+  --      ・壁は左右ロブの底接点 (cx ± dx, my + r) から下方に伸びる
+  --        (外端 cx ± (dx + r) から伸ばすと、その x ではロブが ω 下端
+  --         まで存在しないので壁が宙ぶらりんに見える)
+  --      ・床はその壁の下端を渡し、幅は左壁外〜右壁外
+  --    閾値前: 純粋な ω のまま (mouth_open が 0.4 弱までは見た目変化なし)
+  let omega_bottom = my + r
+  let floor_y = my + 1 + ext*2
+  if floor_y > omega_bottom then
+    let visible_ext = floor_y - omega_bottom + 1
+    let half_t = floor(thick / 2)
+    let wall_xl = cx - dx - half_t
+    let wall_xr = cx + dx - half_t
+    fill_rect(wall_xl, omega_bottom, thick, visible_ext, color)
+    fill_rect(wall_xr, omega_bottom, thick, visible_ext, color)
+    fill_rect(wall_xl, floor_y, dx * 2 + thick, thick, color)
+  end
 
   end_group()
 end
