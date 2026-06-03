@@ -45,9 +45,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # build.sh stamps nothing from git, but the avatar sources live in
-          # submodule-free paths, so a shallow checkout is fine.
-          submodules: false
+          # tl_expected is a submodule that the avatar_vm now depends on
+          # (`<tl/expected.hpp>`). M5GFX / M5Unified aren't touched by the
+          # WASM build but checking everything keeps things simple.
+          submodules: recursive
 
       - name: Build avatar preview module (Emscripten/WASM)
         run: |
