@@ -22,6 +22,7 @@
 #include "atom_status.hpp"
 #include "audio_stream_sink.hpp"
 #include "avatar/expression.hpp"
+#include "avatar_vm/storage.hpp"
 #include "battery.hpp"
 #include "board/board.hpp"
 #include "board/si12t_touch.hpp"
@@ -574,6 +575,30 @@ extern "C" void app_main()
     stackchan::wifi_config::set_servo_range_mode_sink(&on_servo_range_mode);
     stackchan::wifi_config::set_servo_positions_getter(&servo_positions);
     stackchan::wifi_config::set_board_kind(static_cast<std::uint8_t>(board.kind()));
+
+    // Avatar face DSL bytecode: restore any user-uploaded override from NVS
+    // (no-op when the slot is empty), then register the upload sink so
+    // POST /api/avatar-dsl can hot-swap the bytecode live. The render task
+    // polls SharedState::face_bytecode_version() and feeds the bytes into
+    // Avatar::load_face_bytecode (or reset_face_bytecode() when empty).
+    if (auto loaded = stackchan::avatar_vm::storage::load(); loaded) {
+        ESP_LOGI(kTag, "avatar_vm: restored %u bytes of face bytecode from NVS",
+                 static_cast<unsigned>(loaded->size()));
+        g_state->set_face_bytecode(*loaded);
+    } else if (loaded.error() != stackchan::avatar_vm::storage::StorageError::NotFound) {
+        ESP_LOGW(kTag, "avatar_vm: load failed (%s) — using firmware default",
+                 stackchan::avatar_vm::storage::to_string(loaded.error()));
+    }
+    stackchan::wifi_config::set_avatar_bytecode_sink(
+        [](const std::uint8_t* data, std::size_t len) -> bool {
+            if (g_state == nullptr) return false;
+            if (data == nullptr || len == 0) {
+                g_state->clear_face_bytecode();
+            } else {
+                g_state->set_face_bytecode({data, len});
+            }
+            return true;
+        });
 
     // Wi-Fi live audio (RTP/L16 today). Like the BLE sink, mutually exclusive
     // with the conversation backend, so it self-disables when voice chat is on.

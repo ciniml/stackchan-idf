@@ -170,6 +170,52 @@
     font-family: ui-monospace, SFMono-Regular, monospace;
     margin-top: 0.3rem;
   }
+  /* Avatar DSL editor. Shares the .ota-bar pattern so the look matches. */
+  #dsl-src {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 380px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    tab-size: 2;
+    white-space: pre;
+    padding: 0.45rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    resize: vertical;
+  }
+  #dsl-msg {
+    font-size: 0.78rem;
+    color: #666;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    min-height: 1.1em;
+    margin: 0.4rem 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  #dsl-msg.ok { color: #2e7d32; }
+  #dsl-msg.err { color: #c62828; }
+  .dsl-btnrow {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin-top: 0.4rem;
+  }
+  .dsl-btnrow button, .dsl-btnrow label.filebtn {
+    flex: 1 1 auto;
+    padding: 0.45rem 0.9rem;
+    font-size: 0.85rem;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    text-align: center;
+  }
+  .dsl-btnrow button.primary { background: #1565c0; color: white; font-weight: 600; }
+  .dsl-btnrow button.secondary { background: #e0e0e0; color: #333; }
+  .dsl-btnrow button.danger { background: #b71c1c; color: white; }
+  .dsl-btnrow button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .dsl-btnrow label.filebtn { background: #e0e0e0; color: #333; }
   .actions { margin-top: 1.5rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
   button {
     padding: 0.55rem 1.2rem;
@@ -406,6 +452,32 @@
     </div>
   </details>
 
+  <details class="jtts-section" id="avatar-dsl-section">
+    <summary>顔描画 DSL (Avatar)</summary>
+    <p class="hint" style="margin-bottom:0.5rem">
+      アバターの顔の描画ロジックを Lua 風 DSL で書いて、ブラウザ内でバイトコード化
+      → 実機に送信して即時反映します。NVS に保存されるので再起動後も維持。
+      <a href="/avatar_dsl.html" target="_blank" rel="noopener" style="white-space:nowrap">文法ガイド</a>
+      ／
+      <a href="https://github.com/ciniml/stackchan-idf/blob/main/assets/default_face.avdsl"
+         target="_blank" rel="noopener" style="white-space:nowrap">デフォルト顔ソース</a>
+    </p>
+    <textarea id="dsl-src" spellcheck="false" autocomplete="off"
+              autocapitalize="off" autocorrect="off"></textarea>
+    <div id="dsl-msg">DSL コンパイラ未起動</div>
+    <div class="dsl-btnrow">
+      <button type="button" class="primary" id="btn-dsl-send">コンパイル &amp; 送信</button>
+      <button type="button" class="secondary" id="btn-dsl-default">エディタをデフォルトに</button>
+      <button type="button" class="danger" id="btn-dsl-reset">実機をデフォルトに戻す</button>
+    </div>
+    <div class="dsl-btnrow">
+      <button type="button" class="secondary" id="btn-dsl-download">.avbc ダウンロード</button>
+      <button type="button" class="secondary" id="btn-dsl-download-src">.avdsl ダウンロード</button>
+      <label class="filebtn" for="dsl-load">.avdsl 読込</label>
+      <input type="file" id="dsl-load" accept=".avdsl,text/plain" style="display:none">
+    </div>
+  </details>
+
   <details class="jtts-section" id="ota-section">
     <summary>ファームウェア更新 (OTA)</summary>
     <p class="hint" style="margin-bottom:0.5rem">
@@ -434,6 +506,19 @@
     信頼できないネットワークでは BLE 版の設定ツールを使ってください。
   </p>
 </div>
+
+<!-- DSL compiler bundle (lexer/parser/emitter/compile/opcodes from
+     tools/avatar_dsl/), concatenated into an IIFE that hangs the public API
+     on window.AvatarDsl. Injected at firmware build time by
+     tools/avatar_dsl/inject.mjs (see components/wifi_config_service/CMakeLists.txt).
+     Placed BEFORE the main page script so window.AvatarDsl is defined when
+     setupDslEditor() runs. -->
+<script>/*{{AVATAR_DSL_BUNDLE}}*/</script>
+<!-- Default DSL source text (assets/default_face.avdsl), inlined at build
+     time so the textarea is pre-populated without any extra HTTP round-trip. -->
+<script>
+  window.AVATAR_DSL_DEFAULT_SOURCE = "{{AVATAR_DSL_DEFAULT_SOURCE}}";
+</script>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -847,6 +932,133 @@ async function startOta() {
     $('btn-apply').disabled = false;
   }
 }
+
+// --- Avatar DSL editor + send -------------------------------------------
+
+(function setupDslEditor() {
+  const srcEl = $('dsl-src');
+  const msg = $('dsl-msg');
+  const sendBtn = $('btn-dsl-send');
+  const setMsg = (txt, kind = '') => { msg.textContent = txt; msg.className = kind; };
+
+  if (!window.AvatarDsl || typeof window.AvatarDsl.compile !== 'function') {
+    setMsg('DSL コンパイラ バンドルが読込み失敗 (firmware ビルド不一致の可能性)', 'err');
+    return;
+  }
+  srcEl.value = window.AVATAR_DSL_DEFAULT_SOURCE || '';
+  setMsg('準備完了 — Ctrl/Cmd+Enter または「コンパイル & 送信」で反映');
+
+  let lastBuf = null; // last successfully-compiled bytecode (for download)
+
+  function compileNow() {
+    const t0 = performance.now();
+    let buf;
+    try { buf = window.AvatarDsl.compile(srcEl.value); }
+    catch (e) {
+      setMsg('コンパイル エラー: ' + e.message, 'err');
+      return null;
+    }
+    const compileMs = performance.now() - t0;
+    setMsg(`OK — ${buf.byteLength} bytes, コンパイル ${compileMs.toFixed(1)} ms`, 'ok');
+    lastBuf = buf;
+    return buf;
+  }
+
+  async function compileAndSend() {
+    const buf = compileNow();
+    if (!buf) return;
+    sendBtn.disabled = true;
+    const oldText = sendBtn.textContent;
+    sendBtn.textContent = '送信中…';
+    try {
+      const r = await fetch('/api/avatar-dsl', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: buf,
+      });
+      const body = await r.text();
+      if (!r.ok) throw new Error(`HTTP ${r.status}: ${body || r.statusText}`);
+      let parsed;
+      try { parsed = JSON.parse(body); } catch { parsed = null; }
+      if (parsed && parsed.ok) {
+        const live = parsed.live === false ? ' (NVS のみ書込、live 反映は失敗)' : '';
+        setMsg(`送信完了 — NVS に ${parsed.saved} バイト保存${live}`, 'ok');
+        log(`Avatar DSL 送信 (${buf.byteLength} → NVS ${parsed.saved})`, 'ok');
+      } else {
+        setMsg('送信完了 — レスポンス: ' + body, 'ok');
+        log('Avatar DSL 送信 OK', 'ok');
+      }
+    } catch (e) {
+      setMsg('送信エラー: ' + e.message, 'err');
+      log('Avatar DSL 送信 失敗: ' + e.message, 'err');
+    } finally {
+      sendBtn.textContent = oldText;
+      sendBtn.disabled = false;
+    }
+  }
+
+  sendBtn.addEventListener('click', compileAndSend);
+  // Ctrl/Cmd+Enter inside the textarea triggers compile+send.
+  srcEl.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      compileAndSend();
+    }
+  });
+
+  $('btn-dsl-default').addEventListener('click', () => {
+    srcEl.value = window.AVATAR_DSL_DEFAULT_SOURCE || '';
+    lastBuf = null;
+    setMsg('エディタをデフォルト ソースに戻しました (送信はされていません)');
+  });
+
+  $('btn-dsl-reset').addEventListener('click', async () => {
+    if (!confirm('実機の顔を firmware 内蔵 デフォルトに戻します (NVS の override を削除)。よろしいですか?')) return;
+    try {
+      const r = await fetch('/api/avatar-dsl/reset', { method: 'POST' });
+      const body = await r.text();
+      if (!r.ok) throw new Error(`HTTP ${r.status}: ${body || r.statusText}`);
+      setMsg('実機をデフォルト顔に戻しました', 'ok');
+      log('Avatar DSL リセット', 'ok');
+    } catch (e) {
+      setMsg('リセット失敗: ' + e.message, 'err');
+      log('Avatar DSL リセット失敗: ' + e.message, 'err');
+    }
+  });
+
+  $('btn-dsl-download').addEventListener('click', () => {
+    let buf = lastBuf;
+    if (!buf) buf = compileNow();
+    if (!buf) return;
+    const blob = new Blob([buf], { type: 'application/octet-stream' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'face.avbc';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  $('btn-dsl-download-src').addEventListener('click', () => {
+    const blob = new Blob([srcEl.value], { type: 'text/plain;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'face.avdsl';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  $('dsl-load').addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      srcEl.value = r.result;
+      setMsg('読込みました — 「コンパイル & 送信」で実機に反映してください');
+    };
+    r.readAsText(f);
+    e.target.value = '';
+  });
+})();
 
 // --- Wire up ---
 

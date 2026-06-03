@@ -196,4 +196,9 @@ void set_board_kind(std::uint8_t kind)
     http::set_board_kind(kind);
 }
 
+void set_avatar_bytecode_sink(AvatarBytecodeSink sink)
+{
+    http::set_avatar_bytecode_sink(std::move(sink));
+}
+
 } // namespace stackchan::wifi_config

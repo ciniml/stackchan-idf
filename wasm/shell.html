@@ -44,6 +44,24 @@
   #preset-json { width: 100%; box-sizing: border-box; font-family: monospace; font-size: .75rem;
                  background: #1b1f24; color: #e6e6e6; border: 1px solid #3a4048; border-radius: 4px;
                  padding: .4rem; margin-bottom: .5rem; white-space: pre; }
+  .dslpanel { flex: 1 1 480px; min-width: 320px; background: #262b31; border-radius: 8px;
+              padding: 1rem; }
+  .dslpanel h2 { font-size: .95rem; margin: 0 0 .5rem; color: #9fd3ff; }
+  #dsl-src { width: 100%; box-sizing: border-box; height: 480px; font-family: ui-monospace,
+             SFMono-Regular, Menlo, monospace; font-size: .78rem; line-height: 1.35;
+             background: #1b1f24; color: #e6e6e6; border: 1px solid #3a4048; border-radius: 4px;
+             padding: .5rem; tab-size: 2; resize: vertical; white-space: pre; }
+  #dsl-msg { font-size: .78rem; color: #8a929b; margin: .4rem 0 .6rem; min-height: 1.1em;
+             white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, monospace; }
+  #dsl-msg.ok { color: #7fd47f; }
+  #dsl-msg.err { color: #f08080; }
+  .dslpanel .btns { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .4rem; }
+  .dslpanel .btns button { flex: 1 1 auto; padding: .45rem; font-size: .85rem;
+                           background: #2d6cdf; color: #fff; border: none; border-radius: 6px;
+                           cursor: pointer; }
+  .dslpanel .btns button:hover { background: #3a78e8; }
+  .dslpanel .btns button.alt { background: #444b54; }
+  .dslpanel .btns button.alt:hover { background: #525a64; }
 </style>
 </head>
 <body>
@@ -232,8 +250,45 @@
         </div>
       </fieldset>
     </div>
+    <div class="dslpanel">
+      <h2>顔描画 DSL — 編集して即時反映</h2>
+      <p style="font-size:.78rem;color:#cdd3da;margin:0 0 .6rem">
+        テキストを書き換えて「コンパイル &amp; 適用」ボタンを押すか
+        <kbd>Ctrl/Cmd</kbd>+<kbd>Enter</kbd> で即時反映。
+        <a href="https://github.com/ciniml/stackchan-idf/blob/main/tools/avatar_dsl/README.md"
+           target="_blank" rel="noopener" style="color:#9fd3ff">文法ガイド</a>
+        ／ <a href="https://github.com/ciniml/stackchan-idf/blob/main/assets/default_face.avdsl"
+              target="_blank" rel="noopener" style="color:#9fd3ff">デフォルト顔ソース</a>。
+        実機書込みは生成バイトコードを
+        <code>POST /api/avatar-dsl</code> に送信。
+      </p>
+      <textarea id="dsl-src" spellcheck="false" autocomplete="off"
+                autocapitalize="off" autocorrect="off"></textarea>
+      <div id="dsl-msg">DSL コンパイラ未起動</div>
+      <div class="btns">
+        <button type="button" id="dsl-apply">コンパイル &amp; 適用</button>
+        <button type="button" class="alt" id="dsl-default">デフォルトに戻す</button>
+      </div>
+      <div class="btns">
+        <button type="button" class="alt" id="dsl-download">.avbc ダウンロード</button>
+        <button type="button" class="alt" id="dsl-download-src">.avdsl ダウンロード</button>
+        <label class="filebtn" for="dsl-load" style="flex:1 1 auto;text-align:center;
+               padding:.45rem;font-size:.85rem;background:#444b54;color:#fff;
+               border-radius:6px;cursor:pointer">.avdsl 読込</label>
+        <input type="file" id="dsl-load" accept=".avdsl,text/plain" style="display:none">
+      </div>
+    </div>
   </div>
   <div id="status">WASM 読み込み中…</div>
+
+  <!-- Inlined JS DSL compiler bundle (lexer/parser/emitter/compile/opcodes,
+       concatenated by wasm/build.sh, exposes window.AvatarDsl.compile()). -->
+  <script>/*{{AVATAR_DSL_BUNDLE}}*/</script>
+  <!-- Default DSL source text (assets/default_face.avdsl), inlined at build
+       time so the textarea is pre-populated even in SINGLE_FILE mode. -->
+  <script>
+    window.AVATAR_DSL_DEFAULT_SOURCE = "{{AVATAR_DSL_DEFAULT_SOURCE}}";
+  </script>
 
 <script>
   var Module = {
@@ -398,6 +453,114 @@
 
     applyParams();
     applySize(); // apply the initial (or URL-seeded) screen size + fit display
+
+    // ---- DSL editor -------------------------------------------------------
+    // The textarea starts pre-populated with the build-time default DSL
+    // source (assets/default_face.avdsl). Compiling here uses the JS bundle
+    // inlined above (window.AvatarDsl.compile), and applies the bytecode to
+    // the live preview via avatar_load_bytecode (a thin wrapper around the
+    // VM's hot-swap path — same code that runs on the firmware after a
+    // POST /api/avatar-dsl).
+    (function setupDslEditor() {
+      var srcEl = $('dsl-src');
+      var msg = $('dsl-msg');
+      var setMsg = function (txt, kind) {
+        msg.textContent = txt;
+        msg.className = kind || '';
+      };
+      if (!window.AvatarDsl || typeof window.AvatarDsl.compile !== 'function') {
+        setMsg('DSL コンパイラのバンドルが読み込めていません (build/avatar_web の再ビルドが必要)', 'err');
+        return;
+      }
+      srcEl.value = window.AVATAR_DSL_DEFAULT_SOURCE || '';
+      setMsg('準備完了 — Ctrl/Cmd+Enter または「コンパイル & 適用」で反映');
+
+      // Apply compiled bytecode to the WASM avatar. Copies the bytes into the
+      // Module heap, calls avatar_load_bytecode, then frees.
+      function applyBytecode(buf) {
+        var u8 = new Uint8Array(buf);
+        var ptr = Module._malloc(u8.length);
+        if (!ptr) { setMsg('malloc 失敗 (' + u8.length + ' bytes)', 'err'); return false; }
+        try {
+          Module.HEAPU8.set(u8, ptr);
+          var ok = Module._avatar_load_bytecode(ptr, u8.length);
+          if (!ok) { setMsg('avatar_load_bytecode が拒否 — バイトコードが不正の可能性', 'err'); return false; }
+        } finally {
+          Module._free(ptr);
+        }
+        return true;
+      }
+
+      var lastBuf = null; // last successfully-compiled bytecode (for download)
+
+      function compileAndApply() {
+        var src = srcEl.value;
+        var t0 = performance.now();
+        var buf;
+        try { buf = window.AvatarDsl.compile(src); }
+        catch (e) {
+          setMsg('コンパイル エラー: ' + e.message, 'err');
+          return;
+        }
+        var compileMs = performance.now() - t0;
+        if (!applyBytecode(buf)) return;
+        lastBuf = buf;
+        setMsg('OK — ' + buf.byteLength + ' bytes, コンパイル ' + compileMs.toFixed(1) + ' ms', 'ok');
+      }
+
+      $('dsl-apply').addEventListener('click', compileAndApply);
+      // Ctrl/Cmd+Enter inside the textarea triggers a compile+apply.
+      srcEl.addEventListener('keydown', function (e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+          e.preventDefault();
+          compileAndApply();
+        }
+      });
+
+      $('dsl-default').addEventListener('click', function () {
+        srcEl.value = window.AVATAR_DSL_DEFAULT_SOURCE || '';
+        Module._avatar_reset_bytecode();
+        lastBuf = null;
+        setMsg('デフォルト顔に戻しました', 'ok');
+      });
+
+      $('dsl-download').addEventListener('click', function () {
+        // If the user hasn't compiled this session, compile once on demand so
+        // the download reflects the current textarea (not whatever was applied
+        // before the page loaded).
+        if (lastBuf == null) {
+          try { lastBuf = window.AvatarDsl.compile(srcEl.value); }
+          catch (e) { setMsg('コンパイル エラー: ' + e.message, 'err'); return; }
+        }
+        var blob = new Blob([lastBuf], { type: 'application/octet-stream' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'face.avbc';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+      });
+
+      $('dsl-download-src').addEventListener('click', function () {
+        var blob = new Blob([srcEl.value], { type: 'text/plain;charset=utf-8' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'face.avdsl';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+      });
+
+      $('dsl-load').addEventListener('change', function (e) {
+        var f = e.target.files[0];
+        if (!f) return;
+        var r = new FileReader();
+        r.onload = function () {
+          srcEl.value = r.result;
+          setMsg('読込みました — 「コンパイル & 適用」で反映してください');
+        };
+        r.readAsText(f);
+        e.target.value = '';
+      });
+    })();
 
     function frame() {
       Module._avatar_tick(performance.now());

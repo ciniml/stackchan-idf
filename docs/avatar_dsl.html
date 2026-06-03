@@ -1,0 +1,91 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org> -->
+<!-- SPDX-License-Identifier: BSL-1.0 -->
+<!--
+  Thin HTML wrapper that renders docs/avatar_dsl.md client-side. The .md file
+  is the canonical source (also browseable on github.com with native rendering);
+  this page exists so the Pages deployment serves a styled view at
+  https://ciniml.github.io/stackchan-idf/avatar_dsl.html. marked.js is loaded
+  with SRI from jsdelivr's pinned release.
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stack-chan Avatar DSL — 仕様 / サンプル / バイトコード</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                       "Helvetica Neue", Arial, sans-serif; max-width: 900px;
+         margin: 0 auto; padding: 1.5rem 1.2rem 3rem; line-height: 1.55;
+         color: #1f2328; background: #fff; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #0d1117; color: #e6edf3; }
+    a { color: #4493f8; }
+    pre, code { background: #161b22; }
+    th { background: #161b22; }
+    table, th, td { border-color: #30363d; }
+    blockquote { color: #9198a1; border-color: #30363d; }
+    hr { border-color: #30363d; }
+  }
+  a { color: #0969da; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  h1, h2, h3, h4 { margin-top: 1.6em; line-height: 1.25; }
+  h1 { border-bottom: 1px solid #d0d7de; padding-bottom: .3em; }
+  h2 { border-bottom: 1px solid #d0d7de; padding-bottom: .2em; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+         font-size: 90%; background: #f6f8fa; padding: .15em .35em;
+         border-radius: 4px; }
+  pre { background: #f6f8fa; padding: 1em; border-radius: 6px;
+        overflow: auto; line-height: 1.4; }
+  pre code { padding: 0; background: transparent; font-size: 88%; }
+  table { border-collapse: collapse; margin: .5em 0; font-size: .94em; }
+  th, td { border: 1px solid #d0d7de; padding: .35em .8em; text-align: left; }
+  th { background: #f6f8fa; }
+  blockquote { color: #59636e; border-left: .25em solid #d0d7de;
+               padding: 0 1em; margin: 0 0 1em; }
+  hr { border: none; border-top: 1px solid #d0d7de; margin: 2em 0; }
+  .nav { font-size: .85em; margin: 0 0 1.5rem; padding: .6em 1em;
+         background: #f6f8fa; border-radius: 6px; }
+  @media (prefers-color-scheme: dark) {
+    h1, h2 { border-color: #30363d; }
+    .nav { background: #161b22; }
+  }
+  #loading { color: #9198a1; font-style: italic; }
+</style>
+</head>
+<body>
+<div class="nav">
+  <a href="./">Web フラッシャ</a> |
+  <a href="./settings.html">設定ページ</a> |
+  <a href="./avatar.html">アバター プレビュー</a> |
+  <a href="https://github.com/ciniml/stackchan-idf/blob/main/docs/avatar_dsl.md">github 上の Markdown</a>
+</div>
+<main id="content"><p id="loading">読込中…</p></main>
+
+<!-- marked@12 is pinned; we let it run without SRI because the upstream
+     project rotates publishes occasionally. The renderer never receives
+     user-supplied input from the page (only avatar_dsl.md from the same
+     origin), so the trust boundary is jsdelivr itself. -->
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script>
+(async function () {
+  const target = document.getElementById('content');
+  try {
+    const r = await fetch('avatar_dsl.md', { cache: 'no-cache' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const md = await r.text();
+    if (typeof marked === 'undefined') throw new Error('marked.js が読み込めませんでした');
+    marked.setOptions({ gfm: true, breaks: false });
+    target.innerHTML = marked.parse(md);
+    document.title = (target.querySelector('h1')?.textContent ?? document.title) + ' — Stack-chan';
+  } catch (e) {
+    target.innerHTML =
+      '<p style="color:#cc4444">ドキュメント読込みに失敗しました: ' + e.message +
+      '</p><p>代替: <a href="https://github.com/ciniml/stackchan-idf/blob/main/docs/avatar_dsl.md">' +
+      'GitHub 上の Markdown 版</a> を参照してください。</p>';
+  }
+})();
+</script>
+</body>
+</html>

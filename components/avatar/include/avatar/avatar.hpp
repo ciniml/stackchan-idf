@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string_view>
 
 #include <M5GFX.h>
@@ -55,6 +56,16 @@ public:
     // (PSRAM-less) strategy after the panel was used by something else — e.g.
     // returning from the on-device UI. No-op cost on the buffered strategy.
     void request_full_repaint() noexcept;
+
+    // Hot-swap the face bytecode. `bytes` must hold an `AVDS` v1 file (see
+    // assets/default_face.avdsl / tools/avatar_dsl/). Returns true on success;
+    // on failure the previous bytecode (or the firmware-embedded default) is
+    // left in place and an ESP_LOG error describes the decode error. The buffer
+    // is copied internally so the caller may free `bytes` immediately.
+    bool load_face_bytecode(std::span<const std::uint8_t> bytes);
+    // Revert to the firmware-embedded default face. Always succeeds (the
+    // default bytecode is validated at link time).
+    void reset_face_bytecode() noexcept;
 
 private:
     class Impl;

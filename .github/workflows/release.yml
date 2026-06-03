@@ -60,6 +60,18 @@ jobs:
           echo "Current ref: ${GITHUB_REF}"
           echo "Board: ${{ matrix.board }}"
 
+      - name: Install Node.js (avatar DSL compiler)
+        shell: bash
+        # components/avatar_vm/CMakeLists.txt invokes `node tools/avatar_dsl/cli.mjs`
+        # at build time to compile the default avatar face DSL into the
+        # bytecode that gets embedded into the firmware. The espressif/idf
+        # Debian image does not ship Node, so install it from the distro repo
+        # (the compiler is plain ESM that only needs a recent v18+).
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends nodejs
+          node --version
+
       - name: Apply M5Unified patches
         shell: bash
         run: |

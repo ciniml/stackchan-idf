@@ -3,6 +3,10 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+
 #include <config_service/config_service.hpp>
 #include <tl/expected.hpp>
 
@@ -43,5 +47,12 @@ void set_servo_positions_getter(config::ServoPositionsGetter getter);
 // hide controls that don't apply to the current hardware. See
 // config_service::set_board_kind for the byte values.
 void set_board_kind(std::uint8_t kind);
+
+// Sink called by `POST /api/avatar-dsl` after the bytecode has been
+// validated and persisted to NVS. The app passes Avatar::load_face_bytecode
+// here so an upload takes effect live, without rebooting.
+// Returns true on success (bytecode applied), false on failure.
+using AvatarBytecodeSink = std::function<bool(const std::uint8_t* data, std::size_t len)>;
+void set_avatar_bytecode_sink(AvatarBytecodeSink sink);
 
 } // namespace stackchan::wifi_config

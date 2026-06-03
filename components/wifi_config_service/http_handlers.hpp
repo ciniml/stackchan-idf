@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <config_service/config_service.hpp>
+#include <wifi_config_service/wifi_config_service.hpp>
 
 #include <esp_http_server.h>
 
@@ -27,5 +27,9 @@ void set_servo_positions_getter(config::ServoPositionsGetter getter);
 
 // Record the booted board kind for /api/status. See wifi_config_service.hpp.
 void set_board_kind(std::uint8_t kind);
+
+// Set the avatar bytecode sink (called by POST /api/avatar-dsl after the
+// payload has been validated and persisted). See wifi_config_service.hpp.
+void set_avatar_bytecode_sink(AvatarBytecodeSink sink);
 
 } // namespace stackchan::wifi_config::http

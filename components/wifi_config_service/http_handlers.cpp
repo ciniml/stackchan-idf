@@ -3,6 +3,7 @@
 
 #include "http_handlers.hpp"
 
+#include <avatar_vm/storage.hpp>
 #include <config_service/config_store.hpp>
 #include <config_service/ota.hpp>
 
@@ -65,6 +66,7 @@ esp_timer_handle_t g_restart_timer = nullptr;
 // live present-positions for the capture UI.
 config::ServoRangeModeSink g_servo_range_mode_sink = nullptr;
 config::ServoPositionsGetter g_servo_positions_getter = nullptr;
+AvatarBytecodeSink g_avatar_bytecode_sink = nullptr;
 bool g_servo_range_mode = false;
 // Board variant (mirrors board::BoardKind). Defaults to 0 = M5Base for
 // compat — overwritten by main at boot.
@@ -472,6 +474,54 @@ esp_err_t handle_ota_data_post(httpd_req_t* req)
     return send_json(req, config::ota::handle_data_chunk({body.data(), body.size()}));
 }
 
+// POST /api/avatar-dsl — body is a single complete `.avbc` (no chunking; HTTP
+// can carry the whole bytecode in one request). Validates, persists to NVS,
+// and applies live via the registered sink. Returns a JSON status. NVS write
+// happens before sink invocation so a sink failure leaves the new face active
+// after the next reboot anyway.
+esp_err_t handle_avatar_dsl_post(httpd_req_t* req)
+{
+    std::vector<std::uint8_t> body;
+    if (read_body(req, body, avatar_vm::storage::kMaxBytecodeBytes) != ESP_OK) return ESP_OK;
+
+    auto save_r = avatar_vm::storage::save(body);
+    if (!save_r) {
+        ESP_LOGE(kTag, "avatar-dsl save: %s", avatar_vm::storage::to_string(save_r.error()));
+        return send_error(req, "400 Bad Request",
+                          avatar_vm::storage::to_string(save_r.error()));
+    }
+
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    AvatarBytecodeSink sink = g_avatar_bytecode_sink;
+    xSemaphoreGive(g_mutex);
+
+    bool live_ok = true;
+    if (sink) live_ok = sink(body.data(), body.size());
+
+    char buf[96];
+    std::snprintf(buf, sizeof(buf),
+                  R"({"ok":true,"saved":%u,"live":%s})",
+                  static_cast<unsigned>(body.size()), live_ok ? "true" : "false");
+    return send_json(req, buf);
+}
+
+// POST /api/avatar-dsl/reset — clears the NVS override and reapplies the
+// firmware-embedded default face live.
+esp_err_t handle_avatar_dsl_reset_post(httpd_req_t* req)
+{
+    auto r = avatar_vm::storage::clear();
+    if (!r) {
+        return send_error(req, "500 Internal Server Error",
+                          avatar_vm::storage::to_string(r.error()));
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    AvatarBytecodeSink sink = g_avatar_bytecode_sink;
+    xSemaphoreGive(g_mutex);
+    // Passing length=0 is the documented "revert to default" signal.
+    if (sink) (void)sink(nullptr, 0);
+    return send_json(req, R"({"ok":true})");
+}
+
 // --- Static root ---
 
 esp_err_t handle_root_get(httpd_req_t* req)
@@ -522,6 +572,8 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/ota/status",      HTTP_GET,  handle_ota_status_get);
     add(server, "/api/ota/control",     HTTP_POST, handle_ota_control_post);
     add(server, "/api/ota/data",        HTTP_POST, handle_ota_data_post);
+    add(server, "/api/avatar-dsl",       HTTP_POST, handle_avatar_dsl_post);
+    add(server, "/api/avatar-dsl/reset", HTTP_POST, handle_avatar_dsl_reset_post);
 }
 
 void set_wifi_connected(bool connected)
@@ -572,6 +624,17 @@ void set_board_kind(std::uint8_t kind)
     }
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     g_board_kind = kind;
+    xSemaphoreGive(g_mutex);
+}
+
+void set_avatar_bytecode_sink(AvatarBytecodeSink sink)
+{
+    if (g_mutex == nullptr) {
+        g_avatar_bytecode_sink = std::move(sink);
+        return;
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_avatar_bytecode_sink = std::move(sink);
     xSemaphoreGive(g_mutex);
 }
 

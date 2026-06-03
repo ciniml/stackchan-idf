@@ -11,10 +11,14 @@ on:
       # into _site/. Without this trigger the hosted settings page stays
       # stale when settings.html is the only file that changed.
       - 'tools/settings.html'
-      # The avatar preview module (avatar_module.js) embedded in settings.html
-      # is built from these on every deploy; rebuild when the source changes.
+      # The avatar preview module (avatar_module.js) and standalone
+      # avatar.html are built from these on every deploy; rebuild when the
+      # source, the VM, the JS DSL compiler or the default DSL changes.
       - 'wasm/**'
       - 'components/avatar/**'
+      - 'components/avatar_vm/**'
+      - 'tools/avatar_dsl/**'
+      - 'assets/default_face.avdsl'
       - '.github/workflows/pages.yml'
   release:
     types: [published]
@@ -46,9 +50,11 @@ jobs:
         run: |
           set -euo pipefail
           # Same Docker image + script used locally (wasm/build.sh). Produces
-          # build/avatar_web/avatar_module.js (single-file, wasm embedded).
+          # build/avatar_web/avatar_module.js (single-file, wasm embedded) +
+          # avatar.html (standalone shell with the DSL editor).
           bash wasm/build.sh
           test -f build/avatar_web/avatar_module.js
+          test -f build/avatar_web/avatar.html
 
       - name: Stage docs/ + tools/settings.html + avatar module into _site/
         run: |
@@ -61,6 +67,9 @@ jobs:
           cp tools/settings.html _site/settings.html
           # Avatar preview module embedded by settings.html (built above).
           cp build/avatar_web/avatar_module.js _site/avatar_module.js
+          # Standalone preview page (shell UI + canvas + DSL editor) — same
+          # WASM blob inlined via SINGLE_FILE, no sibling asset deps.
+          cp build/avatar_web/avatar.html _site/avatar.html
 
       - name: Stage release firmware ZIPs into _site/firmware/<tag>/
         env:

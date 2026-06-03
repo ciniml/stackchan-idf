@@ -105,6 +105,7 @@ void render_task_entry(void* arg)
     int last_expression = -1;
     std::uint32_t last_balloon_version = 0;
     std::uint32_t last_face_config_version = 0;
+    std::uint32_t last_face_bytecode_version = 0;
     std::string balloon_scratch;
     bool balloon_pending = false;
     bool ui_was_active = false;
@@ -141,6 +142,20 @@ void render_task_entry(void* arg)
         if (face_config_version != last_face_config_version) {
             avatar.set_face_tuning(parse_face_tuning(args.state->snapshot_face_config()));
             last_face_config_version = face_config_version;
+        }
+
+        // Live face DSL bytecode swap. The HTTP / BLE upload sinks push the
+        // raw .avbc into SharedState here (off the host task), and we apply it
+        // — empty payload means "revert to firmware default".
+        const std::uint32_t face_bc_version = args.state->face_bytecode_version();
+        if (face_bc_version != last_face_bytecode_version) {
+            auto bc = args.state->snapshot_face_bytecode();
+            if (bc.empty()) {
+                avatar.reset_face_bytecode();
+            } else {
+                avatar.load_face_bytecode(bc);
+            }
+            last_face_bytecode_version = face_bc_version;
         }
 
         const int expr = args.state->expression.load(std::memory_order_relaxed);

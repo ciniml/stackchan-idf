@@ -7,9 +7,11 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "avatar/expression.hpp"
 
@@ -200,6 +202,32 @@ public:
         return face_config_json_;
     }
 
+    // Live avatar DSL bytecode (the .avbc binary the avatar_vm runs). Set at
+    // boot from NVS (empty if none persisted), and replaced live via the BLE /
+    // Wi-Fi upload sinks. The render task polls the version, and on a bump
+    // calls Avatar::load_face_bytecode (or reset_face_bytecode when empty).
+    void set_face_bytecode(std::span<const std::uint8_t> bytes)
+    {
+        std::lock_guard lock{face_bytecode_mutex_};
+        face_bytecode_.assign(bytes.begin(), bytes.end());
+        face_bytecode_version_.fetch_add(1, std::memory_order_release);
+    }
+    void clear_face_bytecode()
+    {
+        std::lock_guard lock{face_bytecode_mutex_};
+        face_bytecode_.clear();
+        face_bytecode_version_.fetch_add(1, std::memory_order_release);
+    }
+    std::uint32_t face_bytecode_version() const noexcept
+    {
+        return face_bytecode_version_.load(std::memory_order_acquire);
+    }
+    std::vector<std::uint8_t> snapshot_face_bytecode() const
+    {
+        std::lock_guard lock{face_bytecode_mutex_};
+        return face_bytecode_;
+    }
+
     // Returns the current balloon version (incremented on every change).
     std::uint32_t balloon_version() const noexcept
     {
@@ -230,6 +258,10 @@ private:
     mutable std::mutex face_config_mutex_;
     std::string face_config_json_;
     std::atomic<std::uint32_t> face_config_version_{0};
+
+    mutable std::mutex face_bytecode_mutex_;
+    std::vector<std::uint8_t> face_bytecode_;
+    std::atomic<std::uint32_t> face_bytecode_version_{0};
 };
 
 } // namespace stackchan::app
