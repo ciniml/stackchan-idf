@@ -122,16 +122,22 @@ tl::expected<Board, Error> Board::begin()
 
     Board board;
     board.impl_ = std::make_shared<Impl>(kind, std::move(expander), std::move(touch));
-    // LED strip init is intentionally skipped right now: writes to what the
-    // upstream M5 BSP calls REG_LED_CFG (0x24) and REG_LED_RAM_START (0x30)
-    // turned out to brick the LCD backlight on this PY32 firmware revision —
-    // so either the chip at 0x6F isn't what BSP expects, or those registers
-    // do something else here. Until we have a verified register map we leave
-    // the LED hardware untouched. led_strip() still returns the instance for
-    // any explicit caller, but Board doesn't drive it.
+    // LED strip init. Earlier attempts left the strip dark because the host-
+    // side data format was wrong (3-byte GRB per LED). The PY32 firmware
+    // actually expects 2-byte RGB565 little-endian per LED — see
+    // docs/py32_ioexpander.md §6. The separate LCD-backlight blackout incident
+    // came from an I2C scan touching AXP2101 (0x34); the scan code is no
+    // longer in the tree and accessing 0x34 is forbidden — see CLAUDE.md /
+    // the docs §1.
+    LedStrip* led = board.impl_->led();
+    if (led != nullptr) {
+        if (auto r = led->begin(); !r) {
+            ESP_LOGW(kTag, "LED strip begin failed: %d", static_cast<int>(r.error()));
+        }
+    }
     ESP_LOGI(kTag, "board initialized: kind=%s (servo power: OFF, leds: %s)",
              kind == BoardKind::M5Base ? "M5Base" : "TakaoBase",
-             board.impl_->led() ? "present (driver disabled pending register confirmation)" : "none");
+             led != nullptr ? "ready" : "none");
     return board;
 }
 

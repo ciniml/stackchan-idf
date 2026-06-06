@@ -30,6 +30,7 @@
 #include <wifi_config_service/wifi_config_service.hpp>
 #include "conversation_task.hpp"
 #include "device_ui.hpp"
+#include "i2c_dump.hpp"
 #include "led_task.hpp"
 #include "render_task.hpp"
 #include "servo_limits.hpp"
@@ -48,6 +49,23 @@
 namespace {
 
 constexpr const char* kTag = "stackchan";
+
+// Debug-only switch: when true, the servo VM rail stays off AND the servo task
+// is never spawned, so heads can't unexpectedly twitch / load the rail while
+// we're investigating the PY32 / AXP2101 problem. Flip back to false (or just
+// delete this block + the gates below) once the LED-corruption issue is
+// understood. The render/avatar pipeline doesn't care — it just publishes
+// target angles into SharedState that nobody consumes.
+constexpr bool kServoDisabledForDebug = true;
+
+// Debug-only switch: when true, the NeoPixel strip stays uninitialised AND the
+// led_task is never spawned. Kept around because the lgfx i2c mutex has a
+// long-running race (xTaskPriorityDisinherit assert at led_task_entry →
+// refresh_leds → readRegister8 → i2c_wait → unlock → xQueueGenericSend) — see
+// docs/known_issues.md §1. Flip to true to disable the task while
+// investigating; refresh_leds() has since been switched to a single-write
+// path (no RMW) to halve I2C activity, which should reduce the race rate.
+constexpr bool kLedTaskDisabledForDebug = false;
 
 // Heap-allocate so the task argument outlives app_main's scope (the tasks run forever).
 stackchan::app::SharedState* g_state = nullptr;
@@ -489,6 +507,15 @@ extern "C" void app_main()
     }
     auto& board = *board_result;
 
+    // Diagnostic register dump of the internal-I2C chips (AXP2101 / AW9523 /
+    // PY32). Read-only; needed for debugging the recurring "LCD backlight off
+    // after LED init" issue — the dump captures whatever state the chips
+    // landed in at boot so we can diff against a healthy boot. Runs BEFORE
+    // any LED / PY32 access in the rest of app_main so the snapshot reflects
+    // the post-corruption state we want to investigate, not a fresh-write
+    // state we created ourselves.
+    stackchan::app::dump_internal_i2c_registers();
+
     // CoreS3 Speaker and Mic share I2S_NUM_1 (BCK=GPIO34, WS=GPIO33),
     // so the side that's done has to release the bus before the other
     // side can install its own driver.
@@ -721,7 +748,8 @@ extern "C" void app_main()
     // Servo bring-up is only meaningful on boards that actually have a servo
     // bus (CoreS3 + M5/Takao). Atom-nyan has no servos in Phase 1 scope; skip
     // both the power-rail enable and the 1.5 s settle wait.
-    if (!is_atom_nyan) {
+    // (Also skipped entirely when kServoDisabledForDebug is set.)
+    if (!is_atom_nyan && !kServoDisabledForDebug) {
         if (auto r = board.set_servo_power(true); !r) {
             ESP_LOGE(kTag, "set_servo_power(true) failed: %d", static_cast<int>(r.error()));
         }
@@ -729,6 +757,8 @@ extern "C" void app_main()
         // driving UART. SCS0009 needs ~1 s after Vmotor comes up before it
         // answers PING.
         vTaskDelay(pdMS_TO_TICKS(1500));
+    } else if (kServoDisabledForDebug) {
+        ESP_LOGW(kTag, "servo VM rail intentionally OFF (kServoDisabledForDebug)");
     }
 
     g_render_args = new stackchan::app::RenderTaskArgs{.display = &board.display(), .state = g_state};
@@ -789,14 +819,18 @@ extern "C" void app_main()
         stackchan::app::ui::init(*g_state);
     }
     stackchan::app::start_render_task(*g_render_args);
-    if (!is_atom_nyan) {
+    if (!is_atom_nyan && !kServoDisabledForDebug && g_servo_args != nullptr) {
         stackchan::app::start_servo_task(*g_servo_args);
     }
-    // NeoPixel animation task disabled while we figure out the right PY32 LED
-    // register map — writes to the BSP-documented 0x24 / 0x30 area corrupted
-    // the LCD backlight on this firmware revision, so the task is intentionally
-    // not started until we can confirm the hardware contract.
-    (void)g_led_args;
+    // NeoPixel animation task. Driven by SharedState (led_mode / led_color /
+    // led_brightness). Only spun up when the board actually has a strip
+    // (M5 base; Takao base / Atom-nyan return nullptr from led_strip()).
+    if (auto* strip = board.led_strip(); strip != nullptr && !kLedTaskDisabledForDebug) {
+        g_led_args = new stackchan::app::LedTaskArgs{g_state, strip};
+        stackchan::app::start_led_task(*g_led_args);
+    } else if (kLedTaskDisabledForDebug) {
+        ESP_LOGW(kTag, "led_task intentionally NOT started (kLedTaskDisabledForDebug)");
+    }
     // The conversation task waits for Wi-Fi internally, then takes over the
     // I2S bus for always-on voice chat. Started after the boot-time mic test
     // so the two never contend for the bus.

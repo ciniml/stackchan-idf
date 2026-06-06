@@ -42,9 +42,10 @@ public:
 private:
     Py32Expander* expander_;
     std::uint8_t count_;
-    // 3 bytes per LED (R, G, B) — what the PY32 actually stores. The host-side
-    // pack-to-RGB565 the M5 BSP does is incorrect for this firmware.
-    std::array<std::uint8_t, Py32Expander::kMaxLeds * 3> buf_{};
+    // 2 bytes per LED stored as RGB565 little-endian (= [lo, hi]). The PY32
+    // firmware itself converts to WS2812 GRB on the wire; the host stays in
+    // 565 LE. See docs/py32_ioexpander.md §6 for the bit layout.
+    std::array<std::uint8_t, Py32Expander::kMaxLeds * 2> buf_{};
 };
 
 } // namespace stackchan::board
