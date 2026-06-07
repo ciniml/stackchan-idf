@@ -57,6 +57,9 @@ int g_provider = 0; // 0 = OpenAI, 1 = Gemini, 2 = XiaoZhi (cached at init)
 std::atomic<bool> g_stage_conv{true};
 std::atomic<bool> g_stage_rtp{true};
 std::atomic<bool> g_stage_bat_gauge{true};
+// Master servo enable (NVS-persisted). Distinct from g_state->servo_enabled,
+// which is the runtime torque toggle on the kControl page.
+std::atomic<bool> g_stage_servo_master{true};
 
 // Range-setting page: staged ServoLimits (loaded from NVS on tab open, mutated
 // by capture taps, saved + reboot on 保存). Plain (non-atomic): the device UI
@@ -83,14 +86,18 @@ bool in_rect(int x, int y, int rx, int ry, int rw, int rh)
     return x >= rx && x < rx + rw && y >= ry && y < ry + rh;
 }
 
-// Row hit/draw rectangle (full-width, indented).
-void row_rect(int i, int& rx, int& ry, int& rw, int& rh)
+// Row hit/draw rectangle (full-width, indented). `row_h` lets callers pack rows
+// tighter than the default kRowH=42 when the page has more rows than that fits.
+void row_rect(int i, int& rx, int& ry, int& rw, int& rh, int row_h = kRowH)
 {
     rx = 10;
-    ry = kContentY + i * kRowH;
+    ry = kContentY + i * row_h;
     rw = kW - 20;
-    rh = kRowH - 6;
+    rh = row_h - 6;
 }
+
+// Tighter row pitch for pages with 5+ rows. (5 * 36 = 180 < 240 - kContentY = 194.)
+constexpr int kSettingsRowH = 36;
 
 std::string current_ip()
 {
@@ -244,10 +251,10 @@ void draw_info()
     draw_kv(y, "電池", battery, bat_color); y += dy;
 }
 
-void draw_toggle_row(int i, const char* label, bool on)
+void draw_toggle_row(int i, const char* label, bool on, int row_h = kRowH)
 {
     int rx, ry, rw, rh;
-    row_rect(i, rx, ry, rw, rh);
+    row_rect(i, rx, ry, rw, rh, row_h);
     g_cv->fillRoundRect(rx, ry, rw, rh, 6, g_cv->color565(40, 44, 54));
     g_cv->setFont(kFontBody);
     g_cv->setTextDatum(lgfx::textdatum_t::middle_left);
@@ -264,10 +271,10 @@ void draw_toggle_row(int i, const char* label, bool on)
                         g_cv->color565(245, 245, 245));
 }
 
-void draw_button(int i, const char* label, std::uint16_t color)
+void draw_button(int i, const char* label, std::uint16_t color, int row_h = kRowH)
 {
     int rx, ry, rw, rh;
-    row_rect(i, rx, ry, rw, rh);
+    row_rect(i, rx, ry, rw, rh, row_h);
     g_cv->fillRoundRect(rx, ry, rw, rh, 6, color);
     g_cv->setFont(kFontBody);
     g_cv->setTextDatum(lgfx::textdatum_t::middle_center);
@@ -277,14 +284,16 @@ void draw_button(int i, const char* label, std::uint16_t color)
 
 void draw_settings()
 {
-    draw_toggle_row(0, "会話機能", g_stage_conv.load(std::memory_order_relaxed));
-    draw_toggle_row(1, "RTP 音声受信", g_stage_rtp.load(std::memory_order_relaxed));
-    draw_toggle_row(2, "電池ゲージ", g_stage_bat_gauge.load(std::memory_order_relaxed));
-    draw_button(3, "適用（保存して再起動）", g_cv->color565(60, 120, 200));
+    draw_toggle_row(0, "会話機能", g_stage_conv.load(std::memory_order_relaxed), kSettingsRowH);
+    draw_toggle_row(1, "RTP 音声受信", g_stage_rtp.load(std::memory_order_relaxed), kSettingsRowH);
+    draw_toggle_row(2, "電池ゲージ", g_stage_bat_gauge.load(std::memory_order_relaxed), kSettingsRowH);
+    draw_toggle_row(3, "サーボ (恒久)", g_stage_servo_master.load(std::memory_order_relaxed),
+                    kSettingsRowH);
+    draw_button(4, "適用（保存して再起動）", g_cv->color565(60, 120, 200), kSettingsRowH);
     g_cv->setFont(kFontBody);
     g_cv->setTextDatum(lgfx::textdatum_t::top_left);
     g_cv->setTextColor(g_cv->color565(150, 150, 150));
-    g_cv->drawString("変更は適用で反映されます", 12, kContentY + 4 * kRowH + 2);
+    g_cv->drawString("変更は適用で反映されます", 12, kContentY + 5 * kSettingsRowH + 2);
 }
 
 void draw_control()
@@ -455,6 +464,7 @@ void load_staged()
     g_stage_conv.store(cfg.openai_enabled, std::memory_order_relaxed);
     g_stage_rtp.store(cfg.rtp_audio_enabled, std::memory_order_relaxed);
     g_stage_bat_gauge.store(cfg.battery_gauge_enabled, std::memory_order_relaxed);
+    g_stage_servo_master.store(cfg.servo_enabled, std::memory_order_relaxed);
     g_stage_limits = parse_servo_limits(cfg.servo_limits_json);
 }
 
@@ -464,6 +474,7 @@ void apply_and_reboot()
     cfg.openai_enabled = g_stage_conv.load(std::memory_order_relaxed);
     cfg.rtp_audio_enabled = g_stage_rtp.load(std::memory_order_relaxed);
     cfg.battery_gauge_enabled = g_stage_bat_gauge.load(std::memory_order_relaxed);
+    cfg.servo_enabled = g_stage_servo_master.load(std::memory_order_relaxed);
     (void)config::store::save(cfg);
     esp_restart();
 }
@@ -511,6 +522,7 @@ void init(SharedState& state)
     g_stage_conv.store(cfg.openai_enabled, std::memory_order_relaxed);
     g_stage_rtp.store(cfg.rtp_audio_enabled, std::memory_order_relaxed);
     g_stage_bat_gauge.store(cfg.battery_gauge_enabled, std::memory_order_relaxed);
+    g_stage_servo_master.store(cfg.servo_enabled, std::memory_order_relaxed);
     std::uint8_t mac[6] = {};
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     char host[32];
@@ -577,9 +589,12 @@ void handle_tap(int x, int y)
 
     // Content, per page.
     const int page = g_page.load(std::memory_order_relaxed);
+    // kSettings packs 5 rows tighter than kRowH so the apply button + caption
+    // fit; keep the default kRowH for kControl and the other pages.
+    const int row_h = (page == kSettings) ? kSettingsRowH : kRowH;
     auto hit_row = [&](int i) {
         int rx, ry, rw, rh;
-        row_rect(i, rx, ry, rw, rh);
+        row_rect(i, rx, ry, rw, rh, row_h);
         return in_rect(x, y, rx, ry, rw, rh);
     };
     if (page == kSettings) {
@@ -593,6 +608,10 @@ void handle_tap(int x, int y)
             g_stage_bat_gauge.store(!g_stage_bat_gauge.load(std::memory_order_relaxed), std::memory_order_relaxed);
             g_dirty.store(true, std::memory_order_relaxed);
         } else if (hit_row(3)) {
+            g_stage_servo_master.store(!g_stage_servo_master.load(std::memory_order_relaxed),
+                                       std::memory_order_relaxed);
+            g_dirty.store(true, std::memory_order_relaxed);
+        } else if (hit_row(4)) {
             apply_and_reboot(); // does not return
         }
     } else if (page == kControl) {

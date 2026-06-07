@@ -50,14 +50,6 @@ namespace {
 
 constexpr const char* kTag = "stackchan";
 
-// Debug-only switch: when true, the servo VM rail stays off AND the servo task
-// is never spawned, so heads can't unexpectedly twitch / load the rail while
-// we're investigating the PY32 / AXP2101 problem. Flip back to false (or just
-// delete this block + the gates below) once the LED-corruption issue is
-// understood. The render/avatar pipeline doesn't care — it just publishes
-// target angles into SharedState that nobody consumes.
-constexpr bool kServoDisabledForDebug = true;
-
 // Debug-only switch: when true, the NeoPixel strip stays uninitialised AND the
 // led_task is never spawned. Kept around because the lgfx i2c mutex has a
 // long-running race (xTaskPriorityDisinherit assert at led_task_entry →
@@ -747,9 +739,11 @@ extern "C" void app_main()
 
     // Servo bring-up is only meaningful on boards that actually have a servo
     // bus (CoreS3 + M5/Takao). Atom-nyan has no servos in Phase 1 scope; skip
-    // both the power-rail enable and the 1.5 s settle wait.
-    // (Also skipped entirely when kServoDisabledForDebug is set.)
-    if (!is_atom_nyan && !kServoDisabledForDebug) {
+    // both the power-rail enable and the 1.5 s settle wait. Also gated by the
+    // NVS-persisted master switch cfg.servo_enabled (settable from BLE / Wi-Fi
+    // / on-device UI — distinct from SharedState::servo_enabled which is the
+    // live torque toggle).
+    if (!is_atom_nyan && cfg.servo_enabled) {
         if (auto r = board.set_servo_power(true); !r) {
             ESP_LOGE(kTag, "set_servo_power(true) failed: %d", static_cast<int>(r.error()));
         }
@@ -757,8 +751,8 @@ extern "C" void app_main()
         // driving UART. SCS0009 needs ~1 s after Vmotor comes up before it
         // answers PING.
         vTaskDelay(pdMS_TO_TICKS(1500));
-    } else if (kServoDisabledForDebug) {
-        ESP_LOGW(kTag, "servo VM rail intentionally OFF (kServoDisabledForDebug)");
+    } else if (!cfg.servo_enabled) {
+        ESP_LOGW(kTag, "servo VM rail OFF: cfg.servo_enabled=false (set via settings UI)");
     }
 
     g_render_args = new stackchan::app::RenderTaskArgs{.display = &board.display(), .state = g_state};
@@ -819,7 +813,7 @@ extern "C" void app_main()
         stackchan::app::ui::init(*g_state);
     }
     stackchan::app::start_render_task(*g_render_args);
-    if (!is_atom_nyan && !kServoDisabledForDebug && g_servo_args != nullptr) {
+    if (!is_atom_nyan && cfg.servo_enabled && g_servo_args != nullptr) {
         stackchan::app::start_servo_task(*g_servo_args);
     }
     // NeoPixel animation task. Driven by SharedState (led_mode / led_color /

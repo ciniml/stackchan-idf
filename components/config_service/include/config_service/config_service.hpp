@@ -63,6 +63,12 @@ struct DeviceConfig {
     // true for backwards compatibility with NVS contents that pre-date the flag.
     // Takes effect after the Apply reboot.
     bool battery_gauge_enabled = true;
+    // Master servo enable. When false, the servo VM rail stays off at boot AND
+    // the servo task is never spawned (i.e. the head stays completely silent
+    // and limp). Distinct from SharedState::servo_enabled which is the runtime
+    // torque toggle (the on-device 操作 page). Defaults to true. Takes effect
+    // after the Apply reboot.
+    bool servo_enabled = true;
     // Compact JSON describing per-servo zero position (raw SCS step) and motion
     // range (degrees relative to zero). Empty → built-in M5-base defaults. The
     // Takao base mounts the head differently so these are configurable + saved.

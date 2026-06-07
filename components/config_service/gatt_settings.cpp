@@ -202,6 +202,14 @@ static const ble_uuid128_t kServoPositionsUuid = BLE_UUID128_INIT(
 static const ble_uuid128_t kBoardKindUuid = BLE_UUID128_INIT(
     0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
     0x2a, 0x4d, 0x1c, 0x7b, 0x1b, 0xa0, 0xf0, 0xe3);
+// ServoEnabled — encrypted 1-byte flag (0=disabled, 1=enabled) controlling
+// the NVS-persisted master servo switch. When disabled, the servo VM rail
+// stays off at boot and the servo task is never spawned. Distinct from the
+// ServoRangeMode chr above (= runtime torque toggle, ephemeral). Staged +
+// applied on the Apply reboot, like the other enable flags.
+static const ble_uuid128_t kServoEnabledUuid = BLE_UUID128_INIT(
+    0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
+    0x2a, 0x4d, 0x1c, 0x7b, 0x1c, 0xa0, 0xf0, 0xe3);
 
 // --- Mutable state guarded by g_mutex ---
 static SemaphoreHandle_t g_mutex = nullptr;
@@ -212,6 +220,7 @@ struct StagingBuffer {
     std::optional<bool> openai_enabled;
     std::optional<bool> rtp_audio_enabled;
     std::optional<bool> battery_gauge_enabled;
+    std::optional<bool> servo_enabled;
     std::optional<Provider> provider;
 };
 
@@ -236,6 +245,7 @@ static uint16_t g_kx_handle = 0;
 static uint16_t g_enabled_handle = 0;
 static uint16_t g_rtp_enabled_handle = 0;
 static uint16_t g_bat_gauge_handle = 0;
+static uint16_t g_servo_enabled_handle = 0;
 static uint16_t g_servo_limits_handle = 0;
 static uint16_t g_servo_range_mode_handle = 0;
 static uint16_t g_servo_positions_handle = 0;
@@ -445,6 +455,17 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
                 return BLE_ATT_ERR_UNLIKELY;
             }
             const std::uint8_t byte = g_active.battery_gauge_enabled ? 1 : 0;
+            const bool ok = append_encrypted(ctxt->om, {&byte, 1});
+            xSemaphoreGive(g_mutex);
+            return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
+        }
+        if (attr_handle == g_servo_enabled_handle) {
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            if (!g_session.is_established()) {
+                xSemaphoreGive(g_mutex);
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            const std::uint8_t byte = g_active.servo_enabled ? 1 : 0;
             const bool ok = append_encrypted(ctxt->om, {&byte, 1});
             xSemaphoreGive(g_mutex);
             return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
@@ -753,6 +774,13 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             xSemaphoreGive(g_mutex);
             return 0;
         }
+        if (attr_handle == g_servo_enabled_handle) {
+            if (pt.size() != 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            g_staging.servo_enabled = (pt[0] != 0);
+            xSemaphoreGive(g_mutex);
+            return 0;
+        }
         if (attr_handle == g_jtts_handle) {
             if (pt.size() > kMaxJttsConfigBytes) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
@@ -850,6 +878,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (g_staging.openai_enabled) merged.openai_enabled = *g_staging.openai_enabled;
             if (g_staging.rtp_audio_enabled) merged.rtp_audio_enabled = *g_staging.rtp_audio_enabled;
             if (g_staging.battery_gauge_enabled) merged.battery_gauge_enabled = *g_staging.battery_gauge_enabled;
+            if (g_staging.servo_enabled) merged.servo_enabled = *g_staging.servo_enabled;
             if (g_staging.jtts_config) merged.jtts_config_json = *g_staging.jtts_config;
             if (g_staging.gemini_api_key) merged.gemini_api_key = *g_staging.gemini_api_key;
             if (g_staging.xiaozhi_url) merged.xiaozhi_url = *g_staging.xiaozhi_url;
@@ -947,6 +976,12 @@ static ble_gatt_chr_def kChrs[] = {
         .access_cb = gatt_access_cb,
         .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
         .val_handle = &g_bat_gauge_handle,
+    },
+    {
+        .uuid = &kServoEnabledUuid.u,
+        .access_cb = gatt_access_cb,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+        .val_handle = &g_servo_enabled_handle,
     },
     {
         .uuid = &kServoLimitsUuid.u,

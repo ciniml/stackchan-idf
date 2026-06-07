@@ -31,6 +31,7 @@ constexpr const char* kKeyConvHeaders = "conv_hdrs";
 constexpr const char* kKeyFaceConfig = "face_cfg";
 constexpr const char* kKeyBatteryGauge = "bat_gauge";
 constexpr const char* kKeyServoLimits = "srv_lim";
+constexpr const char* kKeyServoEnabled = "srv_en";
 
 std::string nvs_read_str(nvs_handle_t h, const char* key)
 {
@@ -97,6 +98,13 @@ DeviceConfig load()
     } else if (bg_err != ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGW(kTag, "nvs_get_u8(%s): %s", kKeyBatteryGauge, esp_err_to_name(bg_err));
     }
+    std::uint8_t srv_en = 1;
+    esp_err_t srv_en_err = nvs_get_u8(h, kKeyServoEnabled, &srv_en);
+    if (srv_en_err == ESP_OK) {
+        cfg.servo_enabled = (srv_en != 0);
+    } else if (srv_en_err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(kTag, "nvs_get_u8(%s): %s", kKeyServoEnabled, esp_err_to_name(srv_en_err));
+    }
     std::uint8_t provider = static_cast<std::uint8_t>(Provider::OpenAi);
     esp_err_t prov_err = nvs_get_u8(h, kKeyProvider, &provider);
     if (prov_err == ESP_OK) {
@@ -160,6 +168,13 @@ tl::expected<void, Error> save(const DeviceConfig& cfg)
     err = nvs_set_u8(h, kKeyBatteryGauge, cfg.battery_gauge_enabled ? 1 : 0);
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "nvs_set_u8(%s): %s", kKeyBatteryGauge, esp_err_to_name(err));
+        nvs_close(h);
+        return tl::unexpected(Error::NvsWrite);
+    }
+
+    err = nvs_set_u8(h, kKeyServoEnabled, cfg.servo_enabled ? 1 : 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "nvs_set_u8(%s): %s", kKeyServoEnabled, esp_err_to_name(err));
         nvs_close(h);
         return tl::unexpected(Error::NvsWrite);
     }

@@ -340,6 +340,12 @@
   </label>
   <p class="hint">アバター画面の左上に残量ゲージを表示します（保存後の再起動で反映）</p>
 
+  <label class="toggle-label" for="servo-enabled" style="margin-top:1rem">
+    <input type="checkbox" id="servo-enabled" checked>
+    <span>サーボを有効にする</span>
+  </label>
+  <p class="hint">無効にするとサーボ電源を入れず、サーボタスクも起動しません（保存後の再起動で反映）。操作画面の脱力/復帰トグルとは別物で、こちらは NVS に永続化されます。</p>
+
   <details class="jtts-section" id="jtts-section">
     <summary>アイドル時の声 (jtts) を調整する</summary>
     <p class="hint" style="margin-bottom:0.5rem">空欄や変更なしで「保存」を押すと現在の設定は維持されます。</p>
@@ -587,6 +593,10 @@ const CHR_SERVO_POSITIONS = 'e3f0a01a-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // (0=M5Base, 1=TakaoBase, 2=AtomNyan). Lets us hide controls that don't
 // apply on the current hardware (servos on Atom-nyan, battery where absent).
 const CHR_BOARD_KIND = 'e3f0a01b-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+// ServoEnabled — encrypted 1-byte flag, NVS-persisted master servo switch.
+// 0 = rail off + task not spawned at boot; 1 = normal. Staged on WRITE,
+// applied on Apply reboot. Distinct from ServoRangeMode (runtime, ephemeral).
+const CHR_SERVO_ENABLED = 'e3f0a01c-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const BOARD_M5_BASE = 0;
 const BOARD_TAKAO_BASE = 1;
 const BOARD_ATOM_NYAN = 2;
@@ -636,7 +646,7 @@ const DIS_CHRS = {
 
 // --- State ---
 let bleDevice = null, bleServer = null, svc = null;
-let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null;
+let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrServoEnabled = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null;
 let boardKind = null; // null = unknown (older firmware), else 0/1/2 from BOARD_*
 let batteryPollTimer = null;  // setInterval handle while connected
 let jttsInitialJson = '';  // last read JSON, used to detect Apply-time changes
@@ -988,6 +998,7 @@ function applyCapabilityGating() {
   const hasEnable = !!chrEn;
   const hasRtpEnable = !!chrRtpEn;
   const hasBatGauge = !!chrBatGauge;
+  const hasServoEnabled = !!chrServoEnabled;
   const hasJtts = !!chrJtts;
   const hasOta = !!(chrOtaCtrl && chrOtaData);
 
@@ -1012,6 +1023,8 @@ function applyCapabilityGating() {
   setVisible('label.toggle-label[for="rtp-enabled"] + p.hint', hasRtpEnable);
   setVisible('label.toggle-label[for="bat-gauge-enabled"]', hasBatGauge);
   setVisible('label.toggle-label[for="bat-gauge-enabled"] + p.hint', hasBatGauge);
+  setVisible('label.toggle-label[for="servo-enabled"]', hasServoEnabled);
+  setVisible('label.toggle-label[for="servo-enabled"] + p.hint', hasServoEnabled);
   document.getElementById('jtts-section').style.display = hasJtts ? '' : 'none';
   document.getElementById('ota-section').style.display = hasOta ? '' : 'none';
   document.getElementById('btn-apply').style.display = hasSettings ? '' : 'none';
@@ -1022,6 +1035,10 @@ function applyCapabilityGating() {
   // (everything visible) so we don't regress those installs.
   const isAtom = (boardKind === BOARD_ATOM_NYAN);
   document.getElementById('servo-section').style.display = isAtom ? 'none' : '';
+  if (isAtom) {
+    setVisible('label.toggle-label[for="servo-enabled"]', false);
+    setVisible('label.toggle-label[for="servo-enabled"] + p.hint', false);
+  }
   // Battery row + battery-gauge toggle don't apply when there's no INA226.
   // (M5 base = battery, Takao base + Atom-nyan = no battery.)
   const noBattery = (boardKind === BOARD_TAKAO_BASE) || isAtom;
@@ -1615,6 +1632,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       ['en',         CHR_EN],
       ['rtpEn',      CHR_RTP_EN],
       ['batGauge',   CHR_BAT_GAUGE],
+      ['servoEnabled', CHR_SERVO_ENABLED],
       ['servoLimits',CHR_SERVO_LIMITS],
       ['servoRangeMode', CHR_SERVO_RANGE_MODE],
       ['servoPositions', CHR_SERVO_POSITIONS],
@@ -1652,6 +1670,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
     chrEn       = found.en       ?? null;
     chrRtpEn    = found.rtpEn    ?? null;
     chrBatGauge = found.batGauge ?? null;
+    chrServoEnabled = found.servoEnabled ?? null;
     chrServoLimits = found.servoLimits ?? null;
     chrServoRangeMode = found.servoRangeMode ?? null;
     chrServoPositions = found.servoPositions ?? null;
@@ -1764,6 +1783,18 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       }
     }
 
+    if (chrServoEnabled) {
+      try {
+        const seBytes = await readEncrypted(chrServoEnabled);
+        const enabled = seBytes.length > 0 && seBytes[0] !== 0;
+        document.getElementById('servo-enabled').checked = enabled;
+        document.getElementById('servo-enabled').dataset.initial = enabled ? '1' : '0';
+        log(`サーボ: ${enabled ? '有効' : '無効'}`);
+      } catch (e) {
+        log(`サーボ設定の取得失敗: ${e.message}`, 'err');
+      }
+    }
+
     if (chrServoLimits) {
       try {
         const slBytes = await readEncrypted(chrServoLimits);
@@ -1861,13 +1892,14 @@ function onDisconnected() {
   clearInterval(svPosPollTimer); svPosPollTimer = null;
   svRangeOn = false;
   svLiveYaw = svLivePitch = -1;
-  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = null;
+  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoEnabled = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = null;
   boardKind = null;
   aesKey = null;
   clearDeviceInfo();
   delete document.getElementById('openai-enabled').dataset.initial;
   delete document.getElementById('rtp-enabled').dataset.initial;
   delete document.getElementById('bat-gauge-enabled').dataset.initial;
+  delete document.getElementById('servo-enabled').dataset.initial;
   delete document.getElementById('provider').dataset.initial;
   jttsInitialJson = '';
   servoLimitsInitial = '';
@@ -1968,6 +2000,15 @@ document.getElementById('btn-apply').addEventListener('click', async () => {
     if (chrBatGauge && bgInitial !== undefined && bgInitial !== bgWanted) {
       await writeEncrypted(chrBatGauge, new Uint8Array([bgCheckbox.checked ? 1 : 0]));
       log(`バッテリーゲージ表示を ${bgCheckbox.checked ? '有効' : '無効'} に切り替え`, 'ok');
+    }
+
+    // Servo master enable (NVS-persisted): only push if it changed AND chr is present.
+    const seCheckbox = document.getElementById('servo-enabled');
+    const seInitial = seCheckbox.dataset.initial;
+    const seWanted = seCheckbox.checked ? '1' : '0';
+    if (chrServoEnabled && seInitial !== undefined && seInitial !== seWanted) {
+      await writeEncrypted(chrServoEnabled, new Uint8Array([seCheckbox.checked ? 1 : 0]));
+      log(`サーボを ${seCheckbox.checked ? '有効' : '無効'} に切り替え`, 'ok');
     }
 
     // Servo limits: write the JSON if any field changed.

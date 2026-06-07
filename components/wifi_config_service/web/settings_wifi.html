@@ -364,6 +364,12 @@
   </label>
   <p class="hint">アバター画面の左上に残量ゲージを表示します（保存後の再起動で反映）</p>
 
+  <label class="toggle-label" for="servo-enabled" style="margin-top:1rem">
+    <input type="checkbox" id="servo-enabled" checked>
+    <span>サーボを有効にする</span>
+  </label>
+  <p class="hint">無効にするとサーボ電源を入れず、サーボタスクも起動しません（保存後の再起動で反映）。操作画面の脱力/復帰トグルとは別物で、こちらは NVS に永続化されます。</p>
+
   <details class="jtts-section" id="jtts-section">
     <summary>アイドル時の声 (jtts) を調整する</summary>
     <p class="hint" style="margin-bottom:0.5rem">空欄や変更なしで「保存」を押すと現在の設定は維持されます。</p>
@@ -739,6 +745,10 @@ function applyBoardGating(kind) {
   const noBattery = (kind === BOARD_TAKAO_BASE) || isAtom;
   const sv = document.getElementById('servo-section');
   if (sv) sv.style.display = isAtom ? 'none' : '';
+  const svEnToggle = document.querySelector('label.toggle-label[for="servo-enabled"]');
+  if (svEnToggle) svEnToggle.style.display = isAtom ? 'none' : '';
+  const svEnHint = svEnToggle ? svEnToggle.nextElementSibling : null;
+  if (svEnHint && svEnHint.tagName === 'P') svEnHint.style.display = isAtom ? 'none' : '';
   const batRow = document.getElementById('dis-battery-row');
   if (batRow) batRow.style.display = noBattery ? 'none' : '';
   const batToggle = document.querySelector('label.toggle-label[for="bat-gauge-enabled"]');
@@ -769,6 +779,7 @@ async function refresh() {
     $('openai-enabled').checked = !!s.openai_enabled;
     $('rtp-enabled').checked = (s.rtp_audio_enabled !== false); // default on if absent
     $('bat-gauge-enabled').checked = (s.battery_gauge_enabled !== false); // default on if absent
+    $('servo-enabled').checked = (s.servo_enabled !== false); // default on if absent
     // ffmpeg send examples. This page is served by the device, so its own
     // hostname is the RTP destination.
     const h = location.hostname || (s.ip || '');
@@ -833,6 +844,7 @@ async function apply() {
     const enabled = $('openai-enabled').checked;
     const rtpEnabled = $('rtp-enabled').checked;
     const batGauge = $('bat-gauge-enabled').checked;
+    const servoEn = $('servo-enabled').checked;
     const jtts = readJttsForm();
 
     if (ssid)      { await postText('/api/ssid', ssid);                       log('SSID 送信', 'ok'); }
@@ -847,6 +859,7 @@ async function apply() {
     await postText('/api/openai-enabled', enabled ? '1' : '0');
     await postText('/api/rtp-enabled', rtpEnabled ? '1' : '0');
     await postText('/api/battery-gauge', batGauge ? '1' : '0');
+    await postText('/api/servo-enabled', servoEn ? '1' : '0');
     if (jtts)      { await postText('/api/jtts-config', jtts);                log('jtts 設定送信', 'ok'); }
     // Servo limits: send the canonical JSON every Apply (cheap; server-side merge ignores no-ops).
     await postText('/api/servo-limits', servoLimitsJson());                   log('サーボ設定送信', 'ok');
