@@ -16,9 +16,12 @@ namespace stackchan::app {
 namespace {
 
 constexpr const char* kTag = "led";
-// 30 Hz is plenty for breathing / rainbow — the 12-LED I2C burst is ~3 ms so
-// even at this rate the bus is idle most of the time.
-constexpr TickType_t kPeriodTicks = pdMS_TO_TICKS(33);
+// 10 Hz is enough for breathing / rainbow visually, and triples the I2C bus
+// + CPU 1 headroom we used to spend at 30 Hz. Dropped from 30 Hz on
+// 2026-06-07 after task_wdt on IDLE1 started firing once Phase 2 SSE +
+// conv-task TLS + LED + render + speaker/mic all crowded CPU 1 (touch taps
+// were being dropped, render dt stretched). See docs/known_issues.md §1.
+constexpr TickType_t kPeriodTicks = pdMS_TO_TICKS(100);
 
 constexpr std::uint8_t kModeOff = 0;
 constexpr std::uint8_t kModeSolid = 1;

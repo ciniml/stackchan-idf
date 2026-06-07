@@ -745,7 +745,12 @@ extern "C" void app_main()
                     stackchan::wifi_config::mcp_events::publish_say_done();
                     vTaskDeleteWithCaps(nullptr);
                 },
-                "mcp_say", 12 * 1024, owned, tskIDLE_PRIORITY + 2, nullptr, 1, kCaps);
+                // Pin to CPU 0 (not 1). CPU 1 hosts speaker/mic (prio 6),
+                // render (5), servo (4) — adding a 12 KiB PSRAM-stack worker
+                // there starves render long enough that touch taps get lost
+                // and IDLE1 trips task_wdt (observed 2026-06-07). CPU 0 has
+                // httpd + NimBLE event tasks but much more headroom.
+                "mcp_say", 12 * 1024, owned, tskIDLE_PRIORITY + 2, nullptr, 0, kCaps);
             if (rc != pdPASS) {
                 // Without this log the firmware silently swallows the request
                 // (handler already returned 200 OK to the adapter). Surface
