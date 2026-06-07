@@ -10,11 +10,11 @@ idf_component_register(
     SRCS
         "wifi_config_service.cpp"
         "http_handlers.cpp"
+        "mcp_events.cpp"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
-    REQUIRES tl_expected config_service avatar_vm
+    REQUIRES tl_expected config_service avatar_vm esp_http_server
     PRIV_REQUIRES
-        esp_http_server
         esp_https_ota
         esp_app_format
         app_update

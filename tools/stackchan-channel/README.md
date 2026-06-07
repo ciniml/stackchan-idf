@@ -29,7 +29,7 @@ Stack-chan firmware の `/mcp/*` REST API ([components/wifi_config_service/http_
 [claude]                             └──────────────────┘
 ```
 
-## 提供される MCP tool (Phase 1)
+## 提供される MCP tool
 
 | Tool | 説明 |
 |---|---|
@@ -38,7 +38,23 @@ Stack-chan firmware の `/mcp/*` REST API ([components/wifi_config_service/http_
 | `set_balloon(text, hold_ms?)` | アバター下の吹き出しに表示 |
 | `get_state()` | FW ver / IP / Wi-Fi / バッテリ / ボード種別を JSON で取得 |
 
-push event (mic transcript 等 device → Claude) は Phase 2 以降。
+## push events (Phase 2 〜)
+
+device 側で起きたことを Claude に通知する仕組み。adapter が起動時に
+`GET /mcp/events` を long-poll (SSE) で開き続け、firmware が発生したイベントを
+`text/event-stream` で順次 push。adapter は MCP の
+`notifications/claude/channel/event` として Claude に転送する。
+
+| event | data 例 | 発火タイミング |
+|---|---|---|
+| `boot` | `{"firmware":"v0.5.2","ip":"192.168.1.42","board":0}` | Wi-Fi で IP を取得した直後に 1 回 |
+| `touch` | `{"direction":"front_to_back"}` | 頭部 capacitive touch で front→back / back→front のストロークが完了 |
+| `say_done` | `{}` | `say` で渡したテキストの再生が物理的に終了 (speaker queue drain 後) |
+| `conversation_state` | `{"state":"listening"}` | 会話バックエンドの状態遷移 (`disabled`/`waiting_wifi`/`connecting`/`listening`/`talking`/`yielded`/`reconnecting`/`error`) |
+
+wire 上は `event: <type>\ndata: {…}\n\n` の素直な SSE 形式。15 秒ごとに
+`: keepalive` コメント フレームが入り、Cloudflare Tunnel の idle close を
+回避する。adapter 側は切断時に exponential backoff (1s→30s) で自動再接続。
 
 ## セットアップ
 
@@ -152,14 +168,38 @@ terminal で:
 - `package.json`
 - `README.md` (このファイル)
 
-## 制限事項 (Phase 1)
+## /mcp/events を手元で見る (デバッグ)
+
+```bash
+curl -N -H "Authorization: Bearer $STACKCHAN_TOKEN" \
+     https://stackchan.user.example.com/mcp/events
+# 起動直後:
+# : stackchan mcp-events stream open
+#
+# event: boot
+# data: {"firmware":"v0.5.2","ip":"192.168.1.42","board":0}
+#
+# event: conversation_state
+# data: {"state":"waiting_wifi"}
+#
+# ... (なで操作で)
+# event: touch
+# data: {"direction":"front_to_back"}
+#
+# : keepalive   (15 秒ごと)
+```
+
+同時 subscriber は 1 つだけ。新しい GET が来ると以前の長期接続は切断される
+(adapter を多重起動した場合の症状)。
+
+## 制限事項
 
 - **テキスト → 漢字 → 読み 変換 なし**: 漢字混じり文字列は jtts が読めない。
   Claude には「ひらがな/カタカナで指示せよ」を `instructions` で伝達済
-- **push events なし**: Stack-chan → Channel の通知パスは未実装。Claude は
-  自発的に状態を知る術が無いので、必要なら `get_state` を能動的に呼ぶ。
-  Phase 2 で mic transcript / battery alert 等の push を追加予定
 - **同時 say の調停 粗い**: 2 つの `say` が連続すると 2 つ目のワーカが
   speaker idle 待ちでブロック。長時間連投すると task heap が嵩む。今は許容
+- **`notifications/claude/channel/event` は experimental**: Claude Code の
+  Channel 機能はリサーチ プレビュー。schema 変更があり得るので、見えなく
+  なったら adapter の method 名を見直す
 - **bearer token は Kconfig**: BLE / Wi-Fi 設定 UI からは変更不可。Phase 3
   で NVS 化予定

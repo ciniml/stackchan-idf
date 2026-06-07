@@ -6,6 +6,7 @@
 #include <avatar_vm/storage.hpp>
 #include <config_service/config_store.hpp>
 #include <config_service/ota.hpp>
+#include <wifi_config_service/mcp_events.hpp>
 
 #include <algorithm>
 #include <array>
@@ -638,6 +639,14 @@ esp_err_t handle_mcp_balloon_post(httpd_req_t* req)
     return send_json(req, R"({"ok":true})");
 }
 
+esp_err_t handle_mcp_events_get(httpd_req_t* req)
+{
+    if (mcp_gate(req) != ESP_OK) return ESP_OK;
+    // Hand the rest of the lifetime over to the events module. It writes the
+    // SSE headers, streams frames, and tears down on disconnect / hand-off.
+    return mcp_events::run_stream(req);
+}
+
 esp_err_t handle_mcp_state_get(httpd_req_t* req)
 {
     if (mcp_gate(req) != ESP_OK) return ESP_OK;
@@ -723,6 +732,7 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/mcp/expression",       HTTP_POST, handle_mcp_expression_post);
     add(server, "/mcp/balloon",          HTTP_POST, handle_mcp_balloon_post);
     add(server, "/mcp/state",            HTTP_GET,  handle_mcp_state_get);
+    add(server, "/mcp/events",           HTTP_GET,  handle_mcp_events_get);
 }
 
 void set_wifi_connected(bool connected)

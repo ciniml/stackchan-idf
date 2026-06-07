@@ -108,8 +108,11 @@ tl::expected<httpd_handle_t, Error> start_http_server()
     // state nothing actually uses here (no TLS in plain HTTP mode).
     cfg.stack_size = 6144;
     cfg.lru_purge_enable = true;
-    // Settings page is single-user.
-    cfg.max_open_sockets = 1;
+    // 3 sockets: one for the settings page's regular request/response cycle,
+    // one for a Cloudflare Tunnel /mcp/events SSE long-poll from the Channel
+    // adapter (which holds its socket open for the entire session), and one
+    // headroom slot for an overlapping /mcp/* tool call mid-stream.
+    cfg.max_open_sockets = 3;
 
     httpd_handle_t server = nullptr;
     esp_err_t err = httpd_start(&server, &cfg);

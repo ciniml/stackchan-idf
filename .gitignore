@@ -23,3 +23,7 @@ Makefile.local
 .DS_Store
 .vscode/
 .idea/
+
+# Channel adapter (tools/stackchan-channel) — Bun installs deps locally; the
+# lockfile is tracked for reproducible installs but the resolved tree isn't.
+node_modules/

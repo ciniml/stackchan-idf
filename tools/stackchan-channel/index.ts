@@ -19,8 +19,10 @@
 //   STACKCHAN_URL    e.g. https://stackchan.example.com   (required)
 //   STACKCHAN_TOKEN  matches CONFIG_MCP_API_TOKEN on the firmware (required)
 //
-// Phase 1 scope: tools only, no push events. The firmware doesn't notify the
-// adapter about mic / battery / etc. — Claude has to ask via get_state.
+// Phase 2 adds push: a background SSE reader on GET /mcp/events relays
+// device-initiated events (boot, touch stroke, say_done, conversation_state)
+// to Claude as `notifications/claude/channel/event` so they appear in the
+// Claude Code conversation without polling.
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -63,12 +65,11 @@ function okContent(text: string) {
 }
 
 const mcp = new Server(
-  { name: 'stackchan', version: '0.1.0' },
+  { name: 'stackchan', version: '0.2.0' },
   {
-    // Channel capability is what makes Claude Code treat this as a Channel
-    // (vs a plain MCP server). Phase 1 has no push events, so we don't
-    // actually emit notifications/claude/channel yet; the capability is
-    // declared anyway so the wiring is in place for Phase 2.
+    // Channel capability + the push-event background loop below means Claude
+    // Code surfaces device-initiated events (boot, touch, say_done,
+    // conversation state changes) in-conversation without polling.
     capabilities: {
       experimental: { 'claude/channel': {} },
       tools: {},
@@ -77,9 +78,106 @@ const mcp = new Server(
       'Stack-chan は M5Stack 製の卓上ロボット。アバター顔の表情・吹き出し・' +
       '音声合成 (jtts) を操作できる。`say` のテキストはひらがな/カタカナ必須 ' +
       '(漢字→読み変換は無し)。表情・吹き出しはユーザーの邪魔にならない範囲で。' +
-      '状態を確認したいときは get_state。',
+      '状態を確認したいときは get_state。device からは boot / touch / say_done ' +
+      '/ conversation_state イベントが Channel 通知として届く。',
   },
 );
+
+// --- SSE push-event consumer -------------------------------------------------
+//
+// Holds a long-poll GET /mcp/events open. Each `event: <type>` / `data: <json>`
+// pair is forwarded to Claude as `notifications/claude/channel/event`.
+// Reconnects with exponential backoff on disconnect — Cloudflare Tunnel idle-
+// closes around 100 s but the firmware emits `: keepalive` every 15 s so a
+// healthy connection stays live indefinitely.
+
+interface DeviceEvent {
+  type: string;
+  data: unknown;
+}
+
+async function emitChannelEvent(ev: DeviceEvent): Promise<void> {
+  try {
+    // Claude Code Channel is experimental; the method name mirrors the
+    // capability key we declared above. If Claude Code doesn't recognize
+    // the method it silently drops the notification, which is fine — the
+    // tools still work.
+    await mcp.notification({
+      method: 'notifications/claude/channel/event',
+      params: { source: 'stackchan', event: ev.type, data: ev.data },
+    });
+  } catch (e) {
+    console.error(`stackchan-channel: emitChannelEvent failed: ${(e as Error).message}`);
+  }
+}
+
+async function streamEvents(): Promise<void> {
+  // Backoff: 1, 2, 4, 8, capped at 30 s. Resets to 1 s on any successful read.
+  let backoffMs = 1000;
+  for (;;) {
+    try {
+      const r = await fetch(`${STACKCHAN_URL}/mcp/events`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${STACKCHAN_TOKEN}`,
+          Accept: 'text/event-stream',
+        },
+      });
+      if (!r.ok || !r.body) {
+        // 404 = firmware has /mcp/* disabled (empty token Kconfig). No point
+        // hammering it — wait a long while then re-check in case the user
+        // flashed a build with the API enabled.
+        const waitMs = r.status === 404 ? 60_000 : backoffMs;
+        console.error(`stackchan-channel: /mcp/events HTTP ${r.status}, retrying in ${waitMs} ms`);
+        await new Promise((res) => setTimeout(res, waitMs));
+        backoffMs = Math.min(backoffMs * 2, 30_000);
+        continue;
+      }
+      backoffMs = 1000;
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let currentEvent = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        // SSE is line-oriented with blank-line frame separators. Parse on each
+        // \n; the buf carries any half-line into the next chunk.
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).replace(/\r$/, '');
+          buf = buf.slice(nl + 1);
+          if (line === '') {
+            currentEvent = '';
+            continue;
+          }
+          if (line.startsWith(':')) continue; // comment / keepalive
+          if (line.startsWith('event:')) {
+            currentEvent = line.slice(6).trim();
+          } else if (line.startsWith('data:')) {
+            const payload = line.slice(5).trim();
+            let parsed: unknown = payload;
+            try {
+              parsed = JSON.parse(payload);
+            } catch {
+              // Leave as raw string; Claude still gets something useful.
+            }
+            await emitChannelEvent({ type: currentEvent || 'unknown', data: parsed });
+          }
+        }
+      }
+      // Server closed cleanly — reconnect immediately.
+      console.error('stackchan-channel: /mcp/events stream closed, reconnecting');
+    } catch (e) {
+      console.error(
+        `stackchan-channel: /mcp/events error (${(e as Error).message}), retry in ${backoffMs} ms`,
+      );
+      await new Promise((res) => setTimeout(res, backoffMs));
+      backoffMs = Math.min(backoffMs * 2, 30_000);
+    }
+  }
+}
 
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
@@ -174,3 +272,6 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 await mcp.connect(new StdioServerTransport());
 // Log to stderr — stdout is reserved for the stdio JSON-RPC transport.
 console.error(`stackchan-channel ready (target=${STACKCHAN_URL})`);
+// Detached: the SSE loop must not block the stdio handshake. void-cast so
+// node's unhandled-rejection logic doesn't yell — we already log internally.
+void streamEvents();

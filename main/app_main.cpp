@@ -8,7 +8,9 @@
 #include <vector>
 
 #include <M5Unified.h>
+#include <esp_app_desc.h>
 #include <esp_log.h>
+#include <esp_netif.h>
 #include <esp_random.h>
 #include <esp_system.h>
 #include <esp_timer.h>
@@ -27,6 +29,7 @@
 #include "board/board.hpp"
 #include "board/si12t_touch.hpp"
 #include "config_service/config_service.hpp"
+#include <wifi_config_service/mcp_events.hpp>
 #include <wifi_config_service/wifi_config_service.hpp>
 #include "conversation_task.hpp"
 #include "device_ui.hpp"
@@ -387,11 +390,14 @@ void demo_loop(const std::string& jtts_config_json, bool has_battery, bool is_at
             }
 
             if (stroke_complete) {
+                const char* direction =
+                    stroke_hit_ms[0] < stroke_hit_ms[2] ? "front_to_back" : "back_to_front";
                 ESP_LOGI(kTag, "nadenade! stroke %s (hit ms: f=%u m=%u b=%u)",
-                         stroke_hit_ms[0] < stroke_hit_ms[2] ? "front->back" : "back->front",
+                         direction,
                          static_cast<unsigned>(stroke_hit_ms[0]),
                          static_cast<unsigned>(stroke_hit_ms[1]),
                          static_cast<unsigned>(stroke_hit_ms[2]));
+                stackchan::wifi_config::mcp_events::publish_touch_stroke(direction);
                 speech.stop();
                 const float prev_yaw = g_state->target_yaw_deg.load(std::memory_order_relaxed);
                 const int prev_expr = g_state->expression.load(std::memory_order_relaxed);
@@ -600,6 +606,38 @@ extern "C" void app_main()
     stackchan::wifi_config::set_servo_range_mode_sink(&on_servo_range_mode);
     stackchan::wifi_config::set_servo_positions_getter(&servo_positions);
     stackchan::wifi_config::set_board_kind(static_cast<std::uint8_t>(board.kind()));
+    // Boot the /mcp/events push-event surface. Safe to call before HTTP is up
+    // — the SSE handler is registered with the same set of /mcp/* routes when
+    // the server starts; the FIFO just buffers the boot event until a client
+    // connects. The getter returns the current ConvStatus as int so this
+    // component doesn't have to know about shared_state.hpp.
+    stackchan::wifi_config::mcp_events::start(+[]() -> int {
+        return g_state == nullptr ? 0
+                                  : static_cast<int>(g_state->conversation_status.load(
+                                        std::memory_order_relaxed));
+    });
+    // Fire the boot event once Wi-Fi has an IP — Claude wants the address +
+    // FW version up front, both meaningless before the IP is assigned.
+    xTaskCreatePinnedToCore(
+        +[](void* arg) {
+            const std::uint8_t kind = *static_cast<std::uint8_t*>(arg);
+            delete static_cast<std::uint8_t*>(arg);
+            while (!stackchan::app::wifi_is_connected()) {
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
+            const auto* desc = esp_app_get_description();
+            char ip[16] = "-";
+            esp_netif_t* nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+            esp_netif_ip_info_t info{};
+            if (nif != nullptr && esp_netif_get_ip_info(nif, &info) == ESP_OK && info.ip.addr != 0) {
+                std::snprintf(ip, sizeof(ip), IPSTR, IP2STR(&info.ip));
+            }
+            stackchan::wifi_config::mcp_events::publish_boot(
+                desc ? desc->version : "?", ip, kind);
+            vTaskDelete(nullptr);
+        },
+        "mcp_boot", 3072, new std::uint8_t{static_cast<std::uint8_t>(board.kind())},
+        tskIDLE_PRIORITY + 1, nullptr, 0);
 
 #ifdef CONFIG_TELEGRAM_PHASE1_ENABLED
     // Phase 1 throwaway: once Wi-Fi STA has an IP, fire ONE getUpdates request
@@ -722,6 +760,11 @@ extern "C" void app_main()
                     // to avoid two /mcp/say calls clobbering each other.
                     while (M5.Speaker.isPlaying()) vTaskDelay(pdMS_TO_TICKS(20));
                     M5.Speaker.playRaw(pcm.data(), pcm.size(), kRate, /*stereo=*/false);
+                    // Wait for the speaker queue to drain so the say_done event
+                    // matches the audible completion point (Claude can chain
+                    // "wait until done, then ...").
+                    while (M5.Speaker.isPlaying()) vTaskDelay(pdMS_TO_TICKS(20));
+                    stackchan::wifi_config::mcp_events::publish_say_done();
                     vTaskDelete(nullptr);
                 },
                 "mcp_say", 12 * 1024, owned, tskIDLE_PRIORITY + 2, nullptr, 1);
