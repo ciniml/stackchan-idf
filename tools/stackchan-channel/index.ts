@@ -49,9 +49,20 @@ async function callFirmware(
 ): Promise<{ status: number; text: string }> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${STACKCHAN_TOKEN}`,
+    // streamEvents() holds a long-poll GET /mcp/events open against the
+    // same host. Bun's fetch keep-alive pool can otherwise wedge a regular
+    // /mcp/say POST behind the SSE socket and the call hangs until Claude
+    // SIGINTs at ~50 s. `Connection: close` forces a fresh TCP socket per
+    // call (also nicer to ESP-IDF httpd's tiny max_open_sockets pool).
+    Connection: 'close',
   };
   if (body !== undefined) headers['Content-Type'] = 'text/plain; charset=utf-8';
-  const r = await fetch(`${STACKCHAN_URL}${path}`, { method, headers, body });
+  const r = await fetch(`${STACKCHAN_URL}${path}`, {
+    method,
+    headers,
+    body,
+    keepalive: false,
+  });
   const text = await r.text();
   return { status: r.status, text };
 }
@@ -76,7 +87,7 @@ const mcp = new Server(
     },
     instructions:
       'Stack-chan は M5Stack 製の卓上ロボット。アバター顔の表情・吹き出し・' +
-      '音声合成 (jtts) を操作できる。`say` のテキストはひらがな/カタカナ必須 ' +
+      '音声合成 (jtts) を操作できる。`say` のテキストはひらがな必須 ' +
       '(漢字→読み変換は無し)。表情・吹き出しはユーザーの邪魔にならない範囲で。' +
       '状態を確認したいときは get_state。device からは boot / touch / say_done ' +
       '/ conversation_state イベントが Channel 通知として届く。',
@@ -184,11 +195,11 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'say',
       description:
-        'Stack-chan に発話させる。テキストはひらがな/カタカナ。漢字は読み取られない (jtts は読み変換器を持たない)。発話中に再度呼ぶと前の発話完了後にキュー実行。',
+        'Stack-chan に発話させる。テキストはひらがな。漢字は読み取られない (jtts は読み変換器を持たない)。発話中に再度呼ぶと前の発話完了後にキュー実行。',
       inputSchema: {
         type: 'object',
         properties: {
-          text: { type: 'string', maxLength: 200, description: 'ひらがな/カタカナのテキスト' },
+          text: { type: 'string', maxLength: 200, description: 'ひらがなのテキスト' },
         },
         required: ['text'],
       },

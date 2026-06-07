@@ -27,3 +27,7 @@ Makefile.local
 # Channel adapter (tools/stackchan-channel) — Bun installs deps locally; the
 # lockfile is tracked for reproducible installs but the resolved tree isn't.
 node_modules/
+
+# Claude Code MCP server config carries the /mcp/* Bearer token in env, so
+# the live copy stays local. Use .mcp.json.example as a template.
+.mcp.json

@@ -112,20 +112,15 @@ void monitor_task_entry(void* /*arg*/)
     }
 }
 
-} // namespace
-
-esp_err_t run_stream(httpd_req_t* req)
+// SSE worker task body. Runs on its own task (spawned by run_stream) so
+// the esp_http_server worker thread is free to handle /mcp/say etc. while
+// the long-poll is alive. Must NOT touch `req` after
+// httpd_req_async_handler_complete().
+void sse_worker_task(void* arg)
 {
-    if (g_queue == nullptr) {
-        httpd_resp_set_status(req, "503 Service Unavailable");
-        httpd_resp_send(req, nullptr, 0);
-        return ESP_OK;
-    }
-
-    // SSE headers + take the (single) subscriber slot. A new GET evicts the
-    // previous reader by claiming a fresh id; the previous loop bails on the
-    // next read because its captured id no longer matches.
+    auto* req = static_cast<httpd_req_t*>(arg);
     const std::uint32_t my_id = ++g_subscriber_id;
+
     httpd_resp_set_type(req, "text/event-stream");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
     httpd_resp_set_hdr(req, "Connection", "keep-alive");
@@ -137,15 +132,13 @@ esp_err_t run_stream(httpd_req_t* req)
     // before the first real event lands. Without this, curl shows nothing
     // until the first event arrives, which is confusing during testing.
     constexpr char kHello[] = ": stackchan mcp-events stream open\n\n";
-    if (httpd_resp_send_chunk(req, kHello, sizeof(kHello) - 1) != ESP_OK) {
-        return ESP_OK;
-    }
+    bool alive = (httpd_resp_send_chunk(req, kHello, sizeof(kHello) - 1) == ESP_OK);
 
     // 15 s heartbeat tick. Cloudflare Tunnel idle-closes around 100 s with
     // no traffic, and even a busy session benefits from regular liveness
     // pings (so a half-open TCP shows up promptly as a chunk-send failure).
     constexpr TickType_t kReceiveTimeout = pdMS_TO_TICKS(15'000);
-    while (g_subscriber_id.load(std::memory_order_acquire) == my_id) {
+    while (alive && g_subscriber_id.load(std::memory_order_acquire) == my_id) {
         Frame f{};
         if (xQueueReceive(g_queue, &f, kReceiveTimeout) == pdTRUE) {
             if (httpd_resp_send_chunk(req, f.buf, f.len) != ESP_OK) break;
@@ -155,6 +148,42 @@ esp_err_t run_stream(httpd_req_t* req)
         }
     }
     httpd_resp_send_chunk(req, nullptr, 0);
+    httpd_req_async_handler_complete(req);
+    vTaskDelete(nullptr);
+}
+
+} // namespace
+
+esp_err_t run_stream(httpd_req_t* req)
+{
+    if (g_queue == nullptr) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_send(req, nullptr, 0);
+        return ESP_OK;
+    }
+
+    // Hand the request off to a dedicated task — without this, the worker
+    // thread that called us blocks on send_chunk for the entire SSE lifetime
+    // and esp_http_server can't accept ANY other request (it has a single
+    // worker by design, even with max_open_sockets > 1). After
+    // async_handler_begin, the original worker returns immediately while the
+    // task we spawn owns the response.
+    httpd_req_t* async_req = nullptr;
+    esp_err_t err = httpd_req_async_handler_begin(req, &async_req);
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "async_handler_begin failed: %s", esp_err_to_name(err));
+        return ESP_FAIL;
+    }
+
+    // 4 KiB internal-RAM stack. The worker only does small snprintfs +
+    // httpd_resp_send_chunk; the heavy lifting (TLS, etc.) is in lwip/httpd
+    // helper tasks. Pin to core 0 alongside the other httpd-adjacent work.
+    if (xTaskCreatePinnedToCore(sse_worker_task, "sse-worker", 4096, async_req,
+                                tskIDLE_PRIORITY + 1, nullptr, 0) != pdPASS) {
+        ESP_LOGE(kTag, "sse_worker_task create failed");
+        httpd_req_async_handler_complete(async_req);
+        return ESP_FAIL;
+    }
     return ESP_OK;
 }
 

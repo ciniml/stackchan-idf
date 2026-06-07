@@ -33,7 +33,7 @@ Stack-chan firmware の `/mcp/*` REST API ([components/wifi_config_service/http_
 
 | Tool | 説明 |
 |---|---|
-| `say(text)` | 発話。text は ひらがな/カタカナ (jtts は漢字 → 読み変換 を持たない) |
+| `say(text)` | 発話。text は ひらがな (jtts は漢字 → 読み変換 を持たない) |
 | `set_expression(expression)` | `neutral` / `happy` / `sad` / `angry` / `doubt` / `sleepy` |
 | `set_balloon(text, hold_ms?)` | アバター下の吹き出しに表示 |
 | `get_state()` | FW ver / IP / Wi-Fi / バッテリ / ボード種別を JSON で取得 |
@@ -195,7 +195,7 @@ curl -N -H "Authorization: Bearer $STACKCHAN_TOKEN" \
 ## 制限事項
 
 - **テキスト → 漢字 → 読み 変換 なし**: 漢字混じり文字列は jtts が読めない。
-  Claude には「ひらがな/カタカナで指示せよ」を `instructions` で伝達済
+  Claude には「ひらがなで指示せよ」を `instructions` で伝達済
 - **同時 say の調停 粗い**: 2 つの `say` が連続すると 2 つ目のワーカが
   speaker idle 待ちでブロック。長時間連投すると task heap が嵩む。今は許容
 - **`notifications/claude/channel/event` は experimental**: Claude Code の

@@ -16,6 +16,7 @@
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/idf_additions.h>
 
 #include <nvs_flash.h>
 #include <esp_ota_ops.h>
@@ -698,16 +699,22 @@ extern "C" void app_main()
             // Heap-copy the bytes — `kana_utf8` is owned by the HTTP request
             // and won't survive the handler return. The task frees it.
             auto* owned = new std::string{kana_utf8};
-            // 12 KiB stack: jtts working buffers + PCM vector + M5.Speaker
-            // playRaw enqueue. Empirically 10 KiB cuts it close on long
-            // utterances; 12 leaves comfortable headroom.
-            xTaskCreatePinnedToCore(
+            // 12 KiB stack in PSRAM (not internal RAM): steady-state internal-
+            // RAM largest is ~10 KiB after conversation_task brings up TLS, so
+            // an internal-RAM 12 KiB stack alloc silently fails (the firmware
+            // returns {"ok":true} but the worker is never scheduled, and the
+            // owned string leaks). The worker only touches PSRAM-friendly
+            // surfaces — jtts working buffers, PCM vector, M5.Speaker
+            // playRaw enqueue — none of which disable cache, so PSRAM stack
+            // is safe; vTaskDeleteWithCaps frees the stack at self-delete.
+            constexpr UBaseType_t kCaps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+            const BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
                 +[](void* arg) {
                     std::unique_ptr<std::string> kana_text{static_cast<std::string*>(arg)};
                     std::u32string kana = stackchan::app::decode_utf8(*kana_text);
                     if (kana.empty()) {
                         ESP_LOGW(kTag, "/mcp/say: empty / invalid utf8");
-                        vTaskDelete(nullptr);
+                        vTaskDeleteWithCaps(nullptr);
                         return;
                     }
                     constexpr std::uint32_t kRate = 16000;
@@ -718,11 +725,11 @@ extern "C" void app_main()
                     if (auto r = stackchan::jtts::synthesize(kana, pcm, opt); !r) {
                         ESP_LOGW(kTag, "/mcp/say synth fail: %s",
                                  stackchan::jtts::to_string(r.error()));
-                        vTaskDelete(nullptr);
+                        vTaskDeleteWithCaps(nullptr);
                         return;
                     }
                     if (pcm.empty()) {
-                        vTaskDelete(nullptr);
+                        vTaskDeleteWithCaps(nullptr);
                         return;
                     }
                     // Wait for any in-flight audio to finish so we don't
@@ -736,9 +743,17 @@ extern "C" void app_main()
                     // "wait until done, then ...").
                     while (M5.Speaker.isPlaying()) vTaskDelay(pdMS_TO_TICKS(20));
                     stackchan::wifi_config::mcp_events::publish_say_done();
-                    vTaskDelete(nullptr);
+                    vTaskDeleteWithCaps(nullptr);
                 },
-                "mcp_say", 12 * 1024, owned, tskIDLE_PRIORITY + 2, nullptr, 1);
+                "mcp_say", 12 * 1024, owned, tskIDLE_PRIORITY + 2, nullptr, 1, kCaps);
+            if (rc != pdPASS) {
+                // Without this log the firmware silently swallows the request
+                // (handler already returned 200 OK to the adapter). Surface
+                // the failure mode + the PSRAM headroom to diagnose later.
+                ESP_LOGE(kTag, "/mcp/say worker task create FAILED (PSRAM largest=%u)",
+                         static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
+                delete owned;
+            }
         });
 
     // Wi-Fi live audio (RTP/L16 today). Like the BLE sink, mutually exclusive

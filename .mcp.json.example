@@ -1,0 +1,15 @@
+{
+  "_comment": "Copy to .mcp.json and fill in the absolute path + URL + token. Claude Code reads .mcp.json automatically when invoked in this project; the file carries the Bearer token so it MUST stay out of git (.gitignore covers it). Launch Claude with `--dangerously-load-development-channels server:stackchan` because the Channel feature is research-preview.",
+  "_path_note": "The args[] path MUST be absolute. Claude Code spawns MCP subprocesses with a CWD that is NOT the project root, so relative paths like ./tools/... fail with `Module not found`.",
+  "_bun_note": "If `bun` is not on Claude's PATH, replace \"command\": \"bun\" with the absolute path printed by `which bun` (e.g. /home/<you>/.bun/bin/bun).",
+  "mcpServers": {
+    "stackchan": {
+      "command": "bun",
+      "args": ["/absolute/path/to/stackchan-idf/tools/stackchan-channel/index.ts"],
+      "env": {
+        "STACKCHAN_URL": "http://192.168.x.x",
+        "STACKCHAN_TOKEN": "<paste-the-token-from-sdkconfig.defaults.local-here>"
+      }
+    }
+  }
+}
