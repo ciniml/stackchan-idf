@@ -346,6 +346,18 @@
   </label>
   <p class="hint">無効にするとサーボ電源を入れず、サーボタスクも起動しません（保存後の再起動で反映）。操作画面の脱力/復帰トグルとは別物で、こちらは NVS に永続化されます。</p>
 
+  <details id="mcp-section" style="margin-top:1.5rem">
+    <summary>Claude Code Channel (MCP) — トークン管理</summary>
+    <p class="hint">設定されていれば <code>/mcp/*</code> HTTP API が有効化（Channel adapter から接続可）。空にすると <code>/mcp/*</code> は 404 を返します。保存後の再起動で反映されます</p>
+    <label for="mcp-token">MCP API トークン (空欄なら変更しない / 「クリア」で空文字列を NVS に書く)</label>
+    <input type="password" id="mcp-token" autocomplete="off" placeholder="(変更しないなら空欄)">
+    <div style="display:flex;gap:0.4rem;margin-top:0.3rem">
+      <button type="button" id="btn-mcp-token-gen">ランダム生成</button>
+      <button type="button" id="btn-mcp-token-show">表示</button>
+      <button type="button" id="btn-mcp-token-clear">クリア</button>
+    </div>
+  </details>
+
   <details class="jtts-section" id="jtts-section">
     <summary>アイドル時の声 (jtts) を調整する</summary>
     <p class="hint" style="margin-bottom:0.5rem">空欄や変更なしで「保存」を押すと現在の設定は維持されます。</p>
@@ -597,6 +609,11 @@ const CHR_BOARD_KIND = 'e3f0a01b-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // 0 = rail off + task not spawned at boot; 1 = normal. Staged on WRITE,
 // applied on Apply reboot. Distinct from ServoRangeMode (runtime, ephemeral).
 const CHR_SERVO_ENABLED = 'e3f0a01c-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+// McpToken — encrypted WRITE-ONLY bearer for the /mcp/* (Claude Code
+// Channel) HTTP API. WRITE stages a new token; Apply persists it to NVS
+// and reboots. Empty body clears (→ 404 on /mcp/* next boot unless the
+// firmware was built with a CONFIG_MCP_API_TOKEN fallback).
+const CHR_MCP_TOKEN = 'e3f0a01d-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const BOARD_M5_BASE = 0;
 const BOARD_TAKAO_BASE = 1;
 const BOARD_ATOM_NYAN = 2;
@@ -646,7 +663,7 @@ const DIS_CHRS = {
 
 // --- State ---
 let bleDevice = null, bleServer = null, svc = null;
-let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrServoEnabled = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null;
+let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrServoEnabled = null, chrMcpToken = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null;
 let boardKind = null; // null = unknown (older firmware), else 0/1/2 from BOARD_*
 let batteryPollTimer = null;  // setInterval handle while connected
 let jttsInitialJson = '';  // last read JSON, used to detect Apply-time changes
@@ -999,6 +1016,7 @@ function applyCapabilityGating() {
   const hasRtpEnable = !!chrRtpEn;
   const hasBatGauge = !!chrBatGauge;
   const hasServoEnabled = !!chrServoEnabled;
+  const hasMcpToken = !!chrMcpToken;
   const hasJtts = !!chrJtts;
   const hasOta = !!(chrOtaCtrl && chrOtaData);
 
@@ -1025,6 +1043,7 @@ function applyCapabilityGating() {
   setVisible('label.toggle-label[for="bat-gauge-enabled"] + p.hint', hasBatGauge);
   setVisible('label.toggle-label[for="servo-enabled"]', hasServoEnabled);
   setVisible('label.toggle-label[for="servo-enabled"] + p.hint', hasServoEnabled);
+  setVisible('#mcp-section', hasMcpToken);
   document.getElementById('jtts-section').style.display = hasJtts ? '' : 'none';
   document.getElementById('ota-section').style.display = hasOta ? '' : 'none';
   document.getElementById('btn-apply').style.display = hasSettings ? '' : 'none';
@@ -1633,6 +1652,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       ['rtpEn',      CHR_RTP_EN],
       ['batGauge',   CHR_BAT_GAUGE],
       ['servoEnabled', CHR_SERVO_ENABLED],
+      ['mcpToken',   CHR_MCP_TOKEN],
       ['servoLimits',CHR_SERVO_LIMITS],
       ['servoRangeMode', CHR_SERVO_RANGE_MODE],
       ['servoPositions', CHR_SERVO_POSITIONS],
@@ -1671,6 +1691,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
     chrRtpEn    = found.rtpEn    ?? null;
     chrBatGauge = found.batGauge ?? null;
     chrServoEnabled = found.servoEnabled ?? null;
+    chrMcpToken = found.mcpToken ?? null;
     chrServoLimits = found.servoLimits ?? null;
     chrServoRangeMode = found.servoRangeMode ?? null;
     chrServoPositions = found.servoPositions ?? null;
@@ -1892,7 +1913,7 @@ function onDisconnected() {
   clearInterval(svPosPollTimer); svPosPollTimer = null;
   svRangeOn = false;
   svLiveYaw = svLivePitch = -1;
-  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoEnabled = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = null;
+  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoEnabled = chrMcpToken = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = null;
   boardKind = null;
   aesKey = null;
   clearDeviceInfo();
@@ -2009,6 +2030,16 @@ document.getElementById('btn-apply').addEventListener('click', async () => {
     if (chrServoEnabled && seInitial !== undefined && seInitial !== seWanted) {
       await writeEncrypted(chrServoEnabled, new Uint8Array([seCheckbox.checked ? 1 : 0]));
       log(`サーボを ${seCheckbox.checked ? '有効' : '無効'} に切り替え`, 'ok');
+    }
+
+    // MCP API token (write-only). Push only when the user typed a value OR
+    // explicitly hit Clear (data-cleared=1 ⇒ send empty body to wipe NVS).
+    const mcpTokenEl = document.getElementById('mcp-token');
+    if (chrMcpToken && (mcpTokenEl.value || mcpTokenEl.dataset.cleared === '1')) {
+      await writeEncrypted(chrMcpToken, strToBytes(mcpTokenEl.value));
+      log(`MCP API トークン 書き込み完了 (${mcpTokenEl.value.length}B)`, 'ok');
+      mcpTokenEl.value = '';
+      delete mcpTokenEl.dataset.cleared;
     }
 
     // Servo limits: write the JSON if any field changed.
@@ -2402,6 +2433,36 @@ document.getElementById('sv-cap-yaw-max').addEventListener('click',  () => captu
 document.getElementById('sv-cap-pitch-zero').addEventListener('click', () => capturePitch('zero'));
 document.getElementById('sv-cap-pitch-min').addEventListener('click',  () => capturePitch('min'));
 document.getElementById('sv-cap-pitch-max').addEventListener('click',  () => capturePitch('max'));
+
+// MCP API token: random-generate / show / clear. The "clear" path sets a
+// data-cleared marker so the apply path POSTs an empty body explicitly
+// rather than treating an empty field as "leave as-is".
+const MCP_TOKEN_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+function generateMcpToken(len = 32) {
+  const out = new Uint8Array(len);
+  crypto.getRandomValues(out);
+  let s = '';
+  for (let i = 0; i < len; ++i) {
+    s += MCP_TOKEN_ALPHABET[out[i] % MCP_TOKEN_ALPHABET.length];
+  }
+  return s;
+}
+document.getElementById('btn-mcp-token-gen').addEventListener('click', () => {
+  const el = document.getElementById('mcp-token');
+  el.value = generateMcpToken();
+  el.type = 'text';
+  delete el.dataset.cleared;
+});
+document.getElementById('btn-mcp-token-show').addEventListener('click', () => {
+  const el = document.getElementById('mcp-token');
+  el.type = (el.type === 'password') ? 'text' : 'password';
+});
+document.getElementById('btn-mcp-token-clear').addEventListener('click', () => {
+  const el = document.getElementById('mcp-token');
+  el.value = '';
+  el.type = 'password';
+  el.dataset.cleared = '1';
+});
 
 // ===== Battery (READ + poll) ================================================
 // Decode the 5-byte Battery payload [mV u16 LE][mA i16 LE][pct i8] into a label.

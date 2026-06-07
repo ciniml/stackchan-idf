@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -24,10 +25,14 @@ namespace {
 constexpr const char* kTag = "mcp-events";
 
 // Each queued event is rendered into a flat NUL-terminated SSE frame
-// (`event: X\ndata: {...}\n\n`) so the streaming side just memcpy's onto the
-// wire. 320 B is enough for any Phase 2 event with margin to spare.
-constexpr std::size_t kFrameBytes = 320;
-constexpr std::size_t kQueueDepth = 16;
+// (`event: X\ndata: {...}\n\n`) so the streaming side just memcpy's onto
+// the wire. 256 B fits the largest Phase 2 payload (boot, ~120 B with
+// `firmware` + `ip` + `board`) with margin; depth 8 absorbs a brief stall
+// without backpressuring publishers and without burning ~5 KB of internal
+// RAM (queue storage lives in DRAM — see conversation_task.cpp's segment
+// buffer alloc which fights for the same pool).
+constexpr std::size_t kFrameBytes = 256;
+constexpr std::size_t kQueueDepth = 8;
 
 struct Frame {
     char buf[kFrameBytes];
@@ -158,15 +163,30 @@ void start(ConvStatusGetter getter)
     bool expected = false;
     if (!g_started.compare_exchange_strong(expected, true)) return;
     g_conv_getter = getter;
-    g_queue = xQueueCreate(kQueueDepth, sizeof(Frame));
+    // Queue storage lives in PSRAM (saves ~2 KiB of internal RAM that
+    // conversation_task's segment buffers + TLS handshake fight over at
+    // boot). Only the queue control block stays in DRAM, which is
+    // unavoidable — FreeRTOS uses it from ISR context.
+    static StaticQueue_t s_queue_cb;
+    auto* storage = static_cast<std::uint8_t*>(
+        heap_caps_malloc(kQueueDepth * sizeof(Frame), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (storage == nullptr) {
+        ESP_LOGE(kTag, "queue storage alloc (PSRAM) failed");
+        g_started.store(false, std::memory_order_relaxed);
+        return;
+    }
+    g_queue = xQueueCreateStatic(kQueueDepth, sizeof(Frame), storage, &s_queue_cb);
     if (g_queue == nullptr) {
-        ESP_LOGE(kTag, "xQueueCreate failed");
+        ESP_LOGE(kTag, "xQueueCreateStatic failed");
+        heap_caps_free(storage);
         g_started.store(false, std::memory_order_relaxed);
         return;
     }
     if (getter != nullptr) {
-        // 3 KiB is plenty: the monitor task only does atomic reads + snprintf
-        // + xQueueSend. Pin to core 0 alongside the other event-loop tasks.
+        // 3 KiB. The monitor task itself only does atomic reads + a tiny
+        // snprintf + xQueueSend, but the publish path drops into the
+        // logging subsystem (and any future telemetry) which eats stack
+        // unpredictably. 2 KiB tipped mcp_boot into overflow at boot.
         xTaskCreatePinnedToCore(monitor_task_entry, "mcp-evt-mon", 3072, nullptr,
                                 tskIDLE_PRIORITY + 1, nullptr, 0);
     }

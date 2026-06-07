@@ -370,6 +370,17 @@
   </label>
   <p class="hint">無効にするとサーボ電源を入れず、サーボタスクも起動しません（保存後の再起動で反映）。操作画面の脱力/復帰トグルとは別物で、こちらは NVS に永続化されます。</p>
 
+  <h3 style="margin-top:1.5rem">Claude Code Channel (MCP)</h3>
+  <p class="hint" id="mcp-token-status">トークン: <span id="mcp-token-state">—</span></p>
+  <label for="mcp-token">MCP API トークン (空欄なら変更しない / 値が入っているなら上書き、空文字列に揃えるには「クリア」)</label>
+  <input type="password" id="mcp-token" autocomplete="off" placeholder="(変更しないなら空欄)">
+  <div style="display:flex;gap:0.4rem;margin-top:0.3rem">
+    <button type="button" id="btn-mcp-token-gen">ランダム生成</button>
+    <button type="button" id="btn-mcp-token-show">表示</button>
+    <button type="button" id="btn-mcp-token-clear">クリア</button>
+  </div>
+  <p class="hint">設定されていれば <code>/mcp/*</code> が有効化（adapter から接続可）。空にすると <code>/mcp/*</code> は 404 を返します（保存後の再起動で反映）</p>
+
   <details class="jtts-section" id="jtts-section">
     <summary>アイドル時の声 (jtts) を調整する</summary>
     <p class="hint" style="margin-bottom:0.5rem">空欄や変更なしで「保存」を押すと現在の設定は維持されます。</p>
@@ -730,6 +741,36 @@ $('sv-cap-pitch-zero').addEventListener('click', () => capturePitch('zero'));
 $('sv-cap-pitch-min').addEventListener('click',  () => capturePitch('min'));
 $('sv-cap-pitch-max').addEventListener('click',  () => capturePitch('max'));
 
+// MCP API token: random-generate / show / clear. The "clear" path stores a
+// data-cleared marker so apply() knows to POST an empty body explicitly
+// rather than treating an empty field as "leave as-is".
+const MCP_TOKEN_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+function generateMcpToken(len = 32) {
+  const out = new Uint8Array(len);
+  crypto.getRandomValues(out);
+  let s = '';
+  for (let i = 0; i < len; ++i) {
+    s += MCP_TOKEN_ALPHABET[out[i] % MCP_TOKEN_ALPHABET.length];
+  }
+  return s;
+}
+$('btn-mcp-token-gen').addEventListener('click', () => {
+  const el = $('mcp-token');
+  el.value = generateMcpToken();
+  el.type = 'text';
+  delete el.dataset.cleared;
+});
+$('btn-mcp-token-show').addEventListener('click', () => {
+  const el = $('mcp-token');
+  el.type = (el.type === 'password') ? 'text' : 'password';
+});
+$('btn-mcp-token-clear').addEventListener('click', () => {
+  const el = $('mcp-token');
+  el.value = '';
+  el.type = 'password';
+  el.dataset.cleared = '1';
+});
+
 // --- Status refresh ---
 
 // Per-board gating: Atom-nyan has no servos, no battery monitor. Older
@@ -780,6 +821,7 @@ async function refresh() {
     $('rtp-enabled').checked = (s.rtp_audio_enabled !== false); // default on if absent
     $('bat-gauge-enabled').checked = (s.battery_gauge_enabled !== false); // default on if absent
     $('servo-enabled').checked = (s.servo_enabled !== false); // default on if absent
+    $('mcp-token-state').textContent = s.has_mcp_token ? '設定済' : '未設定';
     // ffmpeg send examples. This page is served by the device, so its own
     // hostname is the RTP destination.
     const h = location.hostname || (s.ip || '');
@@ -860,6 +902,16 @@ async function apply() {
     await postText('/api/rtp-enabled', rtpEnabled ? '1' : '0');
     await postText('/api/battery-gauge', batGauge ? '1' : '0');
     await postText('/api/servo-enabled', servoEn ? '1' : '0');
+    // MCP token: send only when the user typed something OR explicitly hit
+    // "clear" (signalled by data-cleared="1"). An untouched blank field is
+    // "leave as-is".
+    const mcpEl = $('mcp-token');
+    if (mcpEl.value || mcpEl.dataset.cleared === '1') {
+      await postText('/api/mcp-token', mcpEl.value);
+      log('MCP API トークン送信', 'ok');
+      mcpEl.value = '';
+      delete mcpEl.dataset.cleared;
+    }
     if (jtts)      { await postText('/api/jtts-config', jtts);                log('jtts 設定送信', 'ok'); }
     // Servo limits: send the canonical JSON every Apply (cheap; server-side merge ignores no-ops).
     await postText('/api/servo-limits', servoLimitsJson());                   log('サーボ設定送信', 'ok');

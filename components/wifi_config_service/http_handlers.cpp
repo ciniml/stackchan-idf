@@ -50,6 +50,7 @@ struct StagingBuffer {
     std::optional<bool> rtp_audio_enabled;
     std::optional<bool> battery_gauge_enabled;
     std::optional<bool> servo_enabled;
+    std::optional<std::string> mcp_api_token;
     std::optional<config::Provider> provider;
 };
 
@@ -73,6 +74,11 @@ McpSayKanaSink g_mcp_say_sink = nullptr;
 McpExpressionSink g_mcp_expression_sink = nullptr;
 McpBalloonSink g_mcp_balloon_sink = nullptr;
 bool g_servo_range_mode = false;
+// Active /mcp/* bearer. NVS-resolved at register_handlers() time; empty →
+// /mcp/* answers 404. Defined here (rather than next to the /mcp/* code
+// block below) so the /api/status handler higher up the file can read
+// has_mcp_token without a forward declaration.
+std::string g_mcp_active_token;
 // Board variant (mirrors board::BoardKind). Defaults to 0 = M5Base for
 // compat — overwritten by main at boot.
 std::uint8_t g_board_kind = 0;
@@ -241,6 +247,9 @@ esp_err_t handle_status_get(httpd_req_t* req)
     body += "\"rtp_audio_enabled\":" + std::string(cfg.rtp_audio_enabled ? "true" : "false") + ",";
     body += "\"battery_gauge_enabled\":" + std::string(cfg.battery_gauge_enabled ? "true" : "false") + ",";
     body += "\"servo_enabled\":" + std::string(cfg.servo_enabled ? "true" : "false") + ",";
+    // Token itself is never returned; the UI only needs to know whether the
+    // /mcp/* API is reachable (= has a token).
+    body += "\"has_mcp_token\":" + std::string(g_mcp_active_token.empty() ? "false" : "true") + ",";
     body += "\"provider\":" + std::to_string(static_cast<int>(cfg.provider)) + ",";
     body += "\"jtts_config\":\"" + escape_json(cfg.jtts_config_json) + "\",";
     body += "\"servo_limits\":\"" + escape_json(cfg.servo_limits_json) + "\",";
@@ -365,6 +374,20 @@ esp_err_t handle_servo_enabled_post(httpd_req_t* req)
     return send_empty(req);
 }
 
+esp_err_t handle_mcp_token_post(httpd_req_t* req)
+{
+    // The token can be anything up to 128 bytes; the firmware just stores it
+    // verbatim and constant-time compares against the Authorization header.
+    // An empty body explicitly clears the NVS token (next reboot → 404 on
+    // /mcp/*, or falls back to the Kconfig build-time default if present).
+    std::string body;
+    if (read_body_str(req, body, 128) != ESP_OK) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_staging.mcp_api_token = std::move(body);
+    xSemaphoreGive(g_mutex);
+    return send_empty(req);
+}
+
 esp_err_t handle_provider_post(httpd_req_t* req)
 {
     std::string body;
@@ -443,6 +466,7 @@ esp_err_t handle_apply_post(httpd_req_t* req)
     if (g_staging.rtp_audio_enabled) merged.rtp_audio_enabled = *g_staging.rtp_audio_enabled;
     if (g_staging.battery_gauge_enabled) merged.battery_gauge_enabled = *g_staging.battery_gauge_enabled;
     if (g_staging.servo_enabled)   merged.servo_enabled = *g_staging.servo_enabled;
+    if (g_staging.mcp_api_token)   merged.mcp_api_token = *g_staging.mcp_api_token;
     if (g_staging.jtts_config)     merged.jtts_config_json = *g_staging.jtts_config;
     if (g_staging.servo_limits)    merged.servo_limits_json = *g_staging.servo_limits;
     if (g_staging.gemini_api_key)  merged.gemini_api_key = *g_staging.gemini_api_key;
@@ -557,8 +581,7 @@ constexpr std::size_t kMaxMcpBalloonBytes = 1024;
 
 bool mcp_auth_ok(httpd_req_t* req)
 {
-    constexpr const char* expected = CONFIG_MCP_API_TOKEN;
-    if (expected[0] == '\0') return false;
+    if (g_mcp_active_token.empty()) return false;
     char hdr[160];
     if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) != ESP_OK) {
         return false;
@@ -568,11 +591,11 @@ bool mcp_auth_ok(httpd_req_t* req)
     if (std::strncmp(hdr, prefix, plen) != 0) return false;
     // Constant-time compare on the token tail.
     const char* tok = hdr + plen;
-    const std::size_t expected_len = std::strlen(expected);
+    const std::size_t expected_len = g_mcp_active_token.size();
     if (std::strlen(tok) != expected_len) return false;
     unsigned diff = 0;
     for (std::size_t i = 0; i < expected_len; ++i) {
-        diff |= static_cast<unsigned char>(tok[i] ^ expected[i]);
+        diff |= static_cast<unsigned char>(tok[i] ^ g_mcp_active_token[i]);
     }
     return diff == 0;
 }
@@ -581,7 +604,7 @@ esp_err_t mcp_gate(httpd_req_t* req)
 {
     // 404 (not 401) when the API is entirely disabled so the URL surface
     // is indistinguishable from an unrelated path.
-    if (CONFIG_MCP_API_TOKEN[0] == '\0') {
+    if (g_mcp_active_token.empty()) {
         return send_error(req, "404 Not Found");
     }
     if (!mcp_auth_ok(req)) {
@@ -702,6 +725,21 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     }
     g_active = current;
 
+    // Resolve the live /mcp/* bearer. NVS wins so rotations from the settings
+    // UI stick across reboots; the Kconfig token survives as a build-time
+    // default for installs that pre-date the NVS field. Empty after both
+    // sources means /mcp/* answers 404.
+    g_mcp_active_token = current.mcp_api_token;
+    if (g_mcp_active_token.empty() && CONFIG_MCP_API_TOKEN[0] != '\0') {
+        g_mcp_active_token = CONFIG_MCP_API_TOKEN;
+        ESP_LOGI(kTag, "mcp token: NVS empty, using CONFIG_MCP_API_TOKEN fallback");
+    } else if (!g_mcp_active_token.empty()) {
+        ESP_LOGI(kTag, "mcp token: NVS (%u bytes)",
+                 static_cast<unsigned>(g_mcp_active_token.size()));
+    } else {
+        ESP_LOGI(kTag, "mcp token: none → /mcp/* will answer 404");
+    }
+
     add(server, "/",                    HTTP_GET,  handle_root_get);
     add(server, "/api/status",          HTTP_GET,  handle_status_get);
     add(server, "/api/ssid",            HTTP_POST, handle_ssid_post);
@@ -714,6 +752,7 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/rtp-enabled",     HTTP_POST, handle_rtp_enabled_post);
     add(server, "/api/battery-gauge",   HTTP_POST, handle_battery_gauge_post);
     add(server, "/api/servo-enabled",   HTTP_POST, handle_servo_enabled_post);
+    add(server, "/api/mcp-token",       HTTP_POST, handle_mcp_token_post);
     add(server, "/api/provider",        HTTP_POST, handle_provider_post);
     add(server, "/api/jtts-config",     HTTP_POST, handle_jtts_config_post);
     add(server, "/api/servo-limits",    HTTP_POST, handle_servo_limits_post);

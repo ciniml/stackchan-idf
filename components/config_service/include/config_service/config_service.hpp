@@ -69,6 +69,12 @@ struct DeviceConfig {
     // torque toggle (the on-device 操作 page). Defaults to true. Takes effect
     // after the Apply reboot.
     bool servo_enabled = true;
+    // Bearer token for the /mcp/* (Claude Code Channel) HTTP API. Empty →
+    // the entire namespace responds 404 (API disabled). Settable from BLE
+    // / Wi-Fi (write-only). Takes effect after the Apply reboot. When
+    // empty, the firmware falls back to CONFIG_MCP_API_TOKEN at boot so
+    // pre-NVS installs keep working until rotated.
+    std::string mcp_api_token;
     // Compact JSON describing per-servo zero position (raw SCS step) and motion
     // range (degrees relative to zero). Empty → built-in M5-base defaults. The
     // Takao base mounts the head differently so these are configurable + saved.

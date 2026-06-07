@@ -606,38 +606,9 @@ extern "C" void app_main()
     stackchan::wifi_config::set_servo_range_mode_sink(&on_servo_range_mode);
     stackchan::wifi_config::set_servo_positions_getter(&servo_positions);
     stackchan::wifi_config::set_board_kind(static_cast<std::uint8_t>(board.kind()));
-    // Boot the /mcp/events push-event surface. Safe to call before HTTP is up
-    // — the SSE handler is registered with the same set of /mcp/* routes when
-    // the server starts; the FIFO just buffers the boot event until a client
-    // connects. The getter returns the current ConvStatus as int so this
-    // component doesn't have to know about shared_state.hpp.
-    stackchan::wifi_config::mcp_events::start(+[]() -> int {
-        return g_state == nullptr ? 0
-                                  : static_cast<int>(g_state->conversation_status.load(
-                                        std::memory_order_relaxed));
-    });
-    // Fire the boot event once Wi-Fi has an IP — Claude wants the address +
-    // FW version up front, both meaningless before the IP is assigned.
-    xTaskCreatePinnedToCore(
-        +[](void* arg) {
-            const std::uint8_t kind = *static_cast<std::uint8_t*>(arg);
-            delete static_cast<std::uint8_t*>(arg);
-            while (!stackchan::app::wifi_is_connected()) {
-                vTaskDelay(pdMS_TO_TICKS(500));
-            }
-            const auto* desc = esp_app_get_description();
-            char ip[16] = "-";
-            esp_netif_t* nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-            esp_netif_ip_info_t info{};
-            if (nif != nullptr && esp_netif_get_ip_info(nif, &info) == ESP_OK && info.ip.addr != 0) {
-                std::snprintf(ip, sizeof(ip), IPSTR, IP2STR(&info.ip));
-            }
-            stackchan::wifi_config::mcp_events::publish_boot(
-                desc ? desc->version : "?", ip, kind);
-            vTaskDelete(nullptr);
-        },
-        "mcp_boot", 3072, new std::uint8_t{static_cast<std::uint8_t>(board.kind())},
-        tskIDLE_PRIORITY + 1, nullptr, 0);
+    // (Channel /mcp/events bring-up happens AFTER start_conversation_task so
+    //  the conv-task gets first dibs on contiguous internal RAM for its 3 ×
+    //  8 KB segment buffers + TLS handshake. See below.)
 
 #ifdef CONFIG_TELEGRAM_PHASE1_ENABLED
     // Phase 1 throwaway: once Wi-Fi STA has an IP, fire ONE getUpdates request
@@ -872,6 +843,43 @@ extern "C" void app_main()
     // I2S bus for always-on voice chat. Started after the boot-time mic test
     // so the two never contend for the bus.
     stackchan::app::start_conversation_task(*g_conversation_args);
+
+    // Channel /mcp/events bring-up — deferred until after conv-task is created
+    // so the conv-task's seg_buf_ alloc (3 × 8 KB internal-RAM contiguous) and
+    // initial TLS / WebSocket setup don't race the SSE queue + monitor-task
+    // stack for the same pool. mcp_events::start allocates the queue (in
+    // PSRAM) and a 3 KiB internal-RAM stack for the diff monitor — small but
+    // fragmenting if it lands before the segment buffers.
+    stackchan::wifi_config::mcp_events::start(+[]() -> int {
+        return g_state == nullptr ? 0
+                                  : static_cast<int>(g_state->conversation_status.load(
+                                        std::memory_order_relaxed));
+    });
+    // Fire the boot event once Wi-Fi has an IP — Claude wants the address +
+    // FW version up front, both meaningless before the IP is assigned.
+    xTaskCreatePinnedToCore(
+        +[](void* arg) {
+            const std::uint8_t kind = *static_cast<std::uint8_t*>(arg);
+            delete static_cast<std::uint8_t*>(arg);
+            while (!stackchan::app::wifi_is_connected()) {
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
+            const auto* desc = esp_app_get_description();
+            char ip[16] = "-";
+            esp_netif_t* nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+            esp_netif_ip_info_t info{};
+            if (nif != nullptr && esp_netif_get_ip_info(nif, &info) == ESP_OK && info.ip.addr != 0) {
+                std::snprintf(ip, sizeof(ip), IPSTR, IP2STR(&info.ip));
+            }
+            stackchan::wifi_config::mcp_events::publish_boot(
+                desc ? desc->version : "?", ip, kind);
+            vTaskDelete(nullptr);
+        },
+        // 3 KiB minimum — esp_netif_* lookups + the heap_caps_xxx that
+        // ESP_LOGI on the publish path may exercise tip a 2 KiB stack into
+        // overflow (observed at boot on 2026-06-07).
+        "mcp_boot", 3072, new std::uint8_t{static_cast<std::uint8_t>(board.kind())},
+        tskIDLE_PRIORITY + 1, nullptr, 0);
 
     ESP_LOGI(kTag, "ready");
     demo_loop(cfg.jtts_config_json, board.has_battery(), is_atom_nyan,

@@ -108,11 +108,15 @@ tl::expected<httpd_handle_t, Error> start_http_server()
     // state nothing actually uses here (no TLS in plain HTTP mode).
     cfg.stack_size = 6144;
     cfg.lru_purge_enable = true;
-    // 3 sockets: one for the settings page's regular request/response cycle,
-    // one for a Cloudflare Tunnel /mcp/events SSE long-poll from the Channel
-    // adapter (which holds its socket open for the entire session), and one
-    // headroom slot for an overlapping /mcp/* tool call mid-stream.
-    cfg.max_open_sockets = 3;
+    // 2 sockets: SSE long-poll (held open by the Channel adapter) + one
+    // regular slot for /api/*, /mcp/say, /mcp/state, etc. esp_http_server
+    // allocates ~4-8 KB of internal RAM per socket, so each extra slot eats
+    // contiguous space that conversation_task needs for its 3 × 8 KB segment
+    // buffers (see conversation_task.cpp's seg_buf_ alloc — fragmentation
+    // there is what bricked the conv-task init at boot when this was 3).
+    // lru_purge_enable means the older socket is reclaimed if both are busy
+    // and a third request arrives.
+    cfg.max_open_sockets = 2;
 
     httpd_handle_t server = nullptr;
     esp_err_t err = httpd_start(&server, &cfg);

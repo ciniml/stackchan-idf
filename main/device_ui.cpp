@@ -68,6 +68,9 @@ ServoLimits g_stage_limits;
 
 // Cached once at init() (don't change at runtime) — read by the render task.
 std::string g_ssid;
+// Snapshot of whether the MCP API has a token set. Cached at init so the
+// Info page doesn't have to hit NVS each redraw.
+bool g_has_mcp_token = false;
 std::string g_host;
 
 // Borrowed each frame from the render task (main owns the drawing strategy).
@@ -239,7 +242,10 @@ void draw_info()
     }
 
     int y = kContentY;
-    const int dy = 22; // 9 rows must fit kContentY(46)..kH(240)
+    // 10 rows now (added MCP API state) — tighten dy from 22 → 20 so the
+    // bottom row fits under kH=240. (46 + 10*20 = 246; the last row's text
+    // baseline sits within the screen with a few px of slack.)
+    const int dy = 20;
     draw_kv(y, "FW", app ? app->version : "?", fg); y += dy;
     draw_kv(y, "SSID", g_ssid.empty() ? "(未設定)" : g_ssid.c_str(), fg); y += dy;
     draw_kv(y, "mDNS", g_host.c_str(), fg); y += dy;
@@ -249,6 +255,8 @@ void draw_info()
     draw_kv(y, "稼働", uptime, fg); y += dy;
     draw_kv(y, "空きRAM", heap, fg); y += dy;
     draw_kv(y, "電池", battery, bat_color); y += dy;
+    draw_kv(y, "MCP", g_has_mcp_token ? "設定済" : "未設定",
+            g_has_mcp_token ? ok : dim); y += dy;
 }
 
 void draw_toggle_row(int i, const char* label, bool on, int row_h = kRowH)
@@ -518,6 +526,7 @@ void init(SharedState& state)
     g_state = &state;
     const config::DeviceConfig cfg = config::load();
     g_ssid = cfg.wifi_ssid;
+    g_has_mcp_token = !cfg.mcp_api_token.empty();
     g_provider = static_cast<int>(cfg.provider);
     g_stage_conv.store(cfg.openai_enabled, std::memory_order_relaxed);
     g_stage_rtp.store(cfg.rtp_audio_enabled, std::memory_order_relaxed);
