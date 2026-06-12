@@ -113,6 +113,15 @@ public:
     std::atomic<std::uint32_t> led_color{0x00404040u}; // ignored by gradient
     std::atomic<std::uint8_t> led_brightness{96};
 
+    // LT timekeeper (main/lt_timer.cpp; ticked by demo_loop). The on-device
+    // LT tab writes lt_command / lt_total_s and renders lt_active /
+    // lt_remaining_s. Command is exchange()d to 0 by the timer so each press
+    // runs exactly once.
+    std::atomic<std::uint8_t> lt_command{0};        // 1 = start, 2 = stop/reset
+    std::atomic<std::uint16_t> lt_total_s{300};     // talk length (UI preset)
+    std::atomic<bool> lt_active{false};
+    std::atomic<std::int32_t> lt_remaining_s{300};  // negative = overtime
+
     // Servo motion mask: true while audible speech output is in progress, so
     // the servo task holds the head perfectly still (no goal writes, no torque
     // toggles). The servos and the speaker amp/codec share a power rail, and a
@@ -206,6 +215,28 @@ public:
         return face_config_json_;
     }
 
+    // LT timekeeper config (warn/over announcement words + thresholds),
+    // carried as compact JSON. Same raw-string + version pattern as
+    // face_config: BLE/HTTP write it from their host tasks; demo_loop polls
+    // the version and re-runs LtTimer::configure off the writer's stack.
+    void set_lt_config(std::string_view json)
+    {
+        std::lock_guard lock{lt_config_mutex_};
+        lt_config_json_.assign(json);
+        lt_config_version_.fetch_add(1, std::memory_order_release);
+    }
+
+    std::uint32_t lt_config_version() const noexcept
+    {
+        return lt_config_version_.load(std::memory_order_acquire);
+    }
+
+    std::string snapshot_lt_config() const
+    {
+        std::lock_guard lock{lt_config_mutex_};
+        return lt_config_json_;
+    }
+
     // Live avatar DSL bytecode (the .avbc binary the avatar_vm runs). Set at
     // boot from NVS (empty if none persisted), and replaced live via the BLE /
     // Wi-Fi upload sinks. The render task polls the version, and on a bump
@@ -266,6 +297,10 @@ private:
     mutable std::mutex face_bytecode_mutex_;
     std::vector<std::uint8_t> face_bytecode_;
     std::atomic<std::uint32_t> face_bytecode_version_{0};
+
+    mutable std::mutex lt_config_mutex_;
+    std::string lt_config_json_;
+    std::atomic<std::uint32_t> lt_config_version_{0};
 };
 
 } // namespace stackchan::app

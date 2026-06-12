@@ -70,6 +70,11 @@ void set_avatar_bytecode_sink(AvatarBytecodeSink sink);
 using McpSayKanaSink = std::function<void(std::string_view kana)>;
 void set_mcp_say_kana_sink(McpSayKanaSink sink);
 
+// LT timekeeper config JSON (live-apply, same contract as the BLE side's
+// LtConfigSink). POST /api/lt-config delivers the raw JSON here.
+using LtConfigSink = std::function<void(std::string_view json)>;
+void set_lt_config_sink(LtConfigSink sink);
+
 // `POST /mcp/expression` — set avatar face expression.
 //   name ∈ {"neutral","happy","sad","angry","doubt","sleepy"}
 using McpExpressionSink = std::function<void(std::string_view name)>;

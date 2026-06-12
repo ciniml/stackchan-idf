@@ -219,6 +219,13 @@ static const ble_uuid128_t kServoEnabledUuid = BLE_UUID128_INIT(
 static const ble_uuid128_t kMcpTokenUuid = BLE_UUID128_INIT(
     0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
     0x2a, 0x4d, 0x1c, 0x7b, 0x1d, 0xa0, 0xf0, 0xe3);
+// LtConfig — encrypted compact JSON for the LT timekeeper (talk length,
+// warning threshold, repeat period, announcement words). WRITE applies live
+// (no reboot) via the registered LtConfigSink and stages for Apply (NVS
+// persist); READ returns the active JSON. See main/lt_timer.hpp.
+static const ble_uuid128_t kLtConfigUuid = BLE_UUID128_INIT(
+    0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
+    0x2a, 0x4d, 0x1c, 0x7b, 0x1e, 0xa0, 0xf0, 0xe3);
 
 // --- Mutable state guarded by g_mutex ---
 static SemaphoreHandle_t g_mutex = nullptr;
@@ -231,6 +238,7 @@ struct StagingBuffer {
     std::optional<bool> battery_gauge_enabled;
     std::optional<bool> servo_enabled;
     std::optional<std::string> mcp_api_token;
+    std::optional<std::string> lt_config;
     std::optional<Provider> provider;
 };
 
@@ -257,6 +265,7 @@ static uint16_t g_rtp_enabled_handle = 0;
 static uint16_t g_bat_gauge_handle = 0;
 static uint16_t g_servo_enabled_handle = 0;
 static uint16_t g_mcp_token_handle = 0;
+static uint16_t g_lt_config_handle = 0;
 static uint16_t g_servo_limits_handle = 0;
 static uint16_t g_servo_range_mode_handle = 0;
 static uint16_t g_servo_positions_handle = 0;
@@ -293,6 +302,7 @@ static bool g_audio_session_active = false;
 // dropped (the value is still staged + persisted on Apply). Called from the
 // GATT host task; the callback must not parse JSON there (small stack).
 static FaceConfigSink g_face_config_sink = nullptr;
+static LtConfigSink g_lt_config_sink = nullptr;
 
 // Range-mode sink + live position getter, owned by main/app_main. nullptr
 // callbacks make the corresponding READ/WRITE behave as if the feature is
@@ -525,6 +535,19 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
                 return BLE_ATT_ERR_UNLIKELY;
             }
             const std::string json = g_active.face_config_json;
+            const bool ok = append_encrypted(
+                ctxt->om,
+                {reinterpret_cast<const std::uint8_t*>(json.data()), json.size()});
+            xSemaphoreGive(g_mutex);
+            return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
+        }
+        if (attr_handle == g_lt_config_handle) {
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            if (!g_session.is_established()) {
+                xSemaphoreGive(g_mutex);
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            const std::string json = g_active.lt_config_json;
             const bool ok = append_encrypted(
                 ctxt->om,
                 {reinterpret_cast<const std::uint8_t*>(json.data()), json.size()});
@@ -869,6 +892,18 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (sink != nullptr) sink(val);
             return 0;
         }
+        if (attr_handle == g_lt_config_handle) {
+            if (pt.size() > kMaxJttsConfigBytes) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            g_staging.lt_config = val; // stage for Apply (NVS persist)
+            LtConfigSink sink = g_lt_config_sink;
+            xSemaphoreGive(g_mutex);
+            // Live apply: demo_loop polls the version and re-parses off this
+            // (small) host-task stack.
+            if (sink != nullptr) sink(val);
+            return 0;
+        }
         if (attr_handle == g_servo_limits_handle) {
             if (pt.size() > kMaxJttsConfigBytes) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
@@ -900,6 +935,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (g_staging.battery_gauge_enabled) merged.battery_gauge_enabled = *g_staging.battery_gauge_enabled;
             if (g_staging.servo_enabled) merged.servo_enabled = *g_staging.servo_enabled;
             if (g_staging.mcp_api_token) merged.mcp_api_token = *g_staging.mcp_api_token;
+            if (g_staging.lt_config) merged.lt_config_json = *g_staging.lt_config;
             if (g_staging.jtts_config) merged.jtts_config_json = *g_staging.jtts_config;
             if (g_staging.gemini_api_key) merged.gemini_api_key = *g_staging.gemini_api_key;
             if (g_staging.xiaozhi_url) merged.xiaozhi_url = *g_staging.xiaozhi_url;
@@ -1009,6 +1045,12 @@ static ble_gatt_chr_def kChrs[] = {
         .access_cb = gatt_access_cb,
         .flags = BLE_GATT_CHR_F_WRITE,
         .val_handle = &g_mcp_token_handle,
+    },
+    {
+        .uuid = &kLtConfigUuid.u,
+        .access_cb = gatt_access_cb,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+        .val_handle = &g_lt_config_handle,
     },
     {
         .uuid = &kServoLimitsUuid.u,
@@ -1227,6 +1269,13 @@ void reset_session()
 void set_audio_stream_sink(const AudioStreamSink* sink)
 {
     g_audio_sink = sink;
+}
+
+void set_lt_config_sink(LtConfigSink sink)
+{
+    // Plain write (no g_mutex) — same rationale as set_face_config_sink
+    // below: registered from app_main before gatt::init() creates the mutex.
+    g_lt_config_sink = sink;
 }
 
 void set_face_config_sink(FaceConfigSink sink)

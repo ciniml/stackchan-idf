@@ -169,16 +169,24 @@ std::string Speech::babble(std::uint32_t seed)
         return {};
     }
     const Phrase& phrase = phrases_[seed % phrases_.size()];
+    // Couldn't pronounce → still return the display text so the caller shows
+    // the matching balloon (no audio / mouth movement in that case).
+    (void)say(phrase.reading);
+    return phrase.display;
+}
 
+bool Speech::say(std::u32string_view reading)
+{
+    if (!initialised_) {
+        configure(""); // first-call lazy init with defaults
+    }
     jtts::Options opt = opts_;
     opt.sample_rate_hz = kSampleRate; // playback rate is fixed for envelope sync
 
     pcm_.clear();
-    auto r = jtts::synthesize(phrase.reading, pcm_, opt);
+    auto r = jtts::synthesize(std::u32string{reading}, pcm_, opt);
     if (!r || pcm_.empty()) {
-        // Couldn't pronounce this reading — still return the display text so
-        // the caller shows the matching balloon (no audio / mouth movement).
-        return phrase.display;
+        return false;
     }
 
     build_envelope_from_pcm(pcm_, envelope_, kSampleRate, kEnvelopeStepMs);
@@ -193,7 +201,7 @@ std::string Speech::babble(std::uint32_t seed)
     M5.Speaker.playRaw(pcm_.data(), pcm_.size(), kSampleRate, /*stereo=*/false,
                        /*repeat=*/1, /*channel=*/-1,
                        /*stop_current_sound=*/true);
-    return phrase.display;
+    return true;
 }
 
 void Speech::stop()

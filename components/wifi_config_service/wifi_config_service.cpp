@@ -212,6 +212,11 @@ void set_mcp_say_kana_sink(McpSayKanaSink sink)
 {
     http::set_mcp_say_kana_sink(std::move(sink));
 }
+
+void set_lt_config_sink(LtConfigSink sink)
+{
+    http::set_lt_config_sink(std::move(sink));
+}
 void set_mcp_expression_sink(McpExpressionSink sink)
 {
     http::set_mcp_expression_sink(std::move(sink));

@@ -381,6 +381,36 @@
   </div>
   <p class="hint">設定されていれば <code>/mcp/*</code> が有効化（adapter から接続可）。空にすると <code>/mcp/*</code> は 404 を返します（保存後の再起動で反映）</p>
 
+  <details id="lt-section">
+    <summary>LT タイムキーパー</summary>
+    <p class="hint">本体の「LT」タブで開始/停止。ここでは既定時間と通知ワードを設定します（保存しなくても送信で即反映、保存で再起動後も保持）。読みはひらがな（jtts は漢字を読めません）</p>
+    <div class="grid2">
+      <div>
+        <label for="lt-total">発表時間 (秒)</label>
+        <input type="number" id="lt-total" min="30" max="3600" step="30" placeholder="300">
+      </div>
+      <div>
+        <label for="lt-warn">残り通知 (終了の何秒前)</label>
+        <input type="number" id="lt-warn" min="10" max="600" step="10" placeholder="60">
+      </div>
+    </div>
+    <div class="grid2">
+      <div>
+        <label for="lt-repeat">超過の繰返し間隔 (秒、0=1回のみ)</label>
+        <input type="number" id="lt-repeat" min="0" max="300" step="5" placeholder="30">
+      </div>
+    </div>
+    <label for="lt-warn-text">残り通知 表示テキスト</label>
+    <input id="lt-warn-text" placeholder="のこり1分です">
+    <label for="lt-warn-reading">残り通知 読み (ひらがな)</label>
+    <input id="lt-warn-reading" placeholder="のこり いっぷん です">
+    <label for="lt-over-text">超過 表示テキスト</label>
+    <input id="lt-over-text" placeholder="時間です!">
+    <label for="lt-over-reading">超過 読み (ひらがな)</label>
+    <input id="lt-over-reading" placeholder="おじかん です">
+    <button type="button" id="btn-lt-send" style="margin-top:0.5rem">LT 設定を送信 (即反映)</button>
+  </details>
+
   <details class="jtts-section" id="jtts-section">
     <summary>アイドル時の声 (jtts) を調整する</summary>
     <p class="hint" style="margin-bottom:0.5rem">空欄や変更なしで「保存」を押すと現在の設定は維持されます。</p>
@@ -771,6 +801,49 @@ $('btn-mcp-token-clear').addEventListener('click', () => {
   el.dataset.cleared = '1';
 });
 
+// --- LT timekeeper config ---
+
+// Build the compact JSON from whichever fields are filled. Empty form → null
+// (= nothing to send; firmware keeps current values).
+function buildLtConfig() {
+  const num = (id) => { const v = $(id).value.trim(); return v === '' ? null : Number(v); };
+  const str = (id) => { const v = $(id).value.trim(); return v === '' ? null : v; };
+  const o = {};
+  const total = num('lt-total');   if (total  != null && total  > 0) o.total_s  = total;
+  const warn  = num('lt-warn');    if (warn   != null && warn   > 0) o.warn_s   = warn;
+  const rep   = num('lt-repeat');  if (rep    != null && rep    >= 0) o.repeat_s = rep;
+  const wt = str('lt-warn-text'), wr = str('lt-warn-reading');
+  if (wt || wr) { o.warn = {}; if (wt) o.warn.text = wt; if (wr) o.warn.reading = wr; }
+  const ot = str('lt-over-text'), or_ = str('lt-over-reading');
+  if (ot || or_) { o.over = {}; if (ot) o.over.text = ot; if (or_) o.over.reading = or_; }
+  return Object.keys(o).length ? JSON.stringify(o) : null;
+}
+
+function applyLtConfigToForm(json) {
+  if (!json) return;
+  let o;
+  try { o = JSON.parse(json); } catch { return; }
+  if (o.total_s  != null) $('lt-total').value  = o.total_s;
+  if (o.warn_s   != null) $('lt-warn').value   = o.warn_s;
+  if (o.repeat_s != null) $('lt-repeat').value = o.repeat_s;
+  if (o.warn) { if (o.warn.text) $('lt-warn-text').value = o.warn.text;
+                if (o.warn.reading) $('lt-warn-reading').value = o.warn.reading; }
+  if (o.over) { if (o.over.text) $('lt-over-text').value = o.over.text;
+                if (o.over.reading) $('lt-over-reading').value = o.over.reading; }
+}
+
+async function sendLtConfig() {
+  const json = buildLtConfig();
+  if (!json) { log('LT 設定: 変更なし', 'ok'); return false; }
+  await postText('/api/lt-config', json);
+  log('LT 設定送信 (即反映)', 'ok');
+  return true;
+}
+
+$('btn-lt-send').addEventListener('click', () => {
+  sendLtConfig().catch((e) => log('LT 設定送信失敗: ' + e.message, 'err'));
+});
+
 // --- Status refresh ---
 
 // Per-board gating: Atom-nyan has no servos, no battery monitor. Older
@@ -833,6 +906,7 @@ async function refresh() {
       `# mu-law (OBS)  udp/6970\n` +
       `ffmpeg -re -i IN -ac 1 -ar 8000 -c:a pcm_mulaw -f rtp rtp://${h}:6970`;
     applyJttsToForm(s.jtts_config || '');
+    applyLtConfigToForm(s.lt_config || '');
     applyServoLimitsToForm(s.servo_limits || '');
     // If the device reports range mode active (e.g. another tab toggled it),
     // sync our local toggle so the capture buttons enable.
@@ -913,6 +987,9 @@ async function apply() {
       delete mcpEl.dataset.cleared;
     }
     if (jtts)      { await postText('/api/jtts-config', jtts);                log('jtts 設定送信', 'ok'); }
+    // LT timekeeper: send whatever's in the form so Apply persists it
+    // (the POST stages it server-side; /api/apply writes NVS).
+    await sendLtConfig();
     // Servo limits: send the canonical JSON every Apply (cheap; server-side merge ignores no-ops).
     await postText('/api/servo-limits', servoLimitsJson());                   log('サーボ設定送信', 'ok');
     // System prompt: send only when changed (empty after a change = reset to

@@ -75,6 +75,11 @@ struct DeviceConfig {
     // empty, the firmware falls back to CONFIG_MCP_API_TOKEN at boot so
     // pre-NVS installs keep working until rotated.
     std::string mcp_api_token;
+    // Compact JSON for the LT timekeeper (default talk length, warning
+    // threshold, repeat period, announcement texts + kana readings). Empty →
+    // firmware defaults. Applied live on BLE/HTTP write and restored at
+    // boot. See main/lt_timer.hpp for the schema.
+    std::string lt_config_json;
     // Compact JSON describing per-servo zero position (raw SCS step) and motion
     // range (degrees relative to zero). Empty → built-in M5-base defaults. The
     // Takao base mounts the head differently so these are configurable + saved.
@@ -164,6 +169,10 @@ void set_audio_stream_sink(const AudioStreamSink* sink);
 // shared state and parse there. nullptr unregisters.
 using FaceConfigSink = void (*)(std::string_view json);
 void set_face_config_sink(FaceConfigSink sink);
+
+// LT timekeeper config JSON sink — same live-apply contract as FaceConfigSink.
+using LtConfigSink = void (*)(std::string_view json);
+void set_lt_config_sink(LtConfigSink sink);
 
 // Servo range-setting mode: writing 1 puts the servo task into "torque off +
 // poll present-position" mode so the user can move the head by hand and the

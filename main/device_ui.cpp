@@ -38,8 +38,8 @@ constexpr int kTabsPerPage = 3;
 constexpr int kContentY = kBarH + 8;     // 46
 constexpr int kRowH = 42;
 
-enum Page : int { kInfo = 0, kSettings = 1, kControl = 2, kRange = 3, kConversation = 4, kTabCount };
-const char* const kTabLabels[kTabCount] = {"情報", "設定", "操作", "範囲", "会話"};
+enum Page : int { kInfo = 0, kSettings = 1, kControl = 2, kRange = 3, kConversation = 4, kLtTimer = 5, kTabCount };
+const char* const kTabLabels[kTabCount] = {"情報", "設定", "操作", "範囲", "会話", "LT"};
 int num_tab_pages() { return (kTabCount + kTabsPerPage - 1) / kTabsPerPage; }
 
 const auto* const kFontTitle = &fonts::lgfxJapanGothic_24;
@@ -445,6 +445,79 @@ void draw_conversation()
     draw_kv(y, "再接続", rc, reconnects > 0 ? warn : fg); y += dy;
 }
 
+// --- LT (lightning talk) timekeeper page ----------------------------------
+//
+// Big countdown + presets + start/stop. The timer logic itself lives in
+// main/lt_timer.cpp (ticked by demo_loop); this page only reads/writes the
+// SharedState atomics. Presets only apply while idle so a stray tap during
+// a talk can't change the deadline.
+
+constexpr std::uint16_t kLtPresetsS[] = {180, 300, 600};
+constexpr const char* kLtPresetLabels[] = {"3分", "5分", "10分"};
+constexpr int kLtPresetY = 150;
+constexpr int kLtPresetH = 36;
+constexpr int kLtStartY = 196;
+constexpr int kLtStartH = 38;
+
+void draw_lt_timer()
+{
+    const bool active = g_state->lt_active.load(std::memory_order_relaxed);
+    const std::int32_t remaining = g_state->lt_remaining_s.load(std::memory_order_relaxed);
+    const std::uint16_t total = g_state->lt_total_s.load(std::memory_order_relaxed);
+
+    const std::uint16_t fg = g_cv->color565(235, 235, 235);
+    const std::uint16_t dim = g_cv->color565(150, 150, 150);
+    const std::uint16_t ok = g_cv->color565(80, 220, 120);
+    const std::uint16_t warn = g_cv->color565(235, 200, 90);
+    const std::uint16_t err = g_cv->color565(235, 100, 100);
+
+    // Status line.
+    const char* status = !active ? "待機中" : (remaining < 0 ? "時間超過!" : "計測中");
+    const std::uint16_t status_color = !active ? dim : (remaining < 0 ? err : ok);
+    g_cv->setFont(kFontBody);
+    g_cv->setTextDatum(lgfx::textdatum_t::top_center);
+    g_cv->setTextColor(status_color);
+    g_cv->drawString(status, kW / 2, kContentY + 2);
+
+    // Big mm:ss readout. Overtime counts up with a leading minus and goes
+    // red; the last minute goes amber.
+    const std::int32_t shown = remaining < 0 ? -remaining : remaining;
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%s%d:%02d", remaining < 0 ? "-" : "",
+                  static_cast<int>(shown / 60), static_cast<int>(shown % 60));
+    const std::uint16_t time_color =
+        !active ? fg : (remaining < 0 ? err : (remaining <= 60 ? warn : fg));
+    g_cv->setFont(kFontTitle);
+    g_cv->setTextSize(2.5f);
+    g_cv->setTextDatum(lgfx::textdatum_t::middle_center);
+    g_cv->setTextColor(time_color);
+    g_cv->drawString(buf, kW / 2, kContentY + 64);
+    g_cv->setTextSize(1.0f);
+
+    // Preset row (greyed out while running).
+    const int gap = 6;
+    const int bw = (kW - 24 - 2 * gap) / 3;
+    g_cv->setFont(kFontBody);
+    g_cv->setTextDatum(lgfx::textdatum_t::middle_center);
+    for (int i = 0; i < 3; ++i) {
+        const int bx = 12 + i * (bw + gap);
+        const bool selected = (total == kLtPresetsS[i]);
+        std::uint16_t bg = active ? g_cv->color565(40, 44, 54)
+                                  : (selected ? g_cv->color565(60, 120, 200)
+                                              : g_cv->color565(50, 56, 66));
+        g_cv->fillRoundRect(bx, kLtPresetY, bw, kLtPresetH, 6, bg);
+        g_cv->setTextColor(active ? dim : fg);
+        g_cv->drawString(kLtPresetLabels[i], bx + bw / 2, kLtPresetY + kLtPresetH / 2);
+    }
+
+    // Start / stop.
+    const std::uint16_t btn_color = active ? g_cv->color565(200, 80, 80)
+                                           : g_cv->color565(60, 160, 90);
+    g_cv->fillRoundRect(12, kLtStartY, kW - 24, kLtStartH, 6, btn_color);
+    g_cv->setTextColor(g_cv->color565(245, 245, 245));
+    g_cv->drawString(active ? "ストップ" : "スタート", kW / 2, kLtStartY + kLtStartH / 2);
+}
+
 void render_page()
 {
     const int page = g_page.load(std::memory_order_relaxed);
@@ -458,6 +531,8 @@ void render_page()
         draw_control();
     } else if (page == kRange) {
         draw_range();
+    } else if (page == kLtTimer) {
+        draw_lt_timer();
     } else {
         draw_conversation();
     }
@@ -666,6 +741,26 @@ void handle_tap(int x, int y)
             save_range_and_reboot(); // does not return
         }
         if (changed) g_dirty.store(true, std::memory_order_relaxed);
+    } else if (page == kLtTimer) {
+        const bool active = g_state->lt_active.load(std::memory_order_relaxed);
+        const int gap = 6;
+        const int bw = (kW - 24 - 2 * gap) / 3;
+        // Presets — only while idle (see draw_lt_timer's greying).
+        if (!active && y >= kLtPresetY && y < kLtPresetY + kLtPresetH) {
+            for (int i = 0; i < 3; ++i) {
+                const int bx = 12 + i * (bw + gap);
+                if (x >= bx && x < bx + bw) {
+                    g_state->lt_total_s.store(kLtPresetsS[i], std::memory_order_relaxed);
+                    g_state->lt_remaining_s.store(kLtPresetsS[i], std::memory_order_relaxed);
+                    g_dirty.store(true, std::memory_order_relaxed);
+                    break;
+                }
+            }
+        } else if (in_rect(x, y, 12, kLtStartY, kW - 24, kLtStartH)) {
+            // demo_loop's lt_timer.tick consumes the command within ~50 ms.
+            g_state->lt_command.store(active ? 2 : 1, std::memory_order_relaxed);
+            g_dirty.store(true, std::memory_order_relaxed);
+        }
     }
 }
 
@@ -679,7 +774,7 @@ bool draw(avatar::RichCanvas& canvas)
     // fields (present-position from the servo task) and wants a faster refresh
     // so the captured raw doesn't lag the user's hand.
     const int page = g_page.load(std::memory_order_relaxed);
-    if (page == kInfo || page == kConversation) {
+    if (page == kInfo || page == kConversation || page == kLtTimer) {
         const std::uint32_t t = now_ms();
         if (t - g_last_info_ms > 500) {
             g_last_info_ms = t;

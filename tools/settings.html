@@ -358,6 +358,35 @@
     </div>
   </details>
 
+  <details id="lt-section" style="margin-top:1.5rem">
+    <summary>LT タイムキーパー</summary>
+    <p class="hint">本体の「LT」タブで開始/停止。ここでは既定時間と通知ワードを設定（書込で即反映、保存で再起動後も保持）。読みはひらがな（jtts は漢字を読めません）</p>
+    <div class="grid2">
+      <div>
+        <label for="lt-total">発表時間 (秒)</label>
+        <input type="number" id="lt-total" min="30" max="3600" step="30" placeholder="300">
+      </div>
+      <div>
+        <label for="lt-warn">残り通知 (秒前)</label>
+        <input type="number" id="lt-warn" min="10" max="600" step="10" placeholder="60">
+      </div>
+    </div>
+    <div class="grid2">
+      <div>
+        <label for="lt-repeat">超過繰返し (秒、0=1回)</label>
+        <input type="number" id="lt-repeat" min="0" max="300" step="5" placeholder="30">
+      </div>
+    </div>
+    <label for="lt-warn-text">残り通知 表示テキスト</label>
+    <input id="lt-warn-text" placeholder="のこり1分です">
+    <label for="lt-warn-reading">残り通知 読み (ひらがな)</label>
+    <input id="lt-warn-reading" placeholder="のこり いっぷん です">
+    <label for="lt-over-text">超過 表示テキスト</label>
+    <input id="lt-over-text" placeholder="時間です!">
+    <label for="lt-over-reading">超過 読み (ひらがな)</label>
+    <input id="lt-over-reading" placeholder="おじかん です">
+  </details>
+
   <details class="jtts-section" id="jtts-section">
     <summary>アイドル時の声 (jtts) を調整する</summary>
     <p class="hint" style="margin-bottom:0.5rem">空欄や変更なしで「保存」を押すと現在の設定は維持されます。</p>
@@ -614,6 +643,10 @@ const CHR_SERVO_ENABLED = 'e3f0a01c-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // and reboots. Empty body clears (→ 404 on /mcp/* next boot unless the
 // firmware was built with a CONFIG_MCP_API_TOKEN fallback).
 const CHR_MCP_TOKEN = 'e3f0a01d-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+// LtConfig — encrypted compact JSON for the LT timekeeper (talk length,
+// warning threshold, repeat period, announcement words). WRITE applies live;
+// READ returns the active JSON. Persisted on Apply.
+const CHR_LT_CONFIG = 'e3f0a01e-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const BOARD_M5_BASE = 0;
 const BOARD_TAKAO_BASE = 1;
 const BOARD_ATOM_NYAN = 2;
@@ -663,7 +696,7 @@ const DIS_CHRS = {
 
 // --- State ---
 let bleDevice = null, bleServer = null, svc = null;
-let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrServoEnabled = null, chrMcpToken = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null;
+let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null;
 let boardKind = null; // null = unknown (older firmware), else 0/1/2 from BOARD_*
 let batteryPollTimer = null;  // setInterval handle while connected
 let jttsInitialJson = '';  // last read JSON, used to detect Apply-time changes
@@ -1044,6 +1077,7 @@ function applyCapabilityGating() {
   setVisible('label.toggle-label[for="servo-enabled"]', hasServoEnabled);
   setVisible('label.toggle-label[for="servo-enabled"] + p.hint', hasServoEnabled);
   setVisible('#mcp-section', hasMcpToken);
+  setVisible('#lt-section', !!chrLtConfig);
   document.getElementById('jtts-section').style.display = hasJtts ? '' : 'none';
   document.getElementById('ota-section').style.display = hasOta ? '' : 'none';
   document.getElementById('btn-apply').style.display = hasSettings ? '' : 'none';
@@ -1653,6 +1687,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       ['batGauge',   CHR_BAT_GAUGE],
       ['servoEnabled', CHR_SERVO_ENABLED],
       ['mcpToken',   CHR_MCP_TOKEN],
+      ['ltConfig',   CHR_LT_CONFIG],
       ['servoLimits',CHR_SERVO_LIMITS],
       ['servoRangeMode', CHR_SERVO_RANGE_MODE],
       ['servoPositions', CHR_SERVO_POSITIONS],
@@ -1692,6 +1727,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
     chrBatGauge = found.batGauge ?? null;
     chrServoEnabled = found.servoEnabled ?? null;
     chrMcpToken = found.mcpToken ?? null;
+    chrLtConfig = found.ltConfig ?? null;
     chrServoLimits = found.servoLimits ?? null;
     chrServoRangeMode = found.servoRangeMode ?? null;
     chrServoPositions = found.servoPositions ?? null;
@@ -1816,6 +1852,28 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       }
     }
 
+    if (chrLtConfig) {
+      try {
+        const ltBytes = await readEncrypted(chrLtConfig);
+        const ltJson = dec.decode(ltBytes);
+        if (ltJson) {
+          try {
+            const o = JSON.parse(ltJson);
+            if (o.total_s  != null) document.getElementById('lt-total').value  = o.total_s;
+            if (o.warn_s   != null) document.getElementById('lt-warn').value   = o.warn_s;
+            if (o.repeat_s != null) document.getElementById('lt-repeat').value = o.repeat_s;
+            if (o.warn) { if (o.warn.text) document.getElementById('lt-warn-text').value = o.warn.text;
+                          if (o.warn.reading) document.getElementById('lt-warn-reading').value = o.warn.reading; }
+            if (o.over) { if (o.over.text) document.getElementById('lt-over-text').value = o.over.text;
+                          if (o.over.reading) document.getElementById('lt-over-reading').value = o.over.reading; }
+          } catch (_) { /* malformed stored JSON — leave placeholders */ }
+        }
+        log(ltJson ? `LT 設定を読み込み: ${ltBytes.length}B` : 'LT 設定: ファーム既定値');
+      } catch (e) {
+        log(`LT 設定の取得失敗: ${e.message}`, 'err');
+      }
+    }
+
     if (chrServoLimits) {
       try {
         const slBytes = await readEncrypted(chrServoLimits);
@@ -1913,7 +1971,7 @@ function onDisconnected() {
   clearInterval(svPosPollTimer); svPosPollTimer = null;
   svRangeOn = false;
   svLiveYaw = svLivePitch = -1;
-  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoEnabled = chrMcpToken = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = null;
+  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoEnabled = chrMcpToken = chrLtConfig = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = null;
   boardKind = null;
   aesKey = null;
   clearDeviceInfo();
@@ -2040,6 +2098,25 @@ document.getElementById('btn-apply').addEventListener('click', async () => {
       log(`MCP API トークン 書き込み完了 (${mcpTokenEl.value.length}B)`, 'ok');
       mcpTokenEl.value = '';
       delete mcpTokenEl.dataset.cleared;
+    }
+
+    // LT timekeeper: write whatever's in the form (live apply + staged).
+    if (chrLtConfig) {
+      const num = (id) => { const v = document.getElementById(id).value.trim(); return v === '' ? null : Number(v); };
+      const str = (id) => { const v = document.getElementById(id).value.trim(); return v === '' ? null : v; };
+      const o = {};
+      const lt_total = num('lt-total');  if (lt_total  != null && lt_total  > 0) o.total_s  = lt_total;
+      const lt_warn  = num('lt-warn');   if (lt_warn   != null && lt_warn   > 0) o.warn_s   = lt_warn;
+      const lt_rep   = num('lt-repeat'); if (lt_rep    != null && lt_rep    >= 0) o.repeat_s = lt_rep;
+      const lt_wt = str('lt-warn-text'), lt_wr = str('lt-warn-reading');
+      if (lt_wt || lt_wr) { o.warn = {}; if (lt_wt) o.warn.text = lt_wt; if (lt_wr) o.warn.reading = lt_wr; }
+      const lt_ot = str('lt-over-text'), lt_or = str('lt-over-reading');
+      if (lt_ot || lt_or) { o.over = {}; if (lt_ot) o.over.text = lt_ot; if (lt_or) o.over.reading = lt_or; }
+      if (Object.keys(o).length) {
+        const ltJson = JSON.stringify(o);
+        await writeEncrypted(chrLtConfig, strToBytes(ltJson));
+        log(`LT 設定 書き込み完了 (${ltJson.length}B)`, 'ok');
+      }
     }
 
     // Servo limits: write the JSON if any field changed.

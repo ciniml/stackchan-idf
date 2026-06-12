@@ -51,6 +51,7 @@ struct StagingBuffer {
     std::optional<bool> battery_gauge_enabled;
     std::optional<bool> servo_enabled;
     std::optional<std::string> mcp_api_token;
+    std::optional<std::string> lt_config;
     std::optional<config::Provider> provider;
 };
 
@@ -71,6 +72,7 @@ config::ServoRangeModeSink g_servo_range_mode_sink = nullptr;
 config::ServoPositionsGetter g_servo_positions_getter = nullptr;
 AvatarBytecodeSink g_avatar_bytecode_sink = nullptr;
 McpSayKanaSink g_mcp_say_sink = nullptr;
+LtConfigSink g_lt_config_sink = nullptr;
 McpExpressionSink g_mcp_expression_sink = nullptr;
 McpBalloonSink g_mcp_balloon_sink = nullptr;
 bool g_servo_range_mode = false;
@@ -253,6 +255,7 @@ esp_err_t handle_status_get(httpd_req_t* req)
     body += "\"provider\":" + std::to_string(static_cast<int>(cfg.provider)) + ",";
     body += "\"jtts_config\":\"" + escape_json(cfg.jtts_config_json) + "\",";
     body += "\"servo_limits\":\"" + escape_json(cfg.servo_limits_json) + "\",";
+    body += "\"lt_config\":\"" + escape_json(cfg.lt_config_json) + "\",";
     body += "\"system_prompt\":\"" + escape_json(cfg.system_prompt) + "\",";
     body += "\"conv_extra_headers\":\"" + escape_json(cfg.conv_extra_headers) + "\",";
     body += "\"battery_mv\":" + std::to_string(bat_mv) + ",";
@@ -374,6 +377,20 @@ esp_err_t handle_servo_enabled_post(httpd_req_t* req)
     return send_empty(req);
 }
 
+esp_err_t handle_lt_config_post(httpd_req_t* req)
+{
+    // LT timekeeper config JSON. Applied live through the sink (demo_loop
+    // re-parses off this task's stack) and staged so /api/apply persists it.
+    std::string body;
+    if (read_body_str(req, body, kMaxJttsConfig) != ESP_OK) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_staging.lt_config = body;
+    LtConfigSink sink = g_lt_config_sink;
+    xSemaphoreGive(g_mutex);
+    if (sink) sink(body);
+    return send_empty(req);
+}
+
 esp_err_t handle_mcp_token_post(httpd_req_t* req)
 {
     // The token can be anything up to 128 bytes; the firmware just stores it
@@ -467,6 +484,7 @@ esp_err_t handle_apply_post(httpd_req_t* req)
     if (g_staging.battery_gauge_enabled) merged.battery_gauge_enabled = *g_staging.battery_gauge_enabled;
     if (g_staging.servo_enabled)   merged.servo_enabled = *g_staging.servo_enabled;
     if (g_staging.mcp_api_token)   merged.mcp_api_token = *g_staging.mcp_api_token;
+    if (g_staging.lt_config)       merged.lt_config_json = *g_staging.lt_config;
     if (g_staging.jtts_config)     merged.jtts_config_json = *g_staging.jtts_config;
     if (g_staging.servo_limits)    merged.servo_limits_json = *g_staging.servo_limits;
     if (g_staging.gemini_api_key)  merged.gemini_api_key = *g_staging.gemini_api_key;
@@ -753,6 +771,7 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/battery-gauge",   HTTP_POST, handle_battery_gauge_post);
     add(server, "/api/servo-enabled",   HTTP_POST, handle_servo_enabled_post);
     add(server, "/api/mcp-token",       HTTP_POST, handle_mcp_token_post);
+    add(server, "/api/lt-config",       HTTP_POST, handle_lt_config_post);
     add(server, "/api/provider",        HTTP_POST, handle_provider_post);
     add(server, "/api/jtts-config",     HTTP_POST, handle_jtts_config_post);
     add(server, "/api/servo-limits",    HTTP_POST, handle_servo_limits_post);
@@ -841,6 +860,13 @@ void set_mcp_say_kana_sink(McpSayKanaSink sink)
     if (g_mutex == nullptr) { g_mcp_say_sink = std::move(sink); return; }
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     g_mcp_say_sink = std::move(sink);
+    xSemaphoreGive(g_mutex);
+}
+void set_lt_config_sink(LtConfigSink sink)
+{
+    if (g_mutex == nullptr) { g_lt_config_sink = std::move(sink); return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_lt_config_sink = std::move(sink);
     xSemaphoreGive(g_mutex);
 }
 void set_mcp_expression_sink(McpExpressionSink sink)

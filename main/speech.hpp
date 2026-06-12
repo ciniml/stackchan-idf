@@ -37,6 +37,13 @@ public:
     // (発声内容, kana). Returns an empty string only when there are no phrases.
     std::string babble(std::uint32_t seed);
 
+    // Speak an arbitrary kana string (発声内容; jtts has no kanji dictionary).
+    // Same synthesis + envelope path as babble() so the avatar's mouth moves.
+    // Cuts off any in-flight utterance. Returns false when synthesis failed
+    // or the reading contained nothing speakable. Caller-side balloon text is
+    // the caller's business (it usually differs from the reading).
+    bool say(std::u32string_view reading);
+
     // Cancel any in-flight babble so we can hand the speaker / I2S bus to
     // someone else (e.g. mic loopback). After this is_speaking() returns false.
     void stop();

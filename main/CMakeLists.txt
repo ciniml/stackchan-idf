@@ -11,6 +11,7 @@ idf_component_register(
         "face_config.cpp"
         "i2c_dump.cpp"
         "led_task.cpp"
+        "lt_timer.cpp"
         "render_task.cpp"
         "servo_limits.cpp"
         "servo_task.cpp"

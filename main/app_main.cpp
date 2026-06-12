@@ -27,6 +27,7 @@
 #include "avatar/expression.hpp"
 #include "avatar_vm/storage.hpp"
 #include "battery.hpp"
+#include "board/audio_module_es8388.hpp"
 #include "board/board.hpp"
 #include "board/si12t_touch.hpp"
 #include "config_service/config_service.hpp"
@@ -37,6 +38,7 @@
 #include "diag.hpp"
 #include "i2c_dump.hpp"
 #include "led_task.hpp"
+#include "lt_timer.hpp"
 #include "render_task.hpp"
 #include "servo_limits.hpp"
 #include "servo_task.hpp"
@@ -160,6 +162,11 @@ void demo_loop(const std::string& jtts_config_json, bool has_battery, bool is_at
     static app::Speech speech;
     speech.configure(jtts_config_json);
 
+    // LT timekeeper — ticked every loop iteration; speaks through the same
+    // Speech instance (so the avatar's mouth moves) and publishes state for
+    // the on-device LT tab. configure() is fed later from NVS (Phase 4).
+    static app::LtTimer lt_timer;
+
     auto rand_in = [](float low, float high) {
         const float u = static_cast<float>(esp_random()) / static_cast<float>(UINT32_MAX);
         return low + (high - low) * u;
@@ -221,6 +228,16 @@ void demo_loop(const std::string& jtts_config_json, bool has_battery, bool is_at
         M5.update();
 
         const std::uint32_t now_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
+
+        // LT timekeeper: re-configure when BLE/HTTP (or the boot seed) pushed
+        // a new config JSON, then consume UI commands / update the countdown /
+        // announce the 1-minute warning + overtime through speech + balloon.
+        static std::uint32_t lt_cfg_seen = 0;
+        if (const std::uint32_t v = g_state->lt_config_version(); v != lt_cfg_seen) {
+            lt_cfg_seen = v;
+            lt_timer.configure(g_state->snapshot_lt_config(), g_state);
+        }
+        lt_timer.tick(*g_state, speech, now_ms);
 
         // Battery: sample the INA226 every few seconds and fan the result out to
         // the device UI (SharedState) + the BLE / Wi-Fi settings services.
@@ -541,6 +558,22 @@ extern "C" void app_main()
     // they get starved and the I2S DMA underruns: choppy playback and gappy
     // capture (which whisper then mistranscribes). Lift them above the app
     // tasks and give the speaker extra DMA buffering for jitter margin.
+    // Module Audio (M144, ES8388 codec): probe once at boot. With its
+    // jumpers in Config B the codec already listens on the same I2S1 bus as
+    // the internal AW88298 (BCK=34, WS=33, DIN=13); we just have to start
+    // emitting MCLK on GPIO0 (the AW88298 never needed it) and program the
+    // codec over I2C. Both outputs then play in parallel: internal 1 W
+    // speaker + the module's line/headphone jacks (→ active speaker for
+    // venue-level volume, e.g. the LT timekeeper announcements).
+    const bool has_audio_module = stackchan::board::es8388::probe();
+    if (has_audio_module) {
+        if (auto r = stackchan::board::es8388::init(); r) {
+            ESP_LOGI(kTag, "Module Audio (ES8388) detected — line-out enabled");
+        } else {
+            ESP_LOGW(kTag, "Module Audio (ES8388) detected but init failed");
+        }
+    }
+
     {
         auto spk = M5.Speaker.config();
         spk.task_priority = 6;
@@ -551,6 +584,11 @@ extern "C" void app_main()
         // audio playback, which drops BLE RX throughput from ~22 KiB/s
         // to ~10 KiB/s and turns BLE audio streaming choppy.
         spk.task_pinned_core = 1;
+        if (has_audio_module) {
+            // ES8388 needs a master clock; GPIO0 is the M-BUS MCLK line in
+            // the module's Config B jumper position.
+            spk.pin_mck = GPIO_NUM_0;
+        }
         M5.Speaker.config(spk);
         M5.Speaker.end();
 
@@ -596,8 +634,16 @@ extern "C" void app_main()
     // register the live BLE update sink, both before config::start brings the
     // GATT service online so an early client write is applied immediately.
     g_state->set_face_config(cfg.face_config_json);
+    // LT timekeeper config: seeding bumps the version, so demo_loop's poll
+    // applies it on its first iteration (no special boot path needed).
+    if (!cfg.lt_config_json.empty()) {
+        g_state->set_lt_config(cfg.lt_config_json);
+    }
     g_state->battery_gauge_enabled.store(cfg.battery_gauge_enabled, std::memory_order_relaxed);
     stackchan::config::set_face_config_sink(&on_face_config);
+    stackchan::config::set_lt_config_sink(+[](std::string_view json) {
+        if (g_state != nullptr) g_state->set_lt_config(json);
+    });
     stackchan::config::set_servo_range_mode_sink(&on_servo_range_mode);
     stackchan::config::set_servo_positions_getter(&servo_positions);
     // Tell the settings services which board we're on so the web UIs can hide
@@ -710,6 +756,10 @@ extern "C" void app_main()
             if (g_state == nullptr) return;
             g_state->set_balloon_text(text, hold_ms);
         });
+
+    stackchan::wifi_config::set_lt_config_sink([](std::string_view json) {
+        if (g_state != nullptr) g_state->set_lt_config(json);
+    });
 
     stackchan::wifi_config::set_mcp_say_kana_sink(
         [](std::string_view kana_utf8) {

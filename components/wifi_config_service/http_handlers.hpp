@@ -34,6 +34,7 @@ void set_avatar_bytecode_sink(AvatarBytecodeSink sink);
 
 // /mcp/* endpoint sinks. See wifi_config_service.hpp for the contract.
 void set_mcp_say_kana_sink(McpSayKanaSink sink);
+void set_lt_config_sink(LtConfigSink sink);
 void set_mcp_expression_sink(McpExpressionSink sink);
 void set_mcp_balloon_sink(McpBalloonSink sink);
 

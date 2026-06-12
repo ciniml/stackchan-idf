@@ -348,6 +348,11 @@ void set_face_config_sink(FaceConfigSink sink)
     gatt::set_face_config_sink(sink);
 }
 
+void set_lt_config_sink(LtConfigSink sink)
+{
+    gatt::set_lt_config_sink(sink);
+}
+
 void set_servo_range_mode_sink(ServoRangeModeSink sink)
 {
     gatt::set_servo_range_mode_sink(sink);

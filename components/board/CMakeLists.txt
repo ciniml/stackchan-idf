@@ -1,5 +1,6 @@
 idf_component_register(
     SRCS
+        "audio_module_es8388.cpp"
         "board.cpp"
         "io_expander_py32.cpp"
         "led_strip.cpp"
