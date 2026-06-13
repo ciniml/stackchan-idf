@@ -26,6 +26,10 @@ const PORT = Number(process.env.PORT ?? 8765);
 const HOST = process.env.HOST ?? '0.0.0.0';
 const FLASH_TIMEOUT_MS = 5 * 60 * 1000;
 
+// Static UI is served from ../web relative to this script. Resolving once at
+// import time so each request just does a Bun.file() lookup.
+const WEB_ROOT = new URL('../web/', import.meta.url).pathname;
+
 // ----- types -----------------------------------------------------------------
 
 interface SectionSpec {
@@ -120,7 +124,8 @@ function statusHtml(): string {
 <p>Flash state: <strong>${flashing}</strong></p>
 <h2>使い方</h2>
 <ol>
- <li>VPN 越しに <code>/ws</code> に WebSerial + esptool-js 駆動のブラウザ クライアントを 1 つだけ繋ぐ。</li>
+ <li>ESP32 を USB 接続したマシンの Chrome/Edge で <a href="/app/"><code>/app/</code></a> を開き、Connect Serial で WebSerial 接続。
+  <br><span class="warn">WebSerial は secure context 必須 — <code>http://localhost</code> もしくは HTTPS でしか動かない。VPN 越しの IP 直接アクセスでは Chrome が API を無効化する。</span></li>
  <li>idf.py ラッパから次の curl で書き込み開始。</li>
 </ol>
 <pre>curl -N \\
@@ -135,6 +140,22 @@ function statusHtml(): string {
 <p>レスポンスは <code>text/event-stream</code>。各 section の進捗と最後の <code>done</code> を流す。</p>
 <p>リセットだけしたい時: <code>curl -X POST http://localhost:${PORT}/reset</code></p>
 `;
+}
+
+async function serveStatic(rel: string): Promise<Response> {
+    // Default to index.html for the directory root.
+    let relPath = rel === '/' || rel === '' ? '/index.html' : rel;
+    // Reject anything that would escape WEB_ROOT. We only accept paths made of
+    // /-separated path segments that match [A-Za-z0-9._-]+, which excludes
+    // "..", absolute paths, NULs, and percent-decoded surprises.
+    const segments = relPath.replace(/^\/+/, '').split('/');
+    if (segments.some((s) => s.length === 0 || /[^A-Za-z0-9._-]/.test(s) || s === '..' || s.startsWith('.'))) {
+        return new Response('forbidden', { status: 403 });
+    }
+    const full = WEB_ROOT + segments.join('/');
+    const f = Bun.file(full);
+    if (!(await f.exists())) return new Response('not found', { status: 404 });
+    return new Response(f);
 }
 
 function escapeHtml(s: string): string {
@@ -308,6 +329,9 @@ const server = Bun.serve({
             if (!browser) return jsonResponse(503, { error: 'no browser connected' });
             sendWs(JSON.stringify({ type: 'reset' }));
             return jsonResponse(200, { ok: true });
+        }
+        if ((url.pathname === '/app' || url.pathname.startsWith('/app/')) && req.method === 'GET') {
+            return serveStatic(url.pathname.slice('/app'.length) || '/');
         }
         return new Response('not found', { status: 404 });
     },
