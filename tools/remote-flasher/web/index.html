@@ -213,6 +213,14 @@ SPDX-License-Identifier: BSL-1.0
         .log .err  { color: var(--err); }
         .log .ts   { color: var(--fg-dim); }
 
+        /* Serial monitor pane: taller, ESP-IDF log level coloring. */
+        .log.monitor { height: 380px; }
+        .log.monitor .esp-I { color: var(--fg); }
+        .log.monitor .esp-W { color: var(--warn); }
+        .log.monitor .esp-E { color: var(--err); }
+        .log.monitor .esp-D { color: var(--fg-dim); }
+        .log.monitor .esp-V { color: var(--fg-dim); }
+
         .banner {
             background: #4a1a25;
             border: 1px solid var(--err);
@@ -234,6 +242,7 @@ SPDX-License-Identifier: BSL-1.0
         <div class="badges">
             <span id="badge-serial" class="badge"><span class="dot"></span><span>Serial: 未接続</span></span>
             <span id="badge-ws" class="badge"><span class="dot"></span><span>WS: 未接続</span></span>
+            <span id="badge-monitor" class="badge"><span class="dot"></span><span>Monitor: 停止</span></span>
         </div>
     </header>
 
@@ -252,8 +261,16 @@ SPDX-License-Identifier: BSL-1.0
             <input id="chip" type="text" value="esp32s3" />
         </div>
         <div class="field">
-            <label for="baud">Baud rate</label>
+            <label for="baud">Flash baud rate</label>
             <input id="baud" type="number" value="460800" />
+        </div>
+        <div class="field">
+            <label for="monitor-baud">Monitor baud rate</label>
+            <input id="monitor-baud" type="number" value="115200" />
+        </div>
+        <div class="field">
+            <label for="auto-monitor">flash 後に Monitor 自動開始</label>
+            <input id="auto-monitor" type="checkbox" checked />
         </div>
     </section>
 
@@ -264,6 +281,8 @@ SPDX-License-Identifier: BSL-1.0
             <button id="btn-connect-ws" disabled>接続</button>
             <button id="btn-disconnect-ws" class="danger" disabled>切断</button>
             <button id="btn-reset" disabled>リセット</button>
+            <button id="btn-monitor-start" disabled>Monitor 開始</button>
+            <button id="btn-monitor-stop" class="danger" disabled>Monitor 停止</button>
         </div>
         <div id="progress" class="progress hidden">
             <div class="label">
@@ -279,6 +298,11 @@ SPDX-License-Identifier: BSL-1.0
         <div id="log" class="log"></div>
     </section>
 
+    <section>
+        <h2>Serial Monitor</h2>
+        <div id="monitor-log" class="log monitor"></div>
+    </section>
+
     <script src="./esptool-bundle.js"></script>
     <script>
         // SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
@@ -287,21 +311,28 @@ SPDX-License-Identifier: BSL-1.0
 
         (() => {
             const MAX_LOG_LINES = 200;
+            const MAX_MONITOR_LINES = 1000;
             const RECONNECT_DELAY_MS = 5000;
             const DEFAULT_BAUD_MONITOR = 115200;
 
             // ----- DOM -----
             const $ = (id) => document.getElementById(id);
             const logPane = $("log");
+            const monitorPane = $("monitor-log");
             const badgeSerial = $("badge-serial");
             const badgeWs = $("badge-ws");
+            const badgeMonitor = $("badge-monitor");
             const wsUrlInput = $("ws-url");
             const chipInput = $("chip");
             const baudInput = $("baud");
+            const monitorBaudInput = $("monitor-baud");
+            const autoMonitorInput = $("auto-monitor");
             const btnPickPort = $("btn-pick-port");
             const btnConnectWs = $("btn-connect-ws");
             const btnDisconnectWs = $("btn-disconnect-ws");
             const btnReset = $("btn-reset");
+            const btnMonitorStart = $("btn-monitor-start");
+            const btnMonitorStop = $("btn-monitor-stop");
             const progressBox = $("progress");
             const progressLabel = $("progress-label");
             const progressPct = $("progress-pct");
@@ -325,6 +356,7 @@ SPDX-License-Identifier: BSL-1.0
                 wsReconnectTimer: null,
                 pendingFlash: null, // { req, sections: [{meta, data?}] }
                 flashing: false,
+                monitor: null,      // { active, reader, abortCtl }
             };
 
             // ----- Logger -----
@@ -360,6 +392,28 @@ SPDX-License-Identifier: BSL-1.0
             function setWsBadge(text, cls) {
                 badgeWs.className = `badge ${cls || ""}`.trim();
                 badgeWs.lastElementChild.textContent = `WS: ${text}`;
+            }
+            function setMonitorBadge(text, cls) {
+                badgeMonitor.className = `badge ${cls || ""}`.trim();
+                badgeMonitor.lastElementChild.textContent = `Monitor: ${text}`;
+            }
+
+            // ESP-IDF log lines look like `I (12345) tag: ...`. Pick out the
+            // level letter so we can colour-tag the line. Anything that
+            // doesn't match the pattern (printf output, panic dumps, etc.)
+            // gets a neutral colour.
+            const ESP_LEVEL_RE = /^([IWEDV]) \(/;
+            function logSerial(line) {
+                const m = ESP_LEVEL_RE.exec(line);
+                const cls = m ? `esp-${m[1]}` : "";
+                const el = document.createElement("div");
+                el.className = `line ${cls}`;
+                el.textContent = line;
+                monitorPane.appendChild(el);
+                while (monitorPane.childElementCount > MAX_MONITOR_LINES) {
+                    monitorPane.removeChild(monitorPane.firstChild);
+                }
+                monitorPane.scrollTop = monitorPane.scrollHeight;
             }
 
             // ----- Progress -----
@@ -422,6 +476,7 @@ SPDX-License-Identifier: BSL-1.0
 
                     btnConnectWs.disabled = false;
                     btnReset.disabled = false;
+                    btnMonitorStart.disabled = false;
                 } catch (e) {
                     logErr(`ポート選択キャンセル / 失敗: ${e?.message ?? e}`);
                 }
@@ -459,6 +514,93 @@ SPDX-License-Identifier: BSL-1.0
                     state.transport = null;
                     setSerialBadge("同期失敗", "err");
                 }
+            }
+
+            async function startMonitor() {
+                if (!state.port) {
+                    logWarn("ポート未選択 — Monitor 開始できません。");
+                    return;
+                }
+                if (state.monitor && state.monitor.active) {
+                    logWarn("Monitor は既に実行中です。");
+                    return;
+                }
+                // esptool-js Transport が port を握っていたら手放す。これを
+                // しないと port.readable の getReader() が `Locked` で失敗
+                // する。
+                if (state.transport && typeof state.transport.disconnect === "function") {
+                    try { await state.transport.disconnect(); } catch (_) {}
+                }
+                state.loader = null;
+                const baud = parseInt(monitorBaudInput.value, 10) || DEFAULT_BAUD_MONITOR;
+                try {
+                    if (!state.port.readable && !state.port.writable) {
+                        await state.port.open({ baudRate: baud });
+                    }
+                    // ESP run mode: DTR=high, RTS=low (= EN released, BOOT
+                    // pulled high). Avoid leaving signals in a flash-mode
+                    // combination that would silently reset on monitor start.
+                    try {
+                        await state.port.setSignals({ dataTerminalReady: false, requestToSend: false });
+                    } catch (_) { /* some adapters reject; ignore */ }
+                } catch (e) {
+                    logErr(`Monitor 用 port open 失敗: ${e?.message ?? e}`);
+                    return;
+                }
+                logInfo(`Monitor 開始 baud=${baud}`);
+                setMonitorBadge(`実行中 ${baud}`, "ok");
+                btnMonitorStart.disabled = true;
+                btnMonitorStop.disabled = false;
+
+                const monitor = { active: true, reader: null };
+                state.monitor = monitor;
+                runMonitorLoop(monitor).catch((e) => {
+                    logErr(`monitor ループ例外: ${e?.message ?? e}`);
+                });
+            }
+
+            async function runMonitorLoop(monitor) {
+                const reader = state.port.readable.getReader();
+                monitor.reader = reader;
+                const decoder = new TextDecoder("utf-8", { fatal: false });
+                let buf = "";
+                try {
+                    while (monitor.active) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        if (!value || !value.length) continue;
+                        buf += decoder.decode(value, { stream: true });
+                        // Split on newlines, keep the unfinished tail in buf
+                        // so partial chunks don't drop characters and so we
+                        // emit one SSE/UI line per ESP-IDF log line.
+                        let idx;
+                        while ((idx = buf.indexOf("\n")) !== -1) {
+                            const line = buf.slice(0, idx).replace(/\r$/, "");
+                            buf = buf.slice(idx + 1);
+                            if (line.length === 0 && buf.length === 0) continue;
+                            logSerial(line);
+                            wsSendJson({ type: "serial", data: line });
+                        }
+                    }
+                } catch (e) {
+                    if (monitor.active) logErr(`monitor 読出失敗: ${e?.message ?? e}`);
+                } finally {
+                    try { reader.releaseLock(); } catch (_) {}
+                    if (state.monitor === monitor) {
+                        state.monitor = null;
+                        setMonitorBadge("停止");
+                        btnMonitorStart.disabled = !state.port;
+                        btnMonitorStop.disabled = true;
+                    }
+                }
+            }
+
+            async function stopMonitor() {
+                const m = state.monitor;
+                if (!m) return;
+                m.active = false;
+                try { await m.reader?.cancel(); } catch (_) {}
+                logInfo("Monitor 停止要求");
             }
 
             async function resetBoard() {
@@ -618,6 +760,12 @@ SPDX-License-Identifier: BSL-1.0
                     logErr(`flash_request id=${req.id} を拒否: シリアル ポート未選択`);
                     return;
                 }
+                // Monitor が動いていれば先に停止 — esptool-js Transport が
+                // port.readable を握り直せないと writeFlash が即失敗する。
+                if (state.monitor && state.monitor.active) {
+                    logInfo("flash のため Monitor を一時停止します。");
+                    stopMonitor();
+                }
                 state.pendingFlash = {
                     req,
                     sections: req.sections.map((s) => ({ meta: s, data: null })),
@@ -712,15 +860,24 @@ SPDX-License-Identifier: BSL-1.0
                 } finally {
                     state.flashing = false;
                     setTimeout(hideProgress, 1500);
-                    // After flash, esptool-js leaves the port at high baud rate.
-                    // Try to drop back to a monitor-friendly baud rate.
-                    try {
-                        if (state.transport && typeof state.transport.setBaudrate === "function") {
-                            await state.transport.setBaudrate(DEFAULT_BAUD_MONITOR);
-                            logInfo(`ボーレートを ${DEFAULT_BAUD_MONITOR} に戻しました。`);
+                    // After flash, esptool-js leaves the port at high baud
+                    // and still owns it. If the user wants auto-monitor,
+                    // startMonitor() drops the transport and re-opens at
+                    // monitor baud — handle both the "auto" and the "just
+                    // restore baud" paths together so we don't double-touch
+                    // the port.
+                    if (autoMonitorInput.checked) {
+                        try { await startMonitor(); }
+                        catch (e) { logWarn(`auto monitor 起動失敗: ${e?.message ?? e}`); }
+                    } else {
+                        try {
+                            if (state.transport && typeof state.transport.setBaudrate === "function") {
+                                await state.transport.setBaudrate(DEFAULT_BAUD_MONITOR);
+                                logInfo(`ボーレートを ${DEFAULT_BAUD_MONITOR} に戻しました。`);
+                            }
+                        } catch (e) {
+                            logWarn(`ボーレート復帰失敗: ${e?.message ?? e}`);
                         }
-                    } catch (e) {
-                        logWarn(`ボーレート復帰失敗: ${e?.message ?? e}`);
                     }
                 }
             }
@@ -755,6 +912,8 @@ SPDX-License-Identifier: BSL-1.0
             btnConnectWs.addEventListener("click", connectWs);
             btnDisconnectWs.addEventListener("click", disconnectWs);
             btnReset.addEventListener("click", resetBoard);
+            btnMonitorStart.addEventListener("click", startMonitor);
+            btnMonitorStop.addEventListener("click", stopMonitor);
 
             logInfo("起動。シリアル ポートを選択してください。");
         })();

@@ -61,11 +61,26 @@ interface BrowserClient {
     hello?: { userAgent?: string; portInfo?: unknown };
 }
 
+interface MonitorSubscriber {
+    controller: ReadableStreamDefaultController<Uint8Array>;
+    since: Date;
+}
+
 // ----- module state ----------------------------------------------------------
 
 let browser: BrowserClient | null = null;
 let activeJob: FlashJob | null = null;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
+
+// Serial monitor fan-out. The browser pushes each ESP serial line via WS
+// `{type:"serial", data:"..."}`; we keep a small ring (so a newly attached
+// SSE client sees the immediate past — vital when a crash flushes its
+// backtrace 5 ms before the user hits Ctrl+C / re-runs curl) and broadcast
+// to every active /monitor SSE subscriber.
+const MONITOR_RING_LIMIT = 200;
+const monitorRing: string[] = [];
+const monitorSubs = new Set<MonitorSubscriber>();
+const monitorEncoder = new TextEncoder();
 
 // ----- helpers ---------------------------------------------------------------
 
@@ -139,7 +154,65 @@ function statusHtml(): string {
   http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}/flash</pre>
 <p>レスポンスは <code>text/event-stream</code>。各 section の進捗と最後の <code>done</code> を流す。</p>
 <p>リセットだけしたい時: <code>curl -X POST http://localhost:${PORT}/reset</code></p>
+<p>シリアル モニタ購読 (browser タブで Monitor を開始してから):
+<code>curl -sN http://localhost:${PORT}/monitor</code>。
+リング (直近 ${MONITOR_RING_LIMIT} 行) を初回 push してから生流送。</p>
 `;
+}
+
+function broadcastMonitor(line: string): void {
+    // Drop trailing CR/LF so each SSE `data:` event is exactly one logical
+    // line; the browser side has already split on \n.
+    const clean = line.replace(/\r?\n$/, '');
+    monitorRing.push(clean);
+    while (monitorRing.length > MONITOR_RING_LIMIT) monitorRing.shift();
+    const frame = monitorEncoder.encode(`data: ${clean}\n\n`);
+    for (const sub of monitorSubs) {
+        try {
+            sub.controller.enqueue(frame);
+        } catch {
+            monitorSubs.delete(sub);
+        }
+    }
+}
+
+function handleMonitorSubscribe(): Response {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+            controller = c;
+            // Comment frame so curl flushes its first read promptly even
+            // before any ESP output arrives.
+            controller.enqueue(monitorEncoder.encode(': monitor stream open\n\n'));
+            // Replay the ring so a fresh subscriber sees recent context
+            // (e.g. a backtrace that just landed). One event per line keeps
+            // the parse trivial on the client side.
+            for (const line of monitorRing) {
+                controller.enqueue(monitorEncoder.encode(`data: ${line}\n\n`));
+            }
+            const sub: MonitorSubscriber = { controller, since: new Date() };
+            monitorSubs.add(sub);
+            log(`monitor: subscriber added (now ${monitorSubs.size})`);
+        },
+        cancel() {
+            for (const sub of monitorSubs) {
+                if (sub.controller === controller) {
+                    monitorSubs.delete(sub);
+                    break;
+                }
+            }
+            log(`monitor: subscriber removed (now ${monitorSubs.size})`);
+        },
+    });
+    return new Response(stream, {
+        status: 200,
+        headers: {
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'Cache-Control': 'no-cache, no-transform',
+            Connection: 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        },
+    });
 }
 
 async function serveStatic(rel: string): Promise<Response> {
@@ -253,6 +326,16 @@ function handleBrowserMessage(raw: string | Buffer): void {
             log(`[browser:${lvl}] ${m}`);
             return;
         }
+        case 'serial': {
+            // Pass-through one line of ESP serial output. The browser is
+            // expected to have split on \n already so each `data` is one
+            // line; we cap the size defensively to keep a runaway publisher
+            // from blowing memory on the SSE side.
+            const data = typeof msg.data === 'string' ? msg.data : '';
+            if (!data) return;
+            broadcastMonitor(data.length > 4096 ? data.slice(0, 4096) + '…[truncated]' : data);
+            return;
+        }
         case 'progress': {
             if (!activeJob || msg.id !== activeJob.id) return;
             const section = String(msg.section ?? '');
@@ -329,6 +412,9 @@ const server = Bun.serve({
             if (!browser) return jsonResponse(503, { error: 'no browser connected' });
             sendWs(JSON.stringify({ type: 'reset' }));
             return jsonResponse(200, { ok: true });
+        }
+        if (url.pathname === '/monitor' && req.method === 'GET') {
+            return handleMonitorSubscribe();
         }
         if ((url.pathname === '/app' || url.pathname.startsWith('/app/')) && req.method === 'GET') {
             return serveStatic(url.pathname.slice('/app'.length) || '/');

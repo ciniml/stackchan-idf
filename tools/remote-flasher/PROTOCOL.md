@@ -23,6 +23,7 @@ WS URL: `ws://<host>:<port>/ws` (デフォルト `8765`)。
 | browser → host | text JSON `progress` | esptool-js の写経 |
 | browser → host | text JSON `done` | flash 完了 / 失敗 |
 | browser → host | text JSON `log` | esptool-js のログ転写 |
+| browser → host | text JSON `serial` | ESP シリアル モニタ 1 行 (`/monitor` SSE へ fan-out) |
 | browser → host | text JSON `pong` | heartbeat 応答 |
 
 ## host → browser
@@ -129,6 +130,19 @@ esptool-js の write callback から発火。`section` は `flash_request.sectio
 `level` は `info` / `warn` / `error`。サーバーは stdout にプレフィクス
 付きで転写する。デバッグ用。
 
+### `serial`
+```json
+{
+  "type": "serial",
+  "data": "I (12345) tag: hello from ESP"
+}
+```
+Monitor 中、ブラウザが WebSerial から読んだ 1 ログ行を **CR/LF を取り除いた
+状態** で送る。サーバーはリング バッファ (直近 200 行) に保存し、
+`/monitor` SSE の購読者全員に転送する。長さは 4096 byte で切られる
+(超過時は末尾に `…[truncated]` 付加)。Monitor 機能を実装しないクライアント
+は送らなくてよい。
+
 ### `pong`
 ```json
 { "type": "pong" }
@@ -162,6 +176,21 @@ browser connect
        │
 browser disconnect
 ```
+
+## `/monitor` SSE (HTTP)
+
+WebSocket とは別系統。任意のクライアントが
+```
+GET /monitor
+Accept: text/event-stream
+```
+で購読すると、まず ` : monitor stream open` のコメント フレームと、
+直近 200 行のリングを `data: <行>\n\n` で再生し、以降ブラウザが
+`serial` フレームで push してくる 1 行ごとに同形式で配信する。
+購読者は同時に複数 OK (fan-out)。サーバー側がブラウザ未接続でも
+購読自体は成立する (何も流れないだけ)。
+
+CLI ラッパは `tools/remote-flasher/monitor-stream.sh`。
 
 ## エラー処理ガイド (browser 実装者向け)
 
