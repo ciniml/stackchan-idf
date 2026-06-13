@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<!--
+SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
+SPDX-License-Identifier: BSL-1.0
+-->
+<html lang="ja">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>stackchan remote flasher</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #1e1e2e;
+            --bg-elev: #272739;
+            --fg: #f0f0f0;
+            --fg-dim: #a8a8b8;
+            --accent: #60a0ff;
+            --accent-dim: #3060c0;
+            --ok: #60d080;
+            --warn: #f0b040;
+            --err: #ff6080;
+            --border: #383850;
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: var(--bg);
+            color: var(--fg);
+            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        body {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 24px;
+            min-height: 100vh;
+        }
+
+        header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+        }
+
+        h1 {
+            font-size: 20px;
+            margin: 0;
+            flex: 1 1 auto;
+        }
+
+        .badges {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: var(--bg-elev);
+            border: 1px solid var(--border);
+            font-size: 12px;
+            color: var(--fg-dim);
+        }
+
+        .badge .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--fg-dim);
+        }
+
+        .badge.ok    { color: var(--ok); }
+        .badge.ok    .dot { background: var(--ok); }
+        .badge.warn  { color: var(--warn); }
+        .badge.warn  .dot { background: var(--warn); }
+        .badge.err   { color: var(--err); }
+        .badge.err   .dot { background: var(--err); }
+
+        section {
+            background: var(--bg-elev);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        section h2 {
+            font-size: 14px;
+            font-weight: 600;
+            margin: 0 0 12px;
+            color: var(--fg-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .field {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 10px;
+        }
+
+        .field label {
+            flex: 0 0 160px;
+            color: var(--fg-dim);
+        }
+
+        .field input {
+            flex: 1 1 auto;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--fg);
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 13px;
+        }
+
+        .field input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .buttons {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            background: var(--accent-dim);
+            color: var(--fg);
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.15s ease;
+        }
+
+        button:hover:not(:disabled) {
+            background: var(--accent);
+        }
+
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        button.danger {
+            background: #803040;
+        }
+
+        button.danger:hover:not(:disabled) {
+            background: var(--err);
+        }
+
+        .progress {
+            margin-top: 12px;
+        }
+
+        .progress .label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: var(--fg-dim);
+            margin-bottom: 4px;
+        }
+
+        .bar {
+            height: 8px;
+            background: var(--bg);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .bar > .fill {
+            height: 100%;
+            background: var(--accent);
+            width: 0%;
+            transition: width 0.1s linear;
+        }
+
+        .log {
+            background: #11111a;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 10px;
+            height: 280px;
+            overflow-y: auto;
+            font-family: ui-monospace, "SF Mono", Consolas, monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .log .line { padding: 1px 0; }
+        .log .info { color: var(--fg); }
+        .log .warn { color: var(--warn); }
+        .log .err  { color: var(--err); }
+        .log .ts   { color: var(--fg-dim); }
+
+        .banner {
+            background: #4a1a25;
+            border: 1px solid var(--err);
+            color: var(--fg);
+            padding: 10px 14px;
+            border-radius: 4px;
+            margin-bottom: 16px;
+            display: none;
+        }
+
+        .banner.show { display: block; }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>stackchan remote flasher</h1>
+        <div class="badges">
+            <span id="badge-serial" class="badge"><span class="dot"></span><span>Serial: 未接続</span></span>
+            <span id="badge-ws" class="badge"><span class="dot"></span><span>WS: 未接続</span></span>
+        </div>
+    </header>
+
+    <div id="unsupported-banner" class="banner">
+        このブラウザは <strong>WebSerial API</strong> 非対応です。Chrome / Edge 系の最新版を使ってください。
+    </div>
+
+    <section>
+        <h2>設定</h2>
+        <div class="field">
+            <label for="ws-url">サーバー WebSocket URL</label>
+            <input id="ws-url" type="text" />
+        </div>
+        <div class="field">
+            <label for="chip">ESP チップ</label>
+            <input id="chip" type="text" value="esp32s3" />
+        </div>
+        <div class="field">
+            <label for="baud">Baud rate</label>
+            <input id="baud" type="number" value="460800" />
+        </div>
+    </section>
+
+    <section>
+        <h2>制御</h2>
+        <div class="buttons">
+            <button id="btn-pick-port">シリアル ポート選択</button>
+            <button id="btn-connect-ws" disabled>接続</button>
+            <button id="btn-disconnect-ws" class="danger" disabled>切断</button>
+            <button id="btn-reset" disabled>リセット</button>
+        </div>
+        <div id="progress" class="progress hidden">
+            <div class="label">
+                <span id="progress-label">flashing...</span>
+                <span id="progress-pct">0%</span>
+            </div>
+            <div class="bar"><div id="progress-fill" class="fill"></div></div>
+        </div>
+    </section>
+
+    <section>
+        <h2>ログ</h2>
+        <div id="log" class="log"></div>
+    </section>
+
+    <script src="./esptool-bundle.js"></script>
+    <script>
+        // SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
+        // SPDX-License-Identifier: BSL-1.0
+        "use strict";
+
+        (() => {
+            const MAX_LOG_LINES = 200;
+            const RECONNECT_DELAY_MS = 5000;
+            const DEFAULT_BAUD_MONITOR = 115200;
+
+            // ----- DOM -----
+            const $ = (id) => document.getElementById(id);
+            const logPane = $("log");
+            const badgeSerial = $("badge-serial");
+            const badgeWs = $("badge-ws");
+            const wsUrlInput = $("ws-url");
+            const chipInput = $("chip");
+            const baudInput = $("baud");
+            const btnPickPort = $("btn-pick-port");
+            const btnConnectWs = $("btn-connect-ws");
+            const btnDisconnectWs = $("btn-disconnect-ws");
+            const btnReset = $("btn-reset");
+            const progressBox = $("progress");
+            const progressLabel = $("progress-label");
+            const progressPct = $("progress-pct");
+            const progressFill = $("progress-fill");
+            const unsupportedBanner = $("unsupported-banner");
+
+            // ----- default WS URL -----
+            {
+                const proto = location.protocol === "https:" ? "wss:" : "ws:";
+                const host = location.host || "localhost:8080";
+                wsUrlInput.value = `${proto}//${host}/ws`;
+            }
+
+            // ----- State -----
+            const state = {
+                port: null,
+                transport: null,
+                loader: null,
+                ws: null,
+                wsUserClosed: false,
+                wsReconnectTimer: null,
+                pendingFlash: null, // { req, sections: [{meta, data?}] }
+                flashing: false,
+            };
+
+            // ----- Logger -----
+            function log(level, message) {
+                const line = document.createElement("div");
+                line.className = `line ${level}`;
+                const ts = new Date().toISOString().substring(11, 19);
+                line.innerHTML =
+                    `<span class="ts">[${ts}]</span> ` +
+                    `${escapeHtml(String(message))}`;
+                logPane.appendChild(line);
+                while (logPane.childElementCount > MAX_LOG_LINES) {
+                    logPane.removeChild(logPane.firstChild);
+                }
+                logPane.scrollTop = logPane.scrollHeight;
+            }
+            const logInfo = (m) => log("info", m);
+            const logWarn = (m) => log("warn", m);
+            const logErr  = (m) => log("err", m);
+
+            function escapeHtml(s) {
+                return s
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;");
+            }
+
+            // ----- Badges -----
+            function setSerialBadge(text, cls) {
+                badgeSerial.className = `badge ${cls || ""}`.trim();
+                badgeSerial.lastElementChild.textContent = `Serial: ${text}`;
+            }
+            function setWsBadge(text, cls) {
+                badgeWs.className = `badge ${cls || ""}`.trim();
+                badgeWs.lastElementChild.textContent = `WS: ${text}`;
+            }
+
+            // ----- Progress -----
+            function showProgress(label) {
+                progressBox.classList.remove("hidden");
+                progressLabel.textContent = label;
+                progressPct.textContent = "0%";
+                progressFill.style.width = "0%";
+            }
+            function updateProgress(pct, label) {
+                const clamped = Math.max(0, Math.min(100, pct));
+                progressFill.style.width = `${clamped}%`;
+                progressPct.textContent = `${Math.round(clamped)}%`;
+                if (label) progressLabel.textContent = label;
+            }
+            function hideProgress() {
+                progressBox.classList.add("hidden");
+            }
+
+            // ----- Feature detection -----
+            if (!("serial" in navigator)) {
+                unsupportedBanner.classList.add("show");
+                btnPickPort.disabled = true;
+                btnConnectWs.disabled = true;
+                logErr("navigator.serial が利用できません。");
+                return;
+            }
+            if (!window.EsptoolJS || !window.EsptoolJS.ESPLoader) {
+                logErr("esptool-bundle.js のロードに失敗しました。`bun run build` を実行してください。");
+                btnPickPort.disabled = true;
+                btnConnectWs.disabled = true;
+                return;
+            }
+
+            // ----- esptool-js terminal adapter -----
+            const esptoolTerminal = {
+                clean: () => {},
+                writeLine: (data) => logInfo(`[esptool] ${data}`),
+                write: (data) => {
+                    // esptool-js sometimes streams without trailing newline; coalesce
+                    const trimmed = String(data).replace(/\r?\n$/, "");
+                    if (trimmed.length) logInfo(`[esptool] ${trimmed}`);
+                },
+            };
+
+            // ===================================================================
+            //                            WebSerial
+            // ===================================================================
+
+            async function pickPort() {
+                try {
+                    const port = await navigator.serial.requestPort({});
+                    state.port = port;
+
+                    const info = port.getInfo ? port.getInfo() : {};
+                    logInfo(`シリアルポート選択: vendor=0x${(info.usbVendorId ?? 0).toString(16)} product=0x${(info.usbProductId ?? 0).toString(16)}`);
+                    setSerialBadge("ポート選択済み", "warn");
+
+                    await syncChip();
+
+                    btnConnectWs.disabled = false;
+                    btnReset.disabled = false;
+                } catch (e) {
+                    logErr(`ポート選択キャンセル / 失敗: ${e?.message ?? e}`);
+                }
+            }
+
+            async function syncChip() {
+                if (!state.port) return;
+                const Transport = window.EsptoolJS.Transport;
+                const ESPLoader = window.EsptoolJS.ESPLoader;
+                try {
+                    // Lazy transport setup; do not open here (Transport.connect handles it)
+                    state.transport = new Transport(state.port, true);
+                    const loader = new ESPLoader({
+                        transport: state.transport,
+                        baudrate: parseInt(baudInput.value, 10) || 460800,
+                        romBaudrate: 115200,
+                        terminal: esptoolTerminal,
+                        debugLogging: false,
+                    });
+                    logInfo("ESPLoader main() でチップ同期中...");
+                    const chip = await loader.main();
+                    if (chip) {
+                        const normalized = String(chip).toLowerCase().replace(/[\s-]/g, "");
+                        chipInput.value = normalized;
+                        logInfo(`チップ検出: ${chip} (→ ${normalized})`);
+                    } else {
+                        logWarn("チップ自動判別できず。手動で指定してください。");
+                    }
+                    state.loader = loader;
+                    setSerialBadge(`接続済 (${chipInput.value})`, "ok");
+                } catch (e) {
+                    logErr(`チップ同期失敗: ${e?.message ?? e}`);
+                    logWarn("基板の BOOT ボタンを押しながら EN/RST を押し、もう一度 [シリアル ポート選択] を試してください。");
+                    state.loader = null;
+                    state.transport = null;
+                    setSerialBadge("同期失敗", "err");
+                }
+            }
+
+            async function resetBoard() {
+                if (!state.port) {
+                    logWarn("ポート未選択。");
+                    return;
+                }
+                try {
+                    // If esptool-js is holding the port open, release it first
+                    if (state.transport && typeof state.transport.disconnect === "function") {
+                        try { await state.transport.disconnect(); } catch (_) {}
+                    }
+                    if (!state.port.readable && !state.port.writable) {
+                        await state.port.open({ baudRate: DEFAULT_BAUD_MONITOR });
+                    }
+                    await state.port.setSignals({ dataTerminalReady: false, requestToSend: true });
+                    await new Promise((r) => setTimeout(r, 100));
+                    await state.port.setSignals({ dataTerminalReady: true, requestToSend: false });
+                    logInfo("リセット信号を送信しました。");
+                } catch (e) {
+                    logErr(`リセット失敗: ${e?.message ?? e}`);
+                }
+            }
+
+            // ===================================================================
+            //                            WebSocket
+            // ===================================================================
+
+            function wsSendJson(obj) {
+                if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+                    state.ws.send(JSON.stringify(obj));
+                }
+            }
+
+            function wsRemoteLog(level, message) {
+                wsSendJson({ type: "log", level, message });
+            }
+
+            function connectWs() {
+                if (state.ws) return;
+                const url = wsUrlInput.value.trim();
+                if (!url) { logErr("WS URL が空です。"); return; }
+                state.wsUserClosed = false;
+
+                let ws;
+                try {
+                    ws = new WebSocket(url);
+                } catch (e) {
+                    logErr(`WebSocket 構築失敗: ${e?.message ?? e}`);
+                    return;
+                }
+                state.ws = ws;
+                ws.binaryType = "arraybuffer";
+                setWsBadge("接続中...", "warn");
+
+                ws.onopen = () => {
+                    logInfo(`WS 接続: ${url}`);
+                    setWsBadge("接続済", "ok");
+                    btnConnectWs.disabled = true;
+                    btnDisconnectWs.disabled = false;
+
+                    const info = state.port?.getInfo ? state.port.getInfo() : {};
+                    wsSendJson({
+                        type: "hello",
+                        userAgent: navigator.userAgent,
+                        portInfo: {
+                            usbVendorId: info.usbVendorId ?? null,
+                            usbProductId: info.usbProductId ?? null,
+                        },
+                    });
+                };
+
+                ws.onmessage = (ev) => {
+                    if (typeof ev.data === "string") {
+                        handleControlMessage(ev.data);
+                    } else if (ev.data instanceof ArrayBuffer) {
+                        handleBinaryFrame(ev.data);
+                    } else if (ev.data && typeof ev.data.arrayBuffer === "function") {
+                        ev.data.arrayBuffer().then(handleBinaryFrame);
+                    }
+                };
+
+                ws.onclose = (ev) => {
+                    state.ws = null;
+                    btnConnectWs.disabled = false;
+                    btnDisconnectWs.disabled = true;
+                    if (state.wsUserClosed) {
+                        logInfo("WS 切断 (ユーザー操作)");
+                        setWsBadge("未接続");
+                    } else {
+                        logWarn(`WS 切断 (code=${ev.code})。${RECONNECT_DELAY_MS / 1000}s 後に再接続します。`);
+                        setWsBadge("切断 / 再接続待ち", "err");
+                        clearTimeout(state.wsReconnectTimer);
+                        state.wsReconnectTimer = setTimeout(connectWs, RECONNECT_DELAY_MS);
+                    }
+                };
+
+                ws.onerror = () => {
+                    logErr("WebSocket エラー");
+                    setWsBadge("エラー", "err");
+                };
+            }
+
+            function disconnectWs() {
+                state.wsUserClosed = true;
+                clearTimeout(state.wsReconnectTimer);
+                state.wsReconnectTimer = null;
+                if (state.ws) state.ws.close(1000, "user");
+            }
+
+            // ===================================================================
+            //                            Protocol
+            // ===================================================================
+
+            function handleControlMessage(text) {
+                let msg;
+                try { msg = JSON.parse(text); }
+                catch (e) {
+                    logErr(`JSON parse 失敗: ${e?.message ?? e}`);
+                    return;
+                }
+
+                switch (msg.type) {
+                    case "ping":
+                        wsSendJson({ type: "pong" });
+                        return;
+                    case "pong":
+                        return;
+                    case "flash_request":
+                        beginFlashRequest(msg);
+                        return;
+                    case "reset":
+                        resetBoard();
+                        return;
+                    case "superseded":
+                        logWarn("別の接続に取って代わられました。WS を閉じます。");
+                        state.wsUserClosed = true;
+                        if (state.ws) state.ws.close(1000, "superseded");
+                        return;
+                    default:
+                        logWarn(`未知のメッセージ: type=${msg.type}`);
+                }
+            }
+
+            function beginFlashRequest(req) {
+                if (state.flashing) {
+                    wsRemoteLog("error", "既に flash 処理中です。");
+                    wsSendJson({ type: "done", id: req.id, success: false, error: "busy" });
+                    return;
+                }
+                if (!Array.isArray(req.sections) || req.sections.length === 0) {
+                    wsSendJson({ type: "done", id: req.id, success: false, error: "no sections" });
+                    return;
+                }
+                if (!state.port) {
+                    wsSendJson({ type: "done", id: req.id, success: false, error: "no serial port" });
+                    logErr(`flash_request id=${req.id} を拒否: シリアル ポート未選択`);
+                    return;
+                }
+                state.pendingFlash = {
+                    req,
+                    sections: req.sections.map((s) => ({ meta: s, data: null })),
+                    received: 0,
+                };
+                logInfo(`flash_request id=${req.id} sections=${req.sections.length} chip=${req.chip ?? chipInput.value}`);
+            }
+
+            function handleBinaryFrame(buf) {
+                const pending = state.pendingFlash;
+                if (!pending) {
+                    logWarn(`未要求のバイナリ frame (${buf.byteLength} bytes) を受信しました。`);
+                    return;
+                }
+                const slot = pending.sections[pending.received];
+                if (!slot) {
+                    logWarn("余分なバイナリ frame を受信しました。");
+                    return;
+                }
+                const expected = Number(slot.meta.size);
+                if (Number.isFinite(expected) && expected !== buf.byteLength) {
+                    logWarn(`section ${pending.received} の size mismatch: req=${expected} actual=${buf.byteLength}`);
+                }
+                slot.data = new Uint8Array(buf);
+                pending.received += 1;
+                logInfo(`section ${pending.received}/${pending.sections.length} 受信: ${slot.meta.name ?? "?"} (${buf.byteLength} bytes)`);
+
+                if (pending.received === pending.sections.length) {
+                    runFlash(pending).catch((e) => {
+                        logErr(`flash タスク例外: ${e?.message ?? e}`);
+                    });
+                }
+            }
+
+            async function runFlash(pending) {
+                state.flashing = true;
+                state.pendingFlash = null;
+                const { req, sections } = pending;
+                showProgress(`flashing ${sections.length} sections...`);
+
+                try {
+                    if (!state.loader) {
+                        await syncChip();
+                    }
+                    if (!state.loader) {
+                        throw new Error("ESPLoader が利用できません。");
+                    }
+
+                    const fileArray = sections.map((s) => ({
+                        data: u8ToBinaryString(s.data),
+                        address: parseOffset(s.meta.offset),
+                    }));
+
+                    let totalBytes = 0;
+                    for (const s of sections) totalBytes += s.data.byteLength;
+                    let writtenBefore = 0;
+
+                    const reportProgress = (fileIndex, written, total) => {
+                        const overall = writtenBefore + written;
+                        const pct = totalBytes > 0 ? (overall / totalBytes) * 100 : 0;
+                        const name = sections[fileIndex]?.meta?.name ?? `section${fileIndex}`;
+                        updateProgress(pct, `${name}  ${written}/${total}`);
+                        // PROTOCOL.md v1: `section` is the section name string.
+                        wsSendJson({
+                            type: "progress",
+                            id: req.id,
+                            section: name,
+                            written,
+                            total,
+                        });
+                        if (written >= total) writtenBefore += total;
+                    };
+
+                    await state.loader.writeFlash({
+                        fileArray,
+                        flashSize: "keep",
+                        flashMode: "keep",
+                        flashFreq: "keep",
+                        eraseAll: !!req.erase,
+                        compress: true,
+                        reportProgress,
+                        calculateMD5Hash: undefined,
+                    });
+
+                    updateProgress(100, "完了");
+                    wsSendJson({ type: "done", id: req.id, success: true });
+                    logInfo(`flash 完了 id=${req.id}`);
+                } catch (e) {
+                    const msg = e?.message ?? String(e);
+                    logErr(`flash 失敗: ${msg}`);
+                    wsSendJson({ type: "done", id: req.id, success: false, error: msg });
+                } finally {
+                    state.flashing = false;
+                    setTimeout(hideProgress, 1500);
+                    // After flash, esptool-js leaves the port at high baud rate.
+                    // Try to drop back to a monitor-friendly baud rate.
+                    try {
+                        if (state.transport && typeof state.transport.setBaudrate === "function") {
+                            await state.transport.setBaudrate(DEFAULT_BAUD_MONITOR);
+                            logInfo(`ボーレートを ${DEFAULT_BAUD_MONITOR} に戻しました。`);
+                        }
+                    } catch (e) {
+                        logWarn(`ボーレート復帰失敗: ${e?.message ?? e}`);
+                    }
+                }
+            }
+
+            function parseOffset(off) {
+                if (typeof off === "number") return off;
+                const s = String(off).trim();
+                if (s.startsWith("0x") || s.startsWith("0X")) return parseInt(s, 16);
+                return parseInt(s, 10);
+            }
+
+            function u8ToBinaryString(u8) {
+                // esptool-js writeFlash expects each file `data` as a binary string
+                // (one char per byte). Build it in chunks to avoid stack overflows
+                // from String.fromCharCode.apply on huge arrays.
+                const CHUNK = 0x8000;
+                let result = "";
+                for (let i = 0; i < u8.length; i += CHUNK) {
+                    result += String.fromCharCode.apply(
+                        null,
+                        u8.subarray(i, Math.min(i + CHUNK, u8.length)),
+                    );
+                }
+                return result;
+            }
+
+            // ===================================================================
+            //                            Wire-up
+            // ===================================================================
+
+            btnPickPort.addEventListener("click", pickPort);
+            btnConnectWs.addEventListener("click", connectWs);
+            btnDisconnectWs.addEventListener("click", disconnectWs);
+            btnReset.addEventListener("click", resetBoard);
+
+            logInfo("起動。シリアル ポートを選択してください。");
+        })();
+    </script>
+</body>
+</html>

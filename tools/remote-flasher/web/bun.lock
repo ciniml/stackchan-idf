@@ -1,0 +1,21 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "stackchan-remote-flasher-web",
+      "dependencies": {
+        "esptool-js": "^0.5.4",
+      },
+    },
+  },
+  "packages": {
+    "atob-lite": ["atob-lite@2.0.0", "", {}, "sha512-LEeSAWeh2Gfa2FtlQE1shxQ8zi5F9GHarrGKz08TMdODD5T4eH6BMsvtnhbWZ+XQn+Gb6om/917ucvRu7l7ukw=="],
+
+    "esptool-js": ["esptool-js@0.5.7", "", { "dependencies": { "atob-lite": "^2.0.0", "pako": "^2.1.0", "tslib": "^2.4.1" } }, "sha512-k3pkXU9OTySCd58OUDjuJWNnFjM+QpPWAghxyWPm3zNfaLiP4ex2jNd7Rj0jWPu3/fgvwau236tetsTZrh4x5g=="],
+
+    "pako": ["pako@2.1.0", "", {}, "sha512-w+eufiZ1WuJYgPXbV/PO3NCMEc3xqylkKHzp8bxp1uW4qaSNQUkwmLLEc3kKsfz8lpV1F8Ht3U1Cm+9Srog2ug=="],
+
+    "tslib": ["tslib@2.8.1", "", {}, "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="],
+  }
+}

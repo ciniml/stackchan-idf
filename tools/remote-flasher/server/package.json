@@ -1,0 +1,14 @@
+{
+  "name": "stackchan-remote-flasher-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Host-side relay between a local idf.py wrapper and a remote browser tab running WebSerial + esptool-js, for over-VPN ESP32 flashing.",
+  "license": "BSL-1.0",
+  "engines": { "bun": ">=1.0.0" },
+  "scripts": {
+    "start": "bun server.ts",
+    "dev": "bun --hot server.ts"
+  },
+  "dependencies": {}
+}

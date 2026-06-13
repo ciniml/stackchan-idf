@@ -1,0 +1,15 @@
+{
+  "name": "stackchan-remote-flasher-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser side of the stackchan remote flasher relay (WebSerial + esptool-js + WebSocket bridge).",
+  "license": "BSL-1.0",
+  "type": "module",
+  "scripts": {
+    "build": "bun build ./src/esptool-entry.js --outfile=./esptool-bundle.js --format=iife --target=browser --minify",
+    "clean": "rm -f ./esptool-bundle.js"
+  },
+  "dependencies": {
+    "esptool-js": "^0.5.4"
+  }
+}
