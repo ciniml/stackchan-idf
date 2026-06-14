@@ -20,6 +20,10 @@ enum class Error {
     ExpanderWrite,
     TouchProbe,
     TouchRead,
+    // espressif/led_strip RMT driver init / blit failure (NekomimiLedStrip).
+    // Distinct from ExpanderWrite so callers can tell which strip backend
+    // failed when both PY32 and RMT strips coexist.
+    LedStripIo,
 };
 
 // Which Stack-chan base board the SoC is mounted on. Detected at begin() —

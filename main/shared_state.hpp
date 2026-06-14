@@ -109,9 +109,12 @@ public:
     // continuously — also keeps the I2C path well-exercised, which is the
     // ongoing soak test for the refresh_leds() RMW-elimination fix
     // (docs/known_issues.md §1).
+    // Default brightness ~10 % (26/255). The PY32 base ring sat at 96/255
+    // (~37 %) which was fine through I²C; the GPIO9 nekomimi chain has the
+    // diodes much closer to the user's eye so the same gain reads as glare.
     std::atomic<std::uint8_t> led_mode{3};       // 3 = kModeGradient (rainbow)
     std::atomic<std::uint32_t> led_color{0x00404040u}; // ignored by gradient
-    std::atomic<std::uint8_t> led_brightness{96};
+    std::atomic<std::uint8_t> led_brightness{26};
 
     // LT timekeeper (main/lt_timer.cpp; ticked by demo_loop). The on-device
     // LT tab writes lt_command / lt_total_s and renders lt_active /

@@ -3,6 +3,7 @@
 
 #include "board/board.hpp"
 
+#include <memory>
 #include <optional>
 #include <utility>
 
@@ -13,6 +14,7 @@
 
 #include "board/io_expander_py32.hpp"
 #include "board/led_strip.hpp"
+#include "board/nekomimi_led_strip.hpp"
 #include "board/si12t_touch.hpp"
 
 namespace stackchan::board {
@@ -30,24 +32,29 @@ public:
          std::optional<Si12tTouch>&& touch) noexcept
         : kind_{kind}, expander_{std::move(expander)}, touch_{std::move(touch)}
     {
-        if (expander_) {
-            led_.emplace(*expander_, kM5LedCount);
+        // Stack-chan ネコミミ NeoPixel (GPIO9, 18 LEDs) — present on every
+        // CoreS3 build regardless of base. We prefer it over the M5-base PY32
+        // ring (which is presently disabled, see JOURNAL: "M5 base 背面
+        // NeoPixel … 完全に無効化中"). If the PY32 path comes back, route via
+        // a separate accessor; today there's only one strip surface.
+        if (kind_ != BoardKind::AtomNyan) {
+            led_ = std::make_unique<NekomimiLedStrip>();
         }
     }
 
     BoardKind kind() const noexcept { return kind_; }
     std::optional<Py32Expander>& expander() noexcept { return expander_; }
     Si12tTouch* touch() noexcept { return touch_ ? &*touch_ : nullptr; }
-    LedStrip* led() noexcept { return led_ ? &*led_ : nullptr; }
+    LedStrip* led() noexcept { return led_.get(); }
 
 private:
     BoardKind kind_;
     std::optional<Py32Expander> expander_;
     std::optional<Si12tTouch> touch_;
-    // Constructed iff PY32 is present (M5 base). LedStrip holds a reference to
-    // the expander, so it lives in Impl alongside the expander itself — never
-    // moved independently, never outlives the expander.
-    std::optional<LedStrip> led_;
+    // Polymorphic strip — owned via unique_ptr because Py32LedStrip and
+    // NekomimiLedStrip have different sizes / move semantics. nullptr on
+    // hardware without any strip (AtomNyan).
+    std::unique_ptr<LedStrip> led_;
 };
 
 tl::expected<Board, Error> Board::begin()

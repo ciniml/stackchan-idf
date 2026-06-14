@@ -18,32 +18,32 @@ inline void pack_rgb565_le(std::uint8_t* out, std::uint8_t r, std::uint8_t g, st
 
 } // namespace
 
-tl::expected<void, Error> LedStrip::begin()
+tl::expected<void, Error> Py32LedStrip::begin()
 {
     if (auto r = expander_->set_led_count(count_); !r) return r;
     clear();
     return show();
 }
 
-void LedStrip::clear() noexcept
+void Py32LedStrip::clear() noexcept
 {
     buf_.fill(0);
 }
 
-void LedStrip::fill(std::uint8_t r, std::uint8_t g, std::uint8_t b) noexcept
+void Py32LedStrip::fill(std::uint8_t r, std::uint8_t g, std::uint8_t b) noexcept
 {
     for (std::size_t i = 0; i < count_; ++i) {
         pack_rgb565_le(&buf_[i * 2], r, g, b);
     }
 }
 
-void LedStrip::set(std::size_t index, std::uint8_t r, std::uint8_t g, std::uint8_t b) noexcept
+void Py32LedStrip::set(std::size_t index, std::uint8_t r, std::uint8_t g, std::uint8_t b) noexcept
 {
     if (index >= count_) return;
     pack_rgb565_le(&buf_[index * 2], r, g, b);
 }
 
-tl::expected<void, Error> LedStrip::show()
+tl::expected<void, Error> Py32LedStrip::show()
 {
     if (auto r = expander_->write_led_colors(buf_.data(), count_); !r) return r;
     return expander_->refresh_leds();
