@@ -30,6 +30,12 @@ void set_servo_positions_getter(config::ServoPositionsGetter getter);
 // `GET /api/metrics/audio`. nullptr leaves the endpoint returning "{}".
 void set_audio_metrics_getter(config::AudioMetricsJsonGetter getter);
 
+// LED live-state read/write hooks. The closures are shared with BLE chr 0x20.
+// Read-out drives `GET /api/led-state`; the patch sink fires on
+// `POST /api/led-state` once the body has been parsed.
+void set_led_state_getter(config::LedStateGetter getter);
+void set_led_state_sink(config::LedStateSink sink);
+
 // Record the booted board kind for /api/status. See wifi_config_service.hpp.
 void set_board_kind(std::uint8_t kind);
 

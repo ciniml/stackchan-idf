@@ -50,4 +50,8 @@ void set_servo_positions_getter(ServoPositionsGetter getter);
 // Register the audio metrics JSON getter (BLE chr 0x1f).
 void set_audio_metrics_getter(AudioMetricsJsonGetter getter);
 
+// LED live-state read/write getter/sink (BLE chr 0x20).
+void set_led_state_getter(LedStateGetter getter);
+void set_led_state_sink(LedStateSink sink);
+
 } // namespace stackchan::config::gatt

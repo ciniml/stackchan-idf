@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tl/expected.hpp>
@@ -197,5 +198,28 @@ void set_servo_positions_getter(ServoPositionsGetter getter);
 // "{}" when no turn has completed yet is fine. nullptr unregisters.
 using AudioMetricsJsonGetter = std::string (*)();
 void set_audio_metrics_getter(AudioMetricsJsonGetter getter);
+
+// NeoPixel live state — `mode` matches main/led_task's kModeOff/Solid/Breath/
+// Gradient (0..3); `color` is the 24-bit RGB used by Solid/Breath (Gradient
+// ignores it); `brightness` is the 0..255 master gain. Wired through BLE
+// chr 0x20 + HTTP /api/led-state. Both read (current values) and write
+// (apply new values) are mediated through the sink/getter — main owns the
+// SharedState atomics and just exposes a thin closure.
+struct LedState {
+    std::uint8_t mode;        // 0=off, 1=solid, 2=breath, 3=gradient
+    std::uint8_t r, g, b;     // RGB components (ignored when mode=gradient)
+    std::uint8_t brightness;  // 0..255 master gain
+};
+// nullopt fields = "leave as-is". Apply order matters at the wire level so
+// the caller can update brightness alone without disturbing the mode/colour.
+struct LedStatePatch {
+    std::optional<std::uint8_t> mode;
+    std::optional<std::uint8_t> r, g, b;
+    std::optional<std::uint8_t> brightness;
+};
+using LedStateGetter = LedState (*)();
+using LedStateSink = void (*)(const LedStatePatch& patch);
+void set_led_state_getter(LedStateGetter getter);
+void set_led_state_sink(LedStateSink sink);
 
 } // namespace stackchan::config

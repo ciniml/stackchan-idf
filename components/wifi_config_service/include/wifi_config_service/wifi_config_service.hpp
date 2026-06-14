@@ -47,6 +47,13 @@ void set_servo_positions_getter(config::ServoPositionsGetter getter);
 // leaves the HTTP endpoint returning "{}".
 void set_audio_metrics_getter(config::AudioMetricsJsonGetter getter);
 
+// LED live-state read/write hooks. `GET /api/led-state` returns the current
+// values via the getter; `POST /api/led-state` parses JSON
+// `{"mode":..,"r":..,"g":..,"b":..,"brightness":..}` (all optional) and
+// forwards the patch to the sink.
+void set_led_state_getter(config::LedStateGetter getter);
+void set_led_state_sink(config::LedStateSink sink);
+
 // Record the booted board kind (mirrors board::BoardKind cast to byte) so it
 // surfaces in /api/status under the "board" key. The web UI uses this to
 // hide controls that don't apply to the current hardware. See

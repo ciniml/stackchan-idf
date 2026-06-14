@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cJSON.h>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -71,6 +72,8 @@ esp_timer_handle_t g_restart_timer = nullptr;
 config::ServoRangeModeSink g_servo_range_mode_sink = nullptr;
 config::ServoPositionsGetter g_servo_positions_getter = nullptr;
 config::AudioMetricsJsonGetter g_audio_metrics_getter = nullptr;
+config::LedStateGetter g_led_state_getter = nullptr;
+config::LedStateSink g_led_state_sink = nullptr;
 AvatarBytecodeSink g_avatar_bytecode_sink = nullptr;
 McpSayKanaSink g_mcp_say_sink = nullptr;
 LtConfigSink g_lt_config_sink = nullptr;
@@ -732,6 +735,56 @@ esp_err_t handle_audio_metrics_get(httpd_req_t* req)
     return send_json(req, body);
 }
 
+// --- LED live state ---
+
+// GET /api/led-state — current LED mode/colour/brightness.
+esp_err_t handle_led_state_get(httpd_req_t* req)
+{
+    config::LedState s{};
+    if (g_led_state_getter != nullptr) s = g_led_state_getter();
+    char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  R"({"mode":%u,"r":%u,"g":%u,"b":%u,"brightness":%u})",
+                  static_cast<unsigned>(s.mode), static_cast<unsigned>(s.r),
+                  static_cast<unsigned>(s.g), static_cast<unsigned>(s.b),
+                  static_cast<unsigned>(s.brightness));
+    return send_json(req, std::string{buf});
+}
+
+// POST /api/led-state — body is a small JSON with optional mode / r / g / b /
+// brightness. Missing fields keep their current value. mode is 0..3
+// (off/solid/breath/gradient). r/g/b are 0..255 each (gradient mode ignores
+// them; the rainbow generator drives the strip itself). Returns the resulting
+// state as JSON so the client can confirm the apply.
+esp_err_t handle_led_state_post(httpd_req_t* req)
+{
+    std::string body;
+    if (read_body_str(req, body, 256) != ESP_OK) return ESP_OK;
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (root == nullptr) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        return send_json(req, R"({"error":"bad json"})");
+    }
+    config::LedStatePatch p{};
+    auto pick = [root](const char* key) -> std::optional<std::uint8_t> {
+        const cJSON* n = cJSON_GetObjectItemCaseSensitive(root, key);
+        if (cJSON_IsNumber(n)) {
+            const int v = n->valueint;
+            if (v < 0 || v > 255) return std::nullopt;
+            return static_cast<std::uint8_t>(v);
+        }
+        return std::nullopt;
+    };
+    p.mode = pick("mode");
+    p.r = pick("r");
+    p.g = pick("g");
+    p.b = pick("b");
+    p.brightness = pick("brightness");
+    cJSON_Delete(root);
+    if (g_led_state_sink != nullptr) g_led_state_sink(p);
+    return handle_led_state_get(req);
+}
+
 // --- Static root ---
 
 esp_err_t handle_root_get(httpd_req_t* req)
@@ -803,6 +856,8 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/avatar-dsl",       HTTP_POST, handle_avatar_dsl_post);
     add(server, "/api/avatar-dsl/reset", HTTP_POST, handle_avatar_dsl_reset_post);
     add(server, "/api/metrics/audio",    HTTP_GET,  handle_audio_metrics_get);
+    add(server, "/api/led-state",        HTTP_GET,  handle_led_state_get);
+    add(server, "/api/led-state",        HTTP_POST, handle_led_state_post);
     // Claude Code Channel adapter API (Bearer-gated). Empty
     // CONFIG_MCP_API_TOKEN keeps these handlers registered but they 404.
     add(server, "/mcp/say",              HTTP_POST, handle_mcp_say_post);
@@ -861,6 +916,22 @@ void set_audio_metrics_getter(config::AudioMetricsJsonGetter getter)
     }
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     g_audio_metrics_getter = getter;
+    xSemaphoreGive(g_mutex);
+}
+
+void set_led_state_getter(config::LedStateGetter getter)
+{
+    if (g_mutex == nullptr) { g_led_state_getter = getter; return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_led_state_getter = getter;
+    xSemaphoreGive(g_mutex);
+}
+
+void set_led_state_sink(config::LedStateSink sink)
+{
+    if (g_mutex == nullptr) { g_led_state_sink = sink; return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_led_state_sink = sink;
     xSemaphoreGive(g_mutex);
 }
 

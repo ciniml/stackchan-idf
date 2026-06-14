@@ -203,6 +203,16 @@ void set_audio_metrics_getter(config::AudioMetricsJsonGetter getter)
     http::set_audio_metrics_getter(getter);
 }
 
+void set_led_state_getter(config::LedStateGetter getter)
+{
+    http::set_led_state_getter(getter);
+}
+
+void set_led_state_sink(config::LedStateSink sink)
+{
+    http::set_led_state_sink(sink);
+}
+
 void set_board_kind(std::uint8_t kind)
 {
     http::set_board_kind(kind);

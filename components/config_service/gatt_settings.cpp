@@ -235,6 +235,14 @@ static const ble_uuid128_t kLtConfigUuid = BLE_UUID128_INIT(
 static const ble_uuid128_t kAudioMetricsUuid = BLE_UUID128_INIT(
     0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
     0x2a, 0x4d, 0x1c, 0x7b, 0x1f, 0xa0, 0xf0, 0xe3);
+// LedState — encrypted R/W. 5-byte payload [mode][R][G][B][brightness].
+// READ returns the live SharedState atomics via the registered getter; WRITE
+// applies through the LedStateSink which forwards to main/led_task's
+// SharedState. Stays ephemeral (no NVS persistence) — the boot defaults
+// (gradient @ ~10%) are the resting state across reboots.
+static const ble_uuid128_t kLedStateUuid = BLE_UUID128_INIT(
+    0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
+    0x2a, 0x4d, 0x1c, 0x7b, 0x20, 0xa0, 0xf0, 0xe3);
 
 // --- Mutable state guarded by g_mutex ---
 static SemaphoreHandle_t g_mutex = nullptr;
@@ -280,6 +288,9 @@ static uint16_t g_servo_range_mode_handle = 0;
 static uint16_t g_servo_positions_handle = 0;
 static uint16_t g_audio_metrics_handle = 0;
 static AudioMetricsJsonGetter g_audio_metrics_getter = nullptr;
+static uint16_t g_led_state_handle = 0;
+static LedStateGetter g_led_state_getter = nullptr;
+static LedStateSink g_led_state_sink = nullptr;
 static uint16_t g_board_kind_handle = 0;
 // Board variant byte, set by main at boot before BLE comes online (so the
 // first central read sees the correct value). Default M5Base preserves the
@@ -605,6 +616,20 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
                 static_cast<std::uint8_t>((y >> 8) & 0xff),
                 static_cast<std::uint8_t>(p & 0xff),
                 static_cast<std::uint8_t>((p >> 8) & 0xff)};
+            const bool ok = append_encrypted(ctxt->om, {payload.data(), payload.size()});
+            xSemaphoreGive(g_mutex);
+            return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
+        }
+        if (attr_handle == g_led_state_handle) {
+            LedState s{};
+            LedStateGetter getter = g_led_state_getter;
+            if (getter != nullptr) s = getter();
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            if (!g_session.is_established()) {
+                xSemaphoreGive(g_mutex);
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            const std::array<std::uint8_t, 5> payload{s.mode, s.r, s.g, s.b, s.brightness};
             const bool ok = append_encrypted(ctxt->om, {payload.data(), payload.size()});
             xSemaphoreGive(g_mutex);
             return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
@@ -954,6 +979,24 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (sink != nullptr) sink(on);
             return 0;
         }
+        if (attr_handle == g_led_state_handle) {
+            // 5-byte fixed payload [mode][R][G][B][brightness]. To keep the
+            // wire format compact we don't carry "leave as-is" sentinels — a
+            // client that just wants to change brightness must read first,
+            // then write back the full tuple with the new brightness. The
+            // HTTP endpoint exposes the per-field optional patch for browser
+            // UIs that prefer that ergonomics.
+            if (pt.size() != 5) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            LedStatePatch p{};
+            p.mode = pt[0];
+            p.r = pt[1];
+            p.g = pt[2];
+            p.b = pt[3];
+            p.brightness = pt[4];
+            LedStateSink sink = g_led_state_sink;
+            if (sink != nullptr) sink(p);
+            return 0;
+        }
         if (attr_handle == g_apply_handle) {
             if (pt.empty()) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
 
@@ -1107,6 +1150,12 @@ static ble_gatt_chr_def kChrs[] = {
         .access_cb = gatt_access_cb,
         .flags = BLE_GATT_CHR_F_READ,
         .val_handle = &g_audio_metrics_handle,
+    },
+    {
+        .uuid = &kLedStateUuid.u,
+        .access_cb = gatt_access_cb,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+        .val_handle = &g_led_state_handle,
     },
     {
         .uuid = &kBoardKindUuid.u,
@@ -1338,6 +1387,16 @@ void set_audio_metrics_getter(AudioMetricsJsonGetter getter)
 {
     // Plain write — registered at boot before NimBLE starts processing reads.
     g_audio_metrics_getter = getter;
+}
+
+void set_led_state_getter(LedStateGetter getter)
+{
+    g_led_state_getter = getter;
+}
+
+void set_led_state_sink(LedStateSink sink)
+{
+    g_led_state_sink = sink;
 }
 
 void set_board_kind(std::uint8_t kind)

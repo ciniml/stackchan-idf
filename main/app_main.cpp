@@ -102,6 +102,51 @@ stackchan::config::ServoPositionsView servo_positions()
             g_state->servo_pitch_raw.load(std::memory_order_relaxed)};
 }
 
+// LED state pulled live out of SharedState atomics. Used by both BLE chr 0x20
+// READ and HTTP `GET /api/led-state`.
+stackchan::config::LedState read_led_state()
+{
+    stackchan::config::LedState s{};
+    if (g_state == nullptr) return s;
+    const std::uint32_t color = g_state->led_color.load(std::memory_order_relaxed);
+    s.mode = g_state->led_mode.load(std::memory_order_relaxed);
+    s.r = static_cast<std::uint8_t>((color >> 16) & 0xFF);
+    s.g = static_cast<std::uint8_t>((color >>  8) & 0xFF);
+    s.b = static_cast<std::uint8_t>( color        & 0xFF);
+    s.brightness = g_state->led_brightness.load(std::memory_order_relaxed);
+    return s;
+}
+
+// Apply a patch onto SharedState. led_color packs the three components into a
+// single u32 so the load above stays lock-free; we read-modify-write here
+// since at most one writer (BLE host task or HTTP worker) is touching it.
+void apply_led_patch(const stackchan::config::LedStatePatch& p)
+{
+    if (g_state == nullptr) return;
+    if (p.mode) {
+        const std::uint8_t m = *p.mode;
+        // Clamp invalid modes to "off" rather than ignoring — easier to debug
+        // a typo from a client than a silently-dropped value.
+        g_state->led_mode.store(m <= 3 ? m : 0, std::memory_order_relaxed);
+    }
+    if (p.r || p.g || p.b) {
+        std::uint32_t cur = g_state->led_color.load(std::memory_order_relaxed);
+        std::uint8_t cr = static_cast<std::uint8_t>((cur >> 16) & 0xFF);
+        std::uint8_t cg = static_cast<std::uint8_t>((cur >>  8) & 0xFF);
+        std::uint8_t cb = static_cast<std::uint8_t>( cur        & 0xFF);
+        if (p.r) cr = *p.r;
+        if (p.g) cg = *p.g;
+        if (p.b) cb = *p.b;
+        g_state->led_color.store((static_cast<std::uint32_t>(cr) << 16) |
+                                 (static_cast<std::uint32_t>(cg) <<  8) |
+                                 static_cast<std::uint32_t>(cb),
+                                 std::memory_order_relaxed);
+    }
+    if (p.brightness) {
+        g_state->led_brightness.store(*p.brightness, std::memory_order_relaxed);
+    }
+}
+
 // Render the last-turn audio metrics as JSON for BLE chr 0x1f + HTTP
 // `GET /api/metrics/audio`. Same getter is wired to both transports so
 // clients see the same payload regardless of how they connect. Returns
@@ -661,11 +706,6 @@ extern "C" void app_main()
         // audio playback, which drops BLE RX throughput from ~22 KiB/s
         // to ~10 KiB/s and turns BLE audio streaming choppy.
         spk.task_pinned_core = 1;
-        if (has_audio_module) {
-            // ES8388 needs a master clock; GPIO0 is the M-BUS MCLK line in
-            // the module's Config B jumper position.
-            spk.pin_mck = GPIO_NUM_0;
-        }
         M5.Speaker.config(spk);
         M5.Speaker.end();
 
@@ -724,6 +764,8 @@ extern "C" void app_main()
     stackchan::config::set_servo_range_mode_sink(&on_servo_range_mode);
     stackchan::config::set_servo_positions_getter(&servo_positions);
     stackchan::config::set_audio_metrics_getter(&audio_metrics_json);
+    stackchan::config::set_led_state_getter(&read_led_state);
+    stackchan::config::set_led_state_sink(&apply_led_patch);
     // Tell the settings services which board we're on so the web UIs can hide
     // sections that don't apply (e.g. servo config on Atom-nyan). Must happen
     // before config::start / wifi_config setup so the first central read sees
@@ -748,6 +790,8 @@ extern "C" void app_main()
     stackchan::wifi_config::set_servo_range_mode_sink(&on_servo_range_mode);
     stackchan::wifi_config::set_servo_positions_getter(&servo_positions);
     stackchan::wifi_config::set_audio_metrics_getter(&audio_metrics_json);
+    stackchan::wifi_config::set_led_state_getter(&read_led_state);
+    stackchan::wifi_config::set_led_state_sink(&apply_led_patch);
     stackchan::wifi_config::set_board_kind(static_cast<std::uint8_t>(board.kind()));
     // (Channel /mcp/events bring-up happens AFTER start_conversation_task so
     //  the conv-task gets first dibs on contiguous internal RAM for its 3 ×
