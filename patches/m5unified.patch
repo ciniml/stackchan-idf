@@ -1,3 +1,25 @@
+diff --git a/src/utility/Speaker_Class.cpp b/src/utility/Speaker_Class.cpp
+index e4094b9..6c9f42e 100644
+--- a/src/utility/Speaker_Class.cpp
++++ b/src/utility/Speaker_Class.cpp
+@@ -969,6 +969,17 @@ label_continue_sample:
+       auto chinfo = &_ch_info[ch];
+       chinfo->wavinfo[0].clear();
+       chinfo->wavinfo[1].clear();
++      // Reset the resampler / linear-interpolator state. Without this, the
++      // ch_diff fractional accumulator + liner_buf 2-sample history persist
++      // across begin()/end() cycles. stackchan-idf swaps Mic ↔ Speaker every
++      // conversation turn (CoreS3 shares I2S_NUM_1), so over many turns the
++      // accumulator drifts away from steady state, audibly slowing playback
++      // and adding scratchy artefacts that reset only with a reboot.
++      chinfo->index = 0;
++      chinfo->diff = 0;
++      chinfo->flip = false;
++      chinfo->liner_buf[0][0] = chinfo->liner_buf[0][1] = 0;
++      chinfo->liner_buf[1][0] = chinfo->liner_buf[1][1] = 0;
+     }
+ #if !defined (SDL_h_)
+     _i2s_driver_uninstall(_cfg.i2s_port);
 diff --git a/src/utility/rtc/RTC_PowerHub_Class.cpp b/src/utility/rtc/RTC_PowerHub_Class.cpp
 index 37ec1ab..821e4f8 100644
 --- a/src/utility/rtc/RTC_PowerHub_Class.cpp
