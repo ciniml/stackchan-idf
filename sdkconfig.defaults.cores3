@@ -15,7 +15,17 @@ CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 # Pulls espressif/esp32-camera + espressif/quirc into the build and
 # unlocks components/board/camera_gc0308.cpp. Pin defaults live in
 # components/board/Kconfig and target the CoreS3 mainboard wiring.
-CONFIG_STACKCHAN_CAMERA_ENABLED=y
+#
+# Temporarily disabled: enabling this re-triggers the lgfx i2c mutex
+# priority-disinherit assert (tasks.c:5147) ~38 s into boot, around the time
+# GC0308 SCCB init runs on the same pins (G11/G12) as M5.In_I2C / led_strip.
+# CameraGc0308::begin() calls m5::In_I2C.release() before esp_camera_init,
+# but that does not stop other tasks (led refresh, touch poll, py32 LED
+# refresh) from racing on the lgfx mutex during SCCB activity. Re-enable
+# after the bus ownership story is sorted (likely: gate led / touch / py32
+# I2C calls behind a "camera-active" flag, or migrate them off the shared
+# lgfx i2c instance entirely).
+CONFIG_STACKCHAN_CAMERA_ENABLED=n
 # Put the per-frame DMA bounce in PSRAM so the QVGA grayscale buffer
 # (≈75 KiB) doesn't fight the steady ~10 KiB internal-RAM headroom that
 # TLS / esp-aes / NimBLE already lean on. ESP32-S3 specific knob in
