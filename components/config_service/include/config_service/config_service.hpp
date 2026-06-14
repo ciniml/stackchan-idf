@@ -191,4 +191,11 @@ struct ServoPositionsView {
 using ServoPositionsGetter = ServoPositionsView (*)();
 void set_servo_positions_getter(ServoPositionsGetter getter);
 
+// Audio pipeline metrics — returns the latest per-turn snapshot rendered as
+// JSON for both BLE (chr 0x1f) and HTTP (/api/metrics/audio). The getter
+// should not block; it's invoked from the GATT host task on read. Returning
+// "{}" when no turn has completed yet is fine. nullptr unregisters.
+using AudioMetricsJsonGetter = std::string (*)();
+void set_audio_metrics_getter(AudioMetricsJsonGetter getter);
+
 } // namespace stackchan::config

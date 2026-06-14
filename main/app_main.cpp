@@ -102,6 +102,46 @@ stackchan::config::ServoPositionsView servo_positions()
             g_state->servo_pitch_raw.load(std::memory_order_relaxed)};
 }
 
+// Render the last-turn audio metrics as JSON for BLE chr 0x1f + HTTP
+// `GET /api/metrics/audio`. Same getter is wired to both transports so
+// clients see the same payload regardless of how they connect. Returns
+// "{}" before the first turn finishes.
+std::string audio_metrics_json()
+{
+    if (g_state == nullptr) return "{}";
+    const auto m = g_state->snapshot_audio_metrics();
+    if (m.turn_at_ms == 0) return "{}";
+    char buf[640];
+    std::snprintf(
+        buf, sizeof(buf),
+        "{"
+        "\"turn_at_ms\":%u,"
+        "\"chunks\":%u,"
+        "\"speaker_sample_rate\":%u,"
+        "\"played_sps\":%.1f,"
+        "\"recv_lag_us\":{\"avg\":%.0f,\"min\":%.0f,\"max\":%.0f},"
+        "\"recv_to_queued_ms\":{\"avg\":%.1f,\"min\":%.1f,\"max\":%.1f},"
+        "\"spk_queue\":{\"avg\":%.2f,\"min\":%.0f,\"max\":%.0f},"
+        "\"pcm_lag_samples\":{\"avg\":%.0f,\"max\":%.0f}"
+        "}",
+        static_cast<unsigned>(m.turn_at_ms),
+        static_cast<unsigned>(m.chunk_count),
+        static_cast<unsigned>(m.speaker_sample_rate),
+        static_cast<double>(m.played_sps),
+        static_cast<double>(m.recv_lag_us_avg),
+        static_cast<double>(m.recv_lag_us_min),
+        static_cast<double>(m.recv_lag_us_max),
+        static_cast<double>(m.recv_to_queued_ms_avg),
+        static_cast<double>(m.recv_to_queued_ms_min),
+        static_cast<double>(m.recv_to_queued_ms_max),
+        static_cast<double>(m.spk_queue_avg),
+        static_cast<double>(m.spk_queue_min),
+        static_cast<double>(m.spk_queue_max),
+        static_cast<double>(m.pcm_lag_samples_avg),
+        static_cast<double>(m.pcm_lag_samples_max));
+    return std::string{buf};
+}
+
 // CoreS3 mic + speaker share I2S_NUM_1, so we have to hand the bus around
 // explicitly. Records `seconds` of audio at 16 kHz then plays it straight
 // back. Blocks the caller for ~2 * seconds.
@@ -683,6 +723,7 @@ extern "C" void app_main()
     });
     stackchan::config::set_servo_range_mode_sink(&on_servo_range_mode);
     stackchan::config::set_servo_positions_getter(&servo_positions);
+    stackchan::config::set_audio_metrics_getter(&audio_metrics_json);
     // Tell the settings services which board we're on so the web UIs can hide
     // sections that don't apply (e.g. servo config on Atom-nyan). Must happen
     // before config::start / wifi_config setup so the first central read sees
@@ -706,6 +747,7 @@ extern "C" void app_main()
     // cached in static storage and applied once the handlers register).
     stackchan::wifi_config::set_servo_range_mode_sink(&on_servo_range_mode);
     stackchan::wifi_config::set_servo_positions_getter(&servo_positions);
+    stackchan::wifi_config::set_audio_metrics_getter(&audio_metrics_json);
     stackchan::wifi_config::set_board_kind(static_cast<std::uint8_t>(board.kind()));
     // (Channel /mcp/events bring-up happens AFTER start_conversation_task so
     //  the conv-task gets first dibs on contiguous internal RAM for its 3 ×

@@ -42,6 +42,11 @@ void set_battery(int millivolts, int milliamps, int percent);
 void set_servo_range_mode_sink(config::ServoRangeModeSink sink);
 void set_servo_positions_getter(config::ServoPositionsGetter getter);
 
+// Register the audio pipeline metrics JSON getter (`GET /api/metrics/audio`).
+// See config_service::set_audio_metrics_getter for the contract. nullptr
+// leaves the HTTP endpoint returning "{}".
+void set_audio_metrics_getter(config::AudioMetricsJsonGetter getter);
+
 // Record the booted board kind (mirrors board::BoardKind cast to byte) so it
 // surfaces in /api/status under the "board" key. The web UI uses this to
 // hide controls that don't apply to the current hardware. See

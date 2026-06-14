@@ -702,6 +702,26 @@ private:
                  static_cast<double>(spk_queue_.max()),
                  pcm_lag_samples_.mean(), static_cast<double>(pcm_lag_max),
                  played_sps, static_cast<unsigned>(speaker_sample_rate_));
+        // Publish the snapshot so the HTTP / BLE settings endpoints can serve
+        // it (e.g. /api/metrics/audio polled from a phone). Writes go via
+        // SharedState's mutex so a poll mid-write sees a coherent struct.
+        SharedState::AudioMetrics snap{};
+        snap.turn_at_ms = now_ms();
+        snap.chunk_count = static_cast<std::uint32_t>(count);
+        snap.speaker_sample_rate = speaker_sample_rate_;
+        snap.recv_lag_us_avg = static_cast<float>(recv_lag_us_.mean());
+        snap.recv_lag_us_min = recv_lag_us_.min();
+        snap.recv_lag_us_max = recv_lag_us_.max();
+        snap.recv_to_queued_ms_avg = static_cast<float>(recv_to_queued_ms_.mean());
+        snap.recv_to_queued_ms_min = recv_to_queued_ms_.min();
+        snap.recv_to_queued_ms_max = recv_to_queued_ms_.max();
+        snap.spk_queue_avg = static_cast<float>(spk_queue_.mean());
+        snap.spk_queue_min = spk_queue_.min();
+        snap.spk_queue_max = spk_queue_.max();
+        snap.pcm_lag_samples_avg = static_cast<float>(pcm_lag_samples_.mean());
+        snap.pcm_lag_samples_max = pcm_lag_samples_.max();
+        snap.played_sps = static_cast<float>(played_sps);
+        state_.update_audio_metrics(snap);
         recv_lag_us_.reset();
         recv_to_queued_ms_.reset();
         spk_queue_.reset();

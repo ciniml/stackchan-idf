@@ -25,6 +25,11 @@ void set_battery(int millivolts, int milliamps, int percent);
 void set_servo_range_mode_sink(config::ServoRangeModeSink sink);
 void set_servo_positions_getter(config::ServoPositionsGetter getter);
 
+// Register the audio pipeline metrics JSON getter. The same callable is also
+// wired into BLE chr 0x1f via config_service; HTTP just calls it on
+// `GET /api/metrics/audio`. nullptr leaves the endpoint returning "{}".
+void set_audio_metrics_getter(config::AudioMetricsJsonGetter getter);
+
 // Record the booted board kind for /api/status. See wifi_config_service.hpp.
 void set_board_kind(std::uint8_t kind);
 

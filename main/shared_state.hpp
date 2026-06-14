@@ -282,6 +282,43 @@ public:
         hold_ms_out = balloon_hold_ms_;
     }
 
+    // Audio pipeline metrics (one snapshot per finished/aborted reply).
+    // Conv-task fills this at end-of-turn in log_playback_metrics(); HTTP
+    // (`GET /api/metrics/audio`) and BLE (chr 0x1f) read it back. All
+    // accessors are mutex-protected; reads return by value so callers are
+    // free to format / serialise off-task.
+    struct AudioMetrics {
+        std::uint32_t turn_at_ms = 0;          // now_ms() when the snapshot was written
+        std::uint32_t chunk_count = 0;
+        std::uint32_t speaker_sample_rate = 0;  // nominal Hz (24000 for Gemini, 8000 for OpenAI µ-law)
+        // Event-queue hop latency: emit_us → conv-task receive
+        float recv_lag_us_avg = 0, recv_lag_us_min = 0, recv_lag_us_max = 0;
+        // Recv → handed-to-playRaw delay
+        float recv_to_queued_ms_avg = 0, recv_to_queued_ms_min = 0, recv_to_queued_ms_max = 0;
+        // M5.Speaker.isPlaying queue depth (0..2)
+        float spk_queue_avg = 0, spk_queue_min = 0, spk_queue_max = 0;
+        // Unplayed samples in assistant_pcm_ at sample time
+        float pcm_lag_samples_avg = 0, pcm_lag_samples_max = 0;
+        // Effective sps inferred from seg_pos_ / elapsed; compare against
+        // speaker_sample_rate to detect I2S clock drift.
+        float played_sps = 0;
+    };
+    void update_audio_metrics(const AudioMetrics& m)
+    {
+        std::lock_guard lock{audio_metrics_mutex_};
+        audio_metrics_ = m;
+        audio_metrics_version_.fetch_add(1, std::memory_order_release);
+    }
+    std::uint32_t audio_metrics_version() const noexcept
+    {
+        return audio_metrics_version_.load(std::memory_order_acquire);
+    }
+    AudioMetrics snapshot_audio_metrics() const
+    {
+        std::lock_guard lock{audio_metrics_mutex_};
+        return audio_metrics_;
+    }
+
 private:
     mutable std::mutex balloon_mutex_;
     std::string balloon_text_;
@@ -301,6 +338,10 @@ private:
     mutable std::mutex lt_config_mutex_;
     std::string lt_config_json_;
     std::atomic<std::uint32_t> lt_config_version_{0};
+
+    mutable std::mutex audio_metrics_mutex_;
+    AudioMetrics audio_metrics_{};
+    std::atomic<std::uint32_t> audio_metrics_version_{0};
 };
 
 } // namespace stackchan::app

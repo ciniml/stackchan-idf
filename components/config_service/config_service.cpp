@@ -363,6 +363,11 @@ void set_servo_positions_getter(ServoPositionsGetter getter)
     gatt::set_servo_positions_getter(getter);
 }
 
+void set_audio_metrics_getter(AudioMetricsJsonGetter getter)
+{
+    gatt::set_audio_metrics_getter(getter);
+}
+
 void set_board_kind(std::uint8_t kind)
 {
     gatt::set_board_kind(kind);

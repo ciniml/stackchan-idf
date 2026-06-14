@@ -47,4 +47,7 @@ void set_servo_range_mode_sink(ServoRangeModeSink sink);
 // Register the live servo positions getter. See config_service.hpp.
 void set_servo_positions_getter(ServoPositionsGetter getter);
 
+// Register the audio metrics JSON getter (BLE chr 0x1f).
+void set_audio_metrics_getter(AudioMetricsJsonGetter getter);
+
 } // namespace stackchan::config::gatt

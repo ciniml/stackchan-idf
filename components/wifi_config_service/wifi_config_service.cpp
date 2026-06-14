@@ -198,6 +198,11 @@ void set_servo_positions_getter(config::ServoPositionsGetter getter)
     http::set_servo_positions_getter(getter);
 }
 
+void set_audio_metrics_getter(config::AudioMetricsJsonGetter getter)
+{
+    http::set_audio_metrics_getter(getter);
+}
+
 void set_board_kind(std::uint8_t kind)
 {
     http::set_board_kind(kind);

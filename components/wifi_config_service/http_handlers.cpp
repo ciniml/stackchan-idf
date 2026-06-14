@@ -70,6 +70,7 @@ esp_timer_handle_t g_restart_timer = nullptr;
 // live present-positions for the capture UI.
 config::ServoRangeModeSink g_servo_range_mode_sink = nullptr;
 config::ServoPositionsGetter g_servo_positions_getter = nullptr;
+config::AudioMetricsJsonGetter g_audio_metrics_getter = nullptr;
 AvatarBytecodeSink g_avatar_bytecode_sink = nullptr;
 McpSayKanaSink g_mcp_say_sink = nullptr;
 LtConfigSink g_lt_config_sink = nullptr;
@@ -714,6 +715,23 @@ esp_err_t handle_mcp_state_get(httpd_req_t* req)
     return send_json(req, std::string{buf});
 }
 
+// --- Audio metrics ---
+
+// GET /api/metrics/audio — last conversation-turn audio pipeline stats.
+// Returns "{}" when no turn has finished yet (boot fresh / before first
+// reply). Polled by an ops dashboard / phone client; does not require a
+// session token.
+esp_err_t handle_audio_metrics_get(httpd_req_t* req)
+{
+    std::string body;
+    if (g_audio_metrics_getter != nullptr) {
+        body = g_audio_metrics_getter();
+    } else {
+        body = "{}";
+    }
+    return send_json(req, body);
+}
+
 // --- Static root ---
 
 esp_err_t handle_root_get(httpd_req_t* req)
@@ -784,6 +802,7 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/ota/data",        HTTP_POST, handle_ota_data_post);
     add(server, "/api/avatar-dsl",       HTTP_POST, handle_avatar_dsl_post);
     add(server, "/api/avatar-dsl/reset", HTTP_POST, handle_avatar_dsl_reset_post);
+    add(server, "/api/metrics/audio",    HTTP_GET,  handle_audio_metrics_get);
     // Claude Code Channel adapter API (Bearer-gated). Empty
     // CONFIG_MCP_API_TOKEN keeps these handlers registered but they 404.
     add(server, "/mcp/say",              HTTP_POST, handle_mcp_say_post);
@@ -830,6 +849,18 @@ void set_servo_positions_getter(config::ServoPositionsGetter getter)
     }
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     g_servo_positions_getter = getter;
+    xSemaphoreGive(g_mutex);
+}
+
+void set_audio_metrics_getter(config::AudioMetricsJsonGetter getter)
+{
+    // Plain write; same idempotent registration as the other getters.
+    if (g_mutex == nullptr) {
+        g_audio_metrics_getter = getter;
+        return;
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_audio_metrics_getter = getter;
     xSemaphoreGive(g_mutex);
 }
 

@@ -226,6 +226,15 @@ static const ble_uuid128_t kMcpTokenUuid = BLE_UUID128_INIT(
 static const ble_uuid128_t kLtConfigUuid = BLE_UUID128_INIT(
     0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
     0x2a, 0x4d, 0x1c, 0x7b, 0x1e, 0xa0, 0xf0, 0xe3);
+// AudioMetrics — encrypted READ-only JSON snapshot of the last conversation
+// turn's audio pipeline stats (decode time, recv→play latency, speaker
+// queue depth, effective playback sps). Updated by main/conversation_task
+// via SharedState::update_audio_metrics; the GATT callback reads the latest
+// snapshot via the registered AudioMetricsJsonGetter. No NOTIFY — clients
+// poll on demand. See main/conversation_task.cpp `log_playback_metrics()`.
+static const ble_uuid128_t kAudioMetricsUuid = BLE_UUID128_INIT(
+    0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
+    0x2a, 0x4d, 0x1c, 0x7b, 0x1f, 0xa0, 0xf0, 0xe3);
 
 // --- Mutable state guarded by g_mutex ---
 static SemaphoreHandle_t g_mutex = nullptr;
@@ -269,6 +278,8 @@ static uint16_t g_lt_config_handle = 0;
 static uint16_t g_servo_limits_handle = 0;
 static uint16_t g_servo_range_mode_handle = 0;
 static uint16_t g_servo_positions_handle = 0;
+static uint16_t g_audio_metrics_handle = 0;
+static AudioMetricsJsonGetter g_audio_metrics_getter = nullptr;
 static uint16_t g_board_kind_handle = 0;
 // Board variant byte, set by main at boot before BLE comes online (so the
 // first central read sees the correct value). Default M5Base preserves the
@@ -595,6 +606,27 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
                 static_cast<std::uint8_t>(p & 0xff),
                 static_cast<std::uint8_t>((p >> 8) & 0xff)};
             const bool ok = append_encrypted(ctxt->om, {payload.data(), payload.size()});
+            xSemaphoreGive(g_mutex);
+            return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
+        }
+        if (attr_handle == g_audio_metrics_handle) {
+            // Fetch the snapshot off-lock — the getter pulls from
+            // SharedState's own mutex and we don't want to nest g_mutex
+            // around it. The getter returns "{}" when no turn has finished.
+            std::string json{};
+            if (g_audio_metrics_getter != nullptr) {
+                json = g_audio_metrics_getter();
+            } else {
+                json = "{}";
+            }
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            if (!g_session.is_established()) {
+                xSemaphoreGive(g_mutex);
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            const bool ok = append_encrypted(
+                ctxt->om,
+                {reinterpret_cast<const std::uint8_t*>(json.data()), json.size()});
             xSemaphoreGive(g_mutex);
             return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
         }
@@ -1071,6 +1103,12 @@ static ble_gatt_chr_def kChrs[] = {
         .val_handle = &g_servo_positions_handle,
     },
     {
+        .uuid = &kAudioMetricsUuid.u,
+        .access_cb = gatt_access_cb,
+        .flags = BLE_GATT_CHR_F_READ,
+        .val_handle = &g_audio_metrics_handle,
+    },
+    {
         .uuid = &kBoardKindUuid.u,
         .access_cb = gatt_access_cb,
         .flags = BLE_GATT_CHR_F_READ,
@@ -1294,6 +1332,12 @@ void set_servo_range_mode_sink(ServoRangeModeSink sink)
 void set_servo_positions_getter(ServoPositionsGetter getter)
 {
     g_servo_positions_getter = getter;
+}
+
+void set_audio_metrics_getter(AudioMetricsJsonGetter getter)
+{
+    // Plain write — registered at boot before NimBLE starts processing reads.
+    g_audio_metrics_getter = getter;
 }
 
 void set_board_kind(std::uint8_t kind)
