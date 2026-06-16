@@ -33,6 +33,7 @@ enum class BoardKind {
     M5Base,    // M5Stack Stack-chan base: PY32 servo-power EN, INA226 battery, servo on G6/G7.
     TakaoBase, // Takao Base (CoreS3 SE port A): half-duplex servos on port A, no power/battery control.
     AtomNyan,  // AtomS3R + Atomic ECHO BASE: 128x128 LCD, ES8311 codec, no servo/battery/LED/touch.
+    AtomS3,    // Plain AtomS3 (no PSRAM) + Atomic ECHO BASE: avatar / jtts / LED only, no conv/audio-stream.
 };
 
 // SCS servo bus wiring for the detected board. Maps 1:1 onto scs_servo::ScsBus::Config.

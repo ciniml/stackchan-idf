@@ -88,7 +88,16 @@ void render_task_entry(void* arg)
     avatar::BufferedCanvas buffered{display};
     avatar::DirectCanvas direct{display};
     avatar::RichCanvas* cv = nullptr;
-    if (esp_psram_get_size() > 0 && buffered.begin(canvas_w, canvas_h)) {
+    // PSRAM presence drives the buffered (full framebuffer) vs direct
+    // (partial-update) canvas choice. When SPIRAM is disabled at compile
+    // time (AtomS3 slim profile) esp_psram_get_size is removed from the
+    // build, so guard the call out and force the direct path.
+#if CONFIG_SPIRAM
+    const bool has_psram = esp_psram_get_size() > 0;
+#else
+    const bool has_psram = false;
+#endif
+    if (has_psram && buffered.begin(canvas_w, canvas_h)) {
         cv = &buffered;
         ESP_LOGI(kTag, "PSRAM detected: buffered full-screen framebuffer (%dx%d)",
                  static_cast<int>(canvas_w), static_cast<int>(canvas_h));

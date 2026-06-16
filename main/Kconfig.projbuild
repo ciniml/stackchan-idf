@@ -20,3 +20,35 @@ menu "Stack-chan QR scanner (Phase 1+2 test)"
             scanner from the touchscreen.
 
 endmenu
+
+menu "Stack-chan feature gates"
+
+    # Slim-build switches. Default ON for the full CoreS3 / AtomS3R profile;
+    # the AtomS3 (no-PSRAM) sdkconfig flips them OFF to drop everything that
+    # needs PSRAM (TLS bounce buffers, large PCM rings, etc.) and still ship
+    # avatar + jtts + LED + settings UI from internal RAM.
+
+    config STACKCHAN_CONVERSATION_ENABLED
+        bool "Enable realtime AI conversation (OpenAI / Gemini / XiaoZhi)"
+        default y
+        help
+            Pulls in components/conversation (WebSocket + TLS to OpenAI
+            Realtime, Gemini Live, or XiaoZhi) and starts main/conversation
+            _task at boot. Disable to drop ~80 KB of code + the PSRAM-only
+            assistant_pcm ring, suitable for boards with no PSRAM.
+
+    config STACKCHAN_AUDIO_STREAM_ENABLED
+        bool "Enable BLE audio streaming sink"
+        default y
+        help
+            main/audio_stream_sink decode-and-play worker. Needs ~2 MiB of
+            PSRAM for the PCM ring + raw input buffer; OFF for AtomS3.
+
+    config STACKCHAN_WIFI_AUDIO_ENABLED
+        bool "Enable Wi-Fi RTP audio receiver"
+        default y
+        help
+            main/wifi_audio listener (UDP RTP/L16/μ-law/AAC). Allocates a
+            multi-second PSRAM jitter ring; OFF for AtomS3.
+
+endmenu

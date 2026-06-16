@@ -7,6 +7,9 @@ TARGET      ?= esp32s3
 # is locked in at boot by the bootloader.
 #   cores3   — M5Stack CoreS3 + M5/Takao base (Quad PSRAM, 320x240, ES8311 N/A)
 #   atoms3r  — AtomS3R + Atomic ECHO BASE (Octal PSRAM, 128x128, ES8311)
+#   atoms3   — Plain AtomS3 + Atomic ECHO BASE — slim profile (no PSRAM):
+#              avatar + jtts + nekomimi LED + settings UI; no realtime
+#              conversation / no BLE audio / no RTP / no camera.
 # Default cores3 keeps `make build` backward-compatible.
 BOARD       ?= cores3
 BUILD_DIR    = build-$(BOARD)

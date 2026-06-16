@@ -1,0 +1,57 @@
+# M5Stack AtomS3 (no PSRAM) — slim profile.
+# Selected by `make build BOARD=atoms3`.
+#
+# AtomS3 (product C014) is built on the ESP32-S3FN8 module: 8 MB external
+# SPI flash, *no* PSRAM, 512 KiB internal SRAM. Drops every PSRAM-only
+# feature (realtime AI conversation, BLE audio streaming, RTP receiver,
+# camera + QR) and keeps the avatar / jtts / nekomimi LED / BLE+HTTP
+# settings UI running from internal RAM.
+#
+# Pair with the Atomic ECHO BASE for jtts speech output and the nekomimi
+# LED chain on GPIO38 (same as AtomNyan).
+
+# --- PSRAM ---------------------------------------------------------------
+# The N8 die has none — turn the SPIRAM driver off entirely so heap_caps
+# allocators don't try to fall through to a non-existent pool and so the
+# bootloader's PSRAM init step is skipped (saves boot time + a few KB).
+CONFIG_SPIRAM=n
+
+# --- Flash ---------------------------------------------------------------
+# Same 8 MB layout as AtomS3R; partitions.csv uses 0x710000 (bootloader +
+# nvs + 2× 3 MB OTA + 1 MB storage).
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+
+# --- Feature gates -------------------------------------------------------
+# Compile-time skip of everything that needs PSRAM. See main/Kconfig.projbuild
+# for the flag definitions and main/app_main.cpp / main/CMakeLists.txt for
+# where they take effect.
+CONFIG_STACKCHAN_CONVERSATION_ENABLED=n
+CONFIG_STACKCHAN_AUDIO_STREAM_ENABLED=n
+CONFIG_STACKCHAN_WIFI_AUDIO_ENABLED=n
+# Camera is already off by default in the common knob, but make it explicit
+# here so a future flip in the base file doesn't accidentally enable it on
+# the no-PSRAM target (esp32-camera mandates DMA + PSRAM frame buffers).
+CONFIG_STACKCHAN_CAMERA_ENABLED=n
+
+# --- Wi-Fi memory diet ---------------------------------------------------
+# Without PSRAM the TX/RX rings + LWIP buffers compete with the avatar
+# framebuffer (~128 × 128 × 2 B = 32 KiB) and jtts working memory in
+# internal SRAM. Knocking the dynamic TX buffers down (from default 32) and
+# disabling AMSDU + AMPDU TX trims the runtime footprint considerably. CLI
+# verified: ~20 KiB heap saved against the cores3 baseline.
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_AMSDU_TX_ENABLED=n
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+# LWIP TCP windows: keep small enough to leave room for our own buffers
+# but large enough that the settings/MCP HTTP endpoints aren't dog-slow.
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=5760
+CONFIG_LWIP_TCP_WND_DEFAULT=5760
+
+# --- TLS / mbedTLS -------------------------------------------------------
+# With conversation disabled we never open a TLS-uplink, but esp_https_ota
+# (OTA-over-Wi-Fi from the settings page) still needs mbedtls. Use the
+# smaller default frame size to keep static TLS buffers manageable.
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096

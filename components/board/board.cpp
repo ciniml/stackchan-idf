@@ -73,34 +73,40 @@ tl::expected<Board, Error> Board::begin()
 
     // AtomS3R variants (Atom-nyan) — picked up from M5Unified's board ID
     // after M5.begin. No PY32, no Si12T, no servo/battery/LED on this combo;
-    // bail out of the probe phases entirely to keep boot fast.
+    // bail out of the probe phases entirely to keep boot fast. Plain
+    // AtomS3 (C014, no PSRAM) gets the same treatment with its own
+    // BoardKind so settings UIs / build gates can tell the two apart.
     const auto m5_board = M5.getBoard();
     const bool is_atom_s3r =
         m5_board == m5::board_t::board_M5AtomS3R    ||
         m5_board == m5::board_t::board_M5AtomS3RExt ||
         m5_board == m5::board_t::board_M5AtomEchoS3R ||
         m5_board == m5::board_t::board_M5AtomS3RCam;
-    if (is_atom_s3r) {
-        // AtomS3R: square 128x128 GC9107, base rotation (0) lands the way the
-        // user holds the device. The CoreS3 default of 1 came up 90° CW, and
-        // 3 ended up at the same wrong orientation (only 0 / 2 differ on this
-        // panel's mapping) — 0 was the correct one.
+    const bool is_atom_s3 = m5_board == m5::board_t::board_M5AtomS3;
+    if (is_atom_s3 || is_atom_s3r) {
+        const BoardKind kind = is_atom_s3 ? BoardKind::AtomS3 : BoardKind::AtomNyan;
+        // AtomS3 / AtomS3R: square 128x128 GC9107, base rotation (0) lands
+        // the way the user holds the device. The CoreS3 default of 1 came
+        // up 90° CW, and 3 ended up at the same wrong orientation (only
+        // 0 / 2 differ on this panel's mapping) — 0 was the correct one.
         M5.Display.setRotation(0);
         Board board;
-        board.impl_ = std::make_shared<Impl>(BoardKind::AtomNyan,
+        board.impl_ = std::make_shared<Impl>(kind,
                                              std::optional<Py32Expander>{},
                                              std::optional<Si12tTouch>{});
         // Initialise the nekomimi LED strip on this path too. The CoreS3
-        // branch below shares one led->begin() call; AtomNyan would otherwise
-        // skip it and the GPIO38 chain never lights up (the RMT channel /
-        // WS2812 encoder are allocated lazily on begin()).
+        // branch below shares one led->begin() call; the Atom branch would
+        // otherwise skip it and the GPIO38 chain never lights up (the RMT
+        // channel / WS2812 encoder are allocated lazily on begin()).
         if (LedStrip* led = board.impl_->led(); led != nullptr) {
             if (auto r = led->begin(); !r) {
-                ESP_LOGW(kTag, "LED strip begin failed (AtomNyan): %d",
+                ESP_LOGW(kTag, "LED strip begin failed (Atom): %d",
                          static_cast<int>(r.error()));
             }
         }
-        ESP_LOGI(kTag, "board initialized: kind=AtomNyan (AtomS3R + Atomic ECHO BASE)");
+        ESP_LOGI(kTag, "board initialized: kind=%s",
+                 is_atom_s3 ? "AtomS3 (no PSRAM, slim profile)"
+                            : "AtomNyan (AtomS3R + Atomic ECHO BASE)");
         return board;
     }
     // CoreS3: landscape, USB-C on the right edge.
@@ -174,8 +180,9 @@ BoardKind Board::kind() const noexcept
 
 ServoBusConfig Board::servo_bus_config() const noexcept
 {
-    if (impl_->kind() == BoardKind::AtomNyan) {
-        // Atom-nyan has no on-board servo bus; the servo task is not started.
+    if (impl_->kind() == BoardKind::AtomNyan ||
+        impl_->kind() == BoardKind::AtomS3) {
+        // Atom family has no on-board servo bus; the servo task is not started.
         // Return a syntactically valid but inert config so callers that read
         // this defensively don't see junk.
         return {UART_NUM_1, GPIO_NUM_NC, GPIO_NUM_NC, 0u, /*echo_cancel=*/false};

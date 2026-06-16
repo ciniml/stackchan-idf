@@ -23,7 +23,9 @@
 #include <esp_heap_caps.h>
 
 #include "atom_status.hpp"
+#if CONFIG_STACKCHAN_AUDIO_STREAM_ENABLED
 #include "audio_stream_sink.hpp"
+#endif
 #include "avatar/expression.hpp"
 #include "avatar_vm/storage.hpp"
 #include "battery.hpp"
@@ -34,7 +36,9 @@
 #include "config_service/config_store.hpp"
 #include <wifi_config_service/mcp_events.hpp>
 #include <wifi_config_service/wifi_config_service.hpp>
+#if CONFIG_STACKCHAN_CONVERSATION_ENABLED
 #include "conversation_task.hpp"
+#endif
 #include "device_ui.hpp"
 #include "diag.hpp"
 #include "i2c_dump.hpp"
@@ -47,7 +51,9 @@
 #include "shared_state.hpp"
 #include "speech.hpp"
 #include "utf8.hpp"
+#if CONFIG_STACKCHAN_WIFI_AUDIO_ENABLED
 #include "wifi_audio.hpp"
+#endif
 #include "wifi_sta.hpp"
 
 #include <jtts/jtts.hpp>
@@ -72,7 +78,9 @@ constexpr bool kLedTaskDisabledForDebug = false;
 stackchan::app::SharedState* g_state = nullptr;
 stackchan::app::RenderTaskArgs* g_render_args = nullptr;
 stackchan::app::ServoTaskArgs* g_servo_args = nullptr;
+#if CONFIG_STACKCHAN_CONVERSATION_ENABLED
 stackchan::app::ConversationTaskArgs* g_conversation_args = nullptr;
+#endif
 stackchan::app::LedTaskArgs* g_led_args = nullptr;
 stackchan::board::Si12tTouch* g_touch = nullptr;
 
@@ -654,6 +662,7 @@ extern "C" void app_main()
     // window. Ownership lives here — conv-task only reads from these buffers
     // and never frees them. nullptr on failure → conv-task disables itself
     // cleanly, the rest of the firmware keeps running.
+#if CONFIG_STACKCHAN_CONVERSATION_ENABLED
     std::array<std::int16_t*, stackchan::app::kConversationSegmentBuffers> g_conv_seg_buf{};
     {
         bool all_ok = true;
@@ -679,6 +688,7 @@ extern "C" void app_main()
                      "failed to reserve seg_buf at boot — conversation will be disabled");
         }
     }
+#endif // CONFIG_STACKCHAN_CONVERSATION_ENABLED
 
     // Diagnostic register dump of the internal-I2C chips (AXP2101 / AW9523 /
     // PY32). Read-only; needed for debugging the recurring "LCD backlight off
@@ -802,7 +812,11 @@ extern "C" void app_main()
     // exclusive — both saturate the radio/CPU and running them together
     // makes streaming playback choppy. Pass the conversation-enabled flag
     // so the sink refuses `begin` while voice chat is on.
+#if CONFIG_STACKCHAN_AUDIO_STREAM_ENABLED
     stackchan::app::audio_stream::start(*g_state, cfg.openai_enabled);
+#else
+    ESP_LOGI(kTag, "audio_stream: disabled at compile time (slim build)");
+#endif
 
     if (auto r = stackchan::config::start(cfg); !r) {
         ESP_LOGE(kTag, "BLE config service failed to start: %d (continuing without BLE)",
@@ -980,13 +994,23 @@ extern "C" void app_main()
 
     // Wi-Fi live audio (RTP/L16 today). Like the BLE sink, mutually exclusive
     // with the conversation backend, so it self-disables when voice chat is on.
+#if CONFIG_STACKCHAN_WIFI_AUDIO_ENABLED
     stackchan::app::wifi_audio::start(*g_state, cfg.openai_enabled, cfg.rtp_audio_enabled);
+#else
+    ESP_LOGI(kTag, "wifi_audio: disabled at compile time (slim build)");
+#endif
 
     // Mic / loopback sanity check at startup.
     record_and_playback(2, "mic test");
 
+    // Treat AtomS3 (slim) and AtomNyan (full AtomS3R) the same for the
+    // "no servo / no battery / minimal status overlay" decisions below —
+    // both have no servo bus, no INA226, no Si12T head touch. The conv /
+    // audio / wifi-audio stack differences are handled by Kconfig gates
+    // (CONFIG_STACKCHAN_*_ENABLED) further down, not by BoardKind.
     const bool is_atom_nyan =
-        board.kind() == stackchan::board::BoardKind::AtomNyan;
+        board.kind() == stackchan::board::BoardKind::AtomNyan ||
+        board.kind() == stackchan::board::BoardKind::AtomS3;
 
     // Servo bring-up is only meaningful on boards that actually have a servo
     // bus (CoreS3 + M5/Takao). Atom-nyan has no servos in Phase 1 scope; skip
@@ -1049,12 +1073,16 @@ extern "C" void app_main()
                  api_key[0] ? "set" : "empty");
     }
 
+#if CONFIG_STACKCHAN_CONVERSATION_ENABLED
     g_conversation_args = new stackchan::app::ConversationTaskArgs{
         .state = g_state, .api_key = api_key, .provider = cfg.provider, .touch = g_touch,
         .xiaozhi_url = xiaozhi_url, .xiaozhi_token = xiaozhi_token,
         .system_prompt = cfg.system_prompt.c_str(),
         .extra_headers = cfg.conv_extra_headers.c_str(),
         .seg_buf = g_conv_seg_buf};
+#else
+    (void)api_key; (void)xiaozhi_url; (void)xiaozhi_token;
+#endif
 
     // On-device UI is per-board: CoreS3 gets the 5-tab touchscreen settings UI,
     // Atom-nyan gets the minimal status overlay toggled by USER_BUT. Only one
@@ -1079,8 +1107,14 @@ extern "C" void app_main()
     }
     // The conversation task waits for Wi-Fi internally, then takes over the
     // I2S bus for always-on voice chat. Started after the boot-time mic test
-    // so the two never contend for the bus.
+    // so the two never contend for the bus. Gated by Kconfig so the AtomS3
+    // (no-PSRAM) slim profile drops the whole TLS / WebSocket / assistant
+    // PCM ring stack at compile time.
+#if CONFIG_STACKCHAN_CONVERSATION_ENABLED
     stackchan::app::start_conversation_task(*g_conversation_args);
+#else
+    ESP_LOGI(kTag, "conversation: disabled at compile time (slim build)");
+#endif
 
     // Channel /mcp/events bring-up — deferred until after conv-task is created
     // so the conv-task's seg_buf_ alloc (3 × 8 KB internal-RAM contiguous) and
