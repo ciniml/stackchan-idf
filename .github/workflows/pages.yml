@@ -89,6 +89,7 @@ jobs:
           # asset and classify it by board suffix in the filename:
           #   firmware-vX.Y.Z-cores3.zip   → boards.cores3
           #   firmware-vX.Y.Z-atoms3r.zip  → boards.atoms3r
+          #   firmware-vX.Y.Z-atoms3.zip   → boards.atoms3
           #   firmware-vX.Y.Z.zip          → boards.cores3 (legacy single-zip releases)
           : > /tmp/per_tag.ndjson
           for tag in "${tags[@]}"; do
@@ -108,8 +109,8 @@ jobs:
               base="${asset%.zip}"
               suffix="${base##*-}"
               case "$suffix" in
-                cores3|atoms3r) board="$suffix" ;;
-                *)              board="cores3" ;; # legacy fallback
+                cores3|atoms3r|atoms3) board="$suffix" ;;
+                *)                    board="cores3" ;; # legacy fallback
               esac
               boards_json=$(echo "$boards_json" | jq --arg b "$board" --arg z "$asset" '.[$b] = $z')
               echo "[ok] $tag/$board -> $dest/$asset"
@@ -117,7 +118,7 @@ jobs:
             echo "{\"tag\":\"$tag\",\"boards\":$boards_json}" >> /tmp/per_tag.ndjson
           done
 
-          # versions.json: ordered list of {tag, boards: {cores3?, atoms3r?}}.
+          # versions.json: ordered list of {tag, boards: {cores3?, atoms3r?, atoms3?}}.
           jq -s '.' < /tmp/per_tag.ndjson > _site/versions.json
           echo "--- versions.json ---"
           cat _site/versions.json

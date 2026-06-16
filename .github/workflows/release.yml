@@ -32,7 +32,7 @@ jobs:
       # issue.
       fail-fast: false
       matrix:
-        board: [cores3, atoms3r]
+        board: [cores3, atoms3r, atoms3]
     container:
       # Pinned to v5.4 to match local development. v6.0 dropped the built-in
       # `json` (cJSON) component in favour of an IDF component-manager
