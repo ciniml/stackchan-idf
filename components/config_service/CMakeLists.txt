@@ -3,5 +3,5 @@ idf_component_register(
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES tl_expected
-    PRIV_REQUIRES bt nvs_flash esp_system esp_event esp_timer mbedtls esp_app_format app_update json esp_partition esp_netif)
+    PRIV_REQUIRES bt nvs_flash esp_system esp_event esp_timer mbedtls esp_app_format app_update json esp_partition esp_netif avatar_vm)
 target_compile_features(${COMPONENT_LIB} PUBLIC cxx_std_20)

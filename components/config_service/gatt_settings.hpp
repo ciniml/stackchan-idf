@@ -54,4 +54,7 @@ void set_audio_metrics_getter(AudioMetricsJsonGetter getter);
 void set_led_state_getter(LedStateGetter getter);
 void set_led_state_sink(LedStateSink sink);
 
+// Avatar bytecode commit sink (BLE chr 0x21). See config_service.hpp.
+void set_avatar_bytecode_sink(AvatarBytecodeSink sink);
+
 } // namespace stackchan::config::gatt

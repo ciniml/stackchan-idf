@@ -534,6 +534,24 @@
     <button id="av-reset" type="button" style="margin-top:0.5rem">デフォルトに戻す</button>
   </details>
 
+  <details class="jtts-section" id="avatar-dsl-section">
+    <summary>アバターのDSL (顔まるごと差し替え)</summary>
+    <p class="hint" style="margin-bottom:0.5rem">
+      <code>.avbc</code> ファイル (Avatar DSL のコンパイル済みバイトコード) をアップロードすると、
+      上のスライダーで微調整する顔とは別に、<strong>顔の構造そのもの</strong>を差し替えられます。
+      WiFi 経由の設定ページ <code>/avatar.html</code> や <a href="avatar.html">プレビュー ページ</a>
+      でソースを編集 → 「コンパイル & 保存」したものを使うのが想定です。
+      32 KiB 以下の <code>.avbc</code> をそのまま送信します。
+    </p>
+    <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;margin:0.5rem 0">
+      <input type="file" id="avbc-file" accept=".avbc,application/octet-stream"
+             style="flex:1 1 16rem;min-width:0">
+      <button id="btn-avbc-upload" type="button" disabled>送信</button>
+      <button id="btn-avbc-reset" type="button" class="secondary">既定に戻す</button>
+    </div>
+    <div class="hint" id="avbc-status" style="margin-top:0.25rem">未接続</div>
+  </details>
+
   <details class="jtts-section" id="servo-section">
     <summary>サーボ原点・可動範囲 (Takao base 等の自作版向け)</summary>
     <p class="hint" style="margin-bottom:0.5rem">
@@ -719,6 +737,14 @@ const CHR_AUDIO_METRICS = 'e3f0a01f-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // components/board/nekomimi_led_strip.cpp. Persisted to NVS automatically
 // on every WRITE so settings survive reboot.
 const CHR_LED_STATE = 'e3f0a020-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+// AvatarBytecode — encrypted RW. Chunked upload of the avatar face .avbc
+// (mirrors `POST /api/avatar-dsl` on the HTTP side). READ returns a status
+// JSON; WRITE accepts a 1-byte op header followed by op-specific payload:
+//   0x00 begin  [total:u16 LE]
+//   0x01 data   [bytes...]
+//   0x02 commit ()
+//   0xff reset  ()         (revert to firmware-embedded default)
+const CHR_AVATAR_BC = 'e3f0a021-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const BOARD_M5_BASE = 0;
 const BOARD_TAKAO_BASE = 1;
 const BOARD_ATOM_NYAN = 2;
@@ -768,7 +794,7 @@ const DIS_CHRS = {
 
 // --- State ---
 let bleDevice = null, bleServer = null, svc = null;
-let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null;
+let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null, chrAvatarBc = null;
 let boardKind = null; // null = unknown (older firmware), else 0/1/2 from BOARD_*
 let batteryPollTimer = null;  // setInterval handle while connected
 let jttsInitialJson = '';  // last read JSON, used to detect Apply-time changes
@@ -804,6 +830,7 @@ function setBleUi(connected) {
   // the release dropdown and the connection's actual chr availability.
   if (typeof refreshOtaButton === 'function') refreshOtaButton();
   if (typeof refreshAudioButton === 'function') refreshAudioButton();
+  if (typeof refreshAvbcButton === 'function') refreshAvbcButton();
 }
 
 // Audio play needs the chr (set during post-connect discovery), a selected
@@ -1787,6 +1814,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       ['audioCredit',CHR_AUDIO_CREDIT],
       ['audioMetrics', CHR_AUDIO_METRICS],
       ['ledState',  CHR_LED_STATE],
+      ['avatarBc',  CHR_AVATAR_BC],
     ];
     const settled = await Promise.allSettled(
       probes.map(([_, uuid]) => svc.getCharacteristic(uuid)));
@@ -1829,6 +1857,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
     chrAudioCredit = found.audioCredit ?? null;
     chrAudioMetrics = found.audioMetrics ?? null;
     chrLedState = found.ledState ?? null;
+    chrAvatarBc = found.avatarBc ?? null;
     log(`Characteristics 取得完了 (missing: ${missing.length ? missing.join(', ') : 'none'})`,
         missing.length ? 'info' : 'ok');
 
@@ -2066,7 +2095,8 @@ function onDisconnected() {
   ledStateLoaded = false;
   svRangeOn = false;
   svLiveYaw = svLivePitch = -1;
-  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoEnabled = chrMcpToken = chrLtConfig = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = chrAudioMetrics = chrLedState = null;
+  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoEnabled = chrMcpToken = chrLtConfig = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = chrAudioMetrics = chrLedState = chrAvatarBc = null;
+  if (typeof refreshAvbcButton === 'function') refreshAvbcButton();
   boardKind = null;
   aesKey = null;
   clearDeviceInfo();
@@ -2760,6 +2790,109 @@ document.getElementById('led-brightness').addEventListener('input', (e) => {
 document.getElementById('led-period').addEventListener('input', (e) => {
   document.getElementById('led-period-value').textContent = (parseInt(e.target.value, 10) / 10).toFixed(1);
   scheduleLedWrite();
+});
+
+// ===== Avatar bytecode upload (BLE chr 0x21) =================================
+// Mirrors the HTTP `POST /api/avatar-dsl` flow. The chr is chunked because the
+// AES-GCM plaintext cap (~484 B) is below even a small .avbc (~1.5 KB), so we
+// frame the upload as: begin([total]) → data(chunk) × N → commit(). On the
+// device side, gatt_settings.cpp accumulates the chunks, validates via
+// avatar_vm::storage::save and applies through the registered sink.
+//
+// The chunk size matches OTA_CHUNK_SIZE (480 B): same Web Bluetooth limit, but
+// the framing eats 1 byte for the op header so the payload is 479 B per write.
+const AVBC_CHUNK_PAYLOAD = OTA_CHUNK_SIZE - 1;
+
+function refreshAvbcButton() {
+  const btn = document.getElementById('btn-avbc-upload');
+  const reset = document.getElementById('btn-avbc-reset');
+  const file = document.getElementById('avbc-file');
+  if (!btn || !reset || !file) return;
+  const hasFile = file.files && file.files.length > 0;
+  btn.disabled = !(chrAvatarBc && hasFile);
+  reset.disabled = !chrAvatarBc;
+  const status = document.getElementById('avbc-status');
+  if (status && !chrAvatarBc) {
+    status.textContent = '未接続 (BLE で接続するとアップロードできます)';
+  } else if (status && !hasFile) {
+    status.textContent = '.avbc ファイルを選んでください';
+  } else if (status) {
+    status.textContent = `${file.files[0].name} (${file.files[0].size} B) を送信できます`;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const file = document.getElementById('avbc-file');
+  if (file) file.addEventListener('change', refreshAvbcButton);
+  refreshAvbcButton();
+});
+
+document.getElementById('btn-avbc-upload')?.addEventListener('click', async () => {
+  if (!chrAvatarBc) { log('AvatarBytecode chr 未接続', 'err'); return; }
+  const file = document.getElementById('avbc-file').files[0];
+  if (!file) { log('ファイル未選択', 'err'); return; }
+  const buf = new Uint8Array(await file.arrayBuffer());
+  if (buf.length === 0 || buf.length > 32 * 1024) {
+    log(`サイズ範囲外 (${buf.length} B、1..32768 が許容)`, 'err');
+    return;
+  }
+  const status = document.getElementById('avbc-status');
+  const btn = document.getElementById('btn-avbc-upload');
+  btn.disabled = true;
+  try {
+    // op=begin [total:u16 LE]
+    const begin = new Uint8Array(3);
+    begin[0] = 0x00;
+    begin[1] = buf.length & 0xff;
+    begin[2] = (buf.length >> 8) & 0xff;
+    await writeEncrypted(chrAvatarBc, begin);
+    log(`AVBC begin (${buf.length} B)`, 'info');
+
+    // op=data [bytes...]
+    let off = 0;
+    while (off < buf.length) {
+      const take = Math.min(AVBC_CHUNK_PAYLOAD, buf.length - off);
+      const chunk = new Uint8Array(1 + take);
+      chunk[0] = 0x01;
+      chunk.set(buf.subarray(off, off + take), 1);
+      await writeEncrypted(chrAvatarBc, chunk);
+      off += take;
+      status.textContent = `送信中… ${off}/${buf.length} B`;
+    }
+
+    // op=commit
+    await writeEncrypted(chrAvatarBc, new Uint8Array([0x02]));
+
+    // Status JSON read for the result
+    const respBytes = await readEncrypted(chrAvatarBc);
+    const resp = dec.decode(respBytes);
+    log(`AVBC commit: ${resp}`, 'ok');
+    status.textContent = resp;
+  } catch (e) {
+    log(`AVBC upload 失敗: ${e.message}`, 'err');
+    if (status) status.textContent = `失敗: ${e.message}`;
+  } finally {
+    refreshAvbcButton();
+  }
+});
+
+document.getElementById('btn-avbc-reset')?.addEventListener('click', async () => {
+  if (!chrAvatarBc) { log('AvatarBytecode chr 未接続', 'err'); return; }
+  const status = document.getElementById('avbc-status');
+  const reset = document.getElementById('btn-avbc-reset');
+  reset.disabled = true;
+  try {
+    await writeEncrypted(chrAvatarBc, new Uint8Array([0xff]));
+    const respBytes = await readEncrypted(chrAvatarBc);
+    const resp = dec.decode(respBytes);
+    log(`AVBC reset: ${resp}`, 'ok');
+    if (status) status.textContent = resp;
+  } catch (e) {
+    log(`AVBC reset 失敗: ${e.message}`, 'err');
+    if (status) status.textContent = `失敗: ${e.message}`;
+  } finally {
+    refreshAvbcButton();
+  }
 });
 
 // MCP API token: random-generate / show / clear. The "clear" path sets a

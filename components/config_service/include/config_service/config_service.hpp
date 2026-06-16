@@ -233,4 +233,14 @@ using LedStateSink = void (*)(const LedStatePatch& patch);
 void set_led_state_getter(LedStateGetter getter);
 void set_led_state_sink(LedStateSink sink);
 
+// Avatar face bytecode live-apply sink — fires after a complete `.avbc` has
+// arrived over BLE chr 0x21 (op=commit) and has been validated + persisted
+// to NVS by config_service. len=0 (data=nullptr) means "revert to firmware
+// default" (after a successful reset op). Mirrors the HTTP sink declared in
+// wifi_config_service.hpp so main can register the same closure with both
+// transports. Returns true on success; failure leaves the new bytecode
+// persisted but not applied (next reboot will pick it up).
+using AvatarBytecodeSink = bool (*)(const std::uint8_t* data, std::size_t len);
+void set_avatar_bytecode_sink(AvatarBytecodeSink sink);
+
 } // namespace stackchan::config

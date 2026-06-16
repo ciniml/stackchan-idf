@@ -213,6 +213,25 @@ std::string audio_metrics_json()
     return std::string{buf};
 }
 
+// Live-apply an avatar face bytecode upload that just landed via HTTP
+// (`POST /api/avatar-dsl`) or BLE chr 0x21 (commit op). Both transports
+// persist to NVS before calling this — we only update the SharedState slot
+// that the render task polls (data=nullptr / len=0 means "revert to the
+// firmware-embedded default"). Returns true unconditionally for now; the
+// SharedState slot can't fail. Captured as a function pointer so it can be
+// passed to both `config::set_avatar_bytecode_sink` (BLE) and
+// `wifi_config::set_avatar_bytecode_sink` (HTTP, accepts std::function).
+bool apply_avatar_bytecode(const std::uint8_t* data, std::size_t len)
+{
+    if (g_state == nullptr) return false;
+    if (data == nullptr || len == 0) {
+        g_state->clear_face_bytecode();
+    } else {
+        g_state->set_face_bytecode({data, len});
+    }
+    return true;
+}
+
 // CoreS3 mic + speaker share I2S_NUM_1, so we have to hand the bus around
 // explicitly. Records `seconds` of audio at 16 kHz then plays it straight
 // back. Blocks the caller for ~2 * seconds.
@@ -882,16 +901,11 @@ extern "C" void app_main()
         ESP_LOGW(kTag, "avatar_vm: load failed (%s) — using firmware default",
                  stackchan::avatar_vm::storage::to_string(loaded.error()));
     }
-    stackchan::wifi_config::set_avatar_bytecode_sink(
-        [](const std::uint8_t* data, std::size_t len) -> bool {
-            if (g_state == nullptr) return false;
-            if (data == nullptr || len == 0) {
-                g_state->clear_face_bytecode();
-            } else {
-                g_state->set_face_bytecode({data, len});
-            }
-            return true;
-        });
+    // Same closure for both transports: chr 0x21 (BLE) and POST /api/avatar-dsl
+    // (HTTP). The free function decays to a function pointer for the BLE
+    // setter, and converts implicitly to std::function for the HTTP one.
+    stackchan::config::set_avatar_bytecode_sink(&apply_avatar_bytecode);
+    stackchan::wifi_config::set_avatar_bytecode_sink(&apply_avatar_bytecode);
 
     // Channel adapter (/mcp/*) sinks. Expression / balloon ride the existing
     // SharedState pipelines (render_task picks them up next frame). `say`

@@ -378,6 +378,11 @@ void set_led_state_sink(LedStateSink sink)
     gatt::set_led_state_sink(sink);
 }
 
+void set_avatar_bytecode_sink(AvatarBytecodeSink sink)
+{
+    gatt::set_avatar_bytecode_sink(sink);
+}
+
 void set_board_kind(std::uint8_t kind)
 {
     gatt::set_board_kind(kind);

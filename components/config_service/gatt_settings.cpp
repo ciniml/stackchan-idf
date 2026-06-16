@@ -5,6 +5,7 @@
 #include <config_service/config_store.hpp>
 #include <config_service/crypto.hpp>
 #include <config_service/ota.hpp>
+#include <avatar_vm/storage.hpp>
 
 #include <array>
 #include <cstdint>
@@ -243,6 +244,21 @@ static const ble_uuid128_t kAudioMetricsUuid = BLE_UUID128_INIT(
 static const ble_uuid128_t kLedStateUuid = BLE_UUID128_INIT(
     0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
     0x2a, 0x4d, 0x1c, 0x7b, 0x20, 0xa0, 0xf0, 0xe3);
+// AvatarBytecode — encrypted R/W chunked transport for the avatar face
+// bytecode (.avbc). The same payload that HTTP `POST /api/avatar-dsl` accepts,
+// but framed for BLE so the bytecode can exceed the per-write AES-GCM
+// plaintext cap (~484 B). READ returns a status JSON
+// {"state":"idle|receiving|done|failed","received":N,"total":M,"error":"..."}.
+// WRITE payload is `[op:u8][...]`:
+//   op 0x00 begin : [total_size:u16 LE]  — clear accumulator, set expected
+//   op 0x01 data  : [bytes...]           — append to accumulator
+//   op 0x02 commit: ()                   — when accumulator.size() == total,
+//                                          validate + persist NVS + apply sink
+//   op 0xff reset : ()                   — clear NVS, sink(nullptr, 0) (revert
+//                                          to firmware-embedded default)
+static const ble_uuid128_t kAvatarBytecodeUuid = BLE_UUID128_INIT(
+    0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
+    0x2a, 0x4d, 0x1c, 0x7b, 0x21, 0xa0, 0xf0, 0xe3);
 
 // --- Mutable state guarded by g_mutex ---
 static SemaphoreHandle_t g_mutex = nullptr;
@@ -291,6 +307,18 @@ static AudioMetricsJsonGetter g_audio_metrics_getter = nullptr;
 static uint16_t g_led_state_handle = 0;
 static LedStateGetter g_led_state_getter = nullptr;
 static LedStateSink g_led_state_sink = nullptr;
+static uint16_t g_avatar_bc_handle = 0;
+static AvatarBytecodeSink g_avatar_bc_sink = nullptr;
+
+// Avatar bytecode chunked-upload accumulator. Lives entirely in RAM (no
+// flash partition writes during transfer — unlike OTA — because the whole
+// blob fits in `avatar_vm::storage::kMaxBytecodeBytes` (32 KiB) and we want
+// to validate before persisting). All four fields are guarded by g_mutex.
+enum class AvatarBcState : std::uint8_t { Idle, Receiving, Done, Failed };
+static AvatarBcState g_avatar_bc_state = AvatarBcState::Idle;
+static std::size_t g_avatar_bc_total = 0; // expected total from `begin`
+static std::vector<std::uint8_t> g_avatar_bc_accum;
+static std::string g_avatar_bc_error; // last failure reason for status READ
 static uint16_t g_board_kind_handle = 0;
 // Board variant byte, set by main at boot before BLE comes online (so the
 // first central read sees the correct value). Default M5Base preserves the
@@ -406,6 +434,29 @@ static bool append_encrypted(struct os_mbuf* om, std::span<const std::uint8_t> p
     auto enc = g_session.encrypt(plain);
     if (!enc) return false;
     return os_mbuf_append(om, enc->data(), enc->size()) == 0;
+}
+
+// Caller must hold g_mutex. Renders the current avatar-bytecode upload state
+// as the JSON document served by chr 0x21 READ.
+std::string avatar_bc_status_json_locked()
+{
+    const char* state = "idle";
+    switch (g_avatar_bc_state) {
+    case AvatarBcState::Idle:      state = "idle"; break;
+    case AvatarBcState::Receiving: state = "receiving"; break;
+    case AvatarBcState::Done:      state = "done"; break;
+    case AvatarBcState::Failed:    state = "failed"; break;
+    }
+    // Conservative buffer — error string is bounded by short avatar_vm error
+    // names ("too_large", "write_failed" etc.).
+    char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  R"({"state":"%s","received":%u,"total":%u,"error":"%s"})",
+                  state,
+                  static_cast<unsigned>(g_avatar_bc_accum.size()),
+                  static_cast<unsigned>(g_avatar_bc_total),
+                  g_avatar_bc_error.c_str());
+    return std::string(buf);
 }
 
 static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
@@ -635,6 +686,19 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             const std::array<std::uint8_t, 6> payload{
                 s.mode, s.r, s.g, s.b, s.brightness, s.gradient_period_ds};
             const bool ok = append_encrypted(ctxt->om, {payload.data(), payload.size()});
+            xSemaphoreGive(g_mutex);
+            return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
+        }
+        if (attr_handle == g_avatar_bc_handle) {
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            if (!g_session.is_established()) {
+                xSemaphoreGive(g_mutex);
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            const std::string json = avatar_bc_status_json_locked();
+            const bool ok = append_encrypted(
+                ctxt->om,
+                {reinterpret_cast<const std::uint8_t*>(json.data()), json.size()});
             xSemaphoreGive(g_mutex);
             return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
         }
@@ -1001,6 +1065,116 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (sink != nullptr) sink(p);
             return 0;
         }
+        if (attr_handle == g_avatar_bc_handle) {
+            // Avatar bytecode chunked upload. Wire framing: [op:u8][...].
+            if (pt.empty()) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            const std::uint8_t op = pt[0];
+            const std::span<const std::uint8_t> payload{pt.data() + 1, pt.size() - 1};
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            switch (op) {
+            case 0x00: { // begin
+                if (payload.size() != 2) {
+                    xSemaphoreGive(g_mutex);
+                    return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+                }
+                const std::size_t total =
+                    static_cast<std::size_t>(payload[0]) |
+                    (static_cast<std::size_t>(payload[1]) << 8);
+                if (total == 0 || total > avatar_vm::storage::kMaxBytecodeBytes) {
+                    g_avatar_bc_state = AvatarBcState::Failed;
+                    g_avatar_bc_error = "too_large";
+                    g_avatar_bc_total = total;
+                    g_avatar_bc_accum.clear();
+                    xSemaphoreGive(g_mutex);
+                    return 0; // status JSON carries the error
+                }
+                g_avatar_bc_state = AvatarBcState::Receiving;
+                g_avatar_bc_total = total;
+                g_avatar_bc_error.clear();
+                g_avatar_bc_accum.clear();
+                g_avatar_bc_accum.reserve(total);
+                xSemaphoreGive(g_mutex);
+                return 0;
+            }
+            case 0x01: { // data
+                if (g_avatar_bc_state != AvatarBcState::Receiving) {
+                    g_avatar_bc_state = AvatarBcState::Failed;
+                    g_avatar_bc_error = "no_session";
+                    xSemaphoreGive(g_mutex);
+                    return 0;
+                }
+                if (g_avatar_bc_accum.size() + payload.size() > g_avatar_bc_total) {
+                    g_avatar_bc_state = AvatarBcState::Failed;
+                    g_avatar_bc_error = "overflow";
+                    xSemaphoreGive(g_mutex);
+                    return 0;
+                }
+                g_avatar_bc_accum.insert(
+                    g_avatar_bc_accum.end(), payload.begin(), payload.end());
+                xSemaphoreGive(g_mutex);
+                return 0;
+            }
+            case 0x02: { // commit
+                if (g_avatar_bc_state != AvatarBcState::Receiving) {
+                    g_avatar_bc_state = AvatarBcState::Failed;
+                    g_avatar_bc_error = "no_session";
+                    xSemaphoreGive(g_mutex);
+                    return 0;
+                }
+                if (g_avatar_bc_accum.size() != g_avatar_bc_total) {
+                    g_avatar_bc_state = AvatarBcState::Failed;
+                    g_avatar_bc_error = "size_mismatch";
+                    xSemaphoreGive(g_mutex);
+                    return 0;
+                }
+                // Move the accumulator out from under the lock so save/sink
+                // (which can take ms) doesn't block GATT reads.
+                std::vector<std::uint8_t> body = std::move(g_avatar_bc_accum);
+                g_avatar_bc_accum.clear();
+                AvatarBytecodeSink sink = g_avatar_bc_sink;
+                xSemaphoreGive(g_mutex);
+
+                auto save_r = avatar_vm::storage::save(body);
+                xSemaphoreTake(g_mutex, portMAX_DELAY);
+                if (!save_r) {
+                    g_avatar_bc_state = AvatarBcState::Failed;
+                    g_avatar_bc_error = avatar_vm::storage::to_string(save_r.error());
+                    xSemaphoreGive(g_mutex);
+                    return 0;
+                }
+                g_avatar_bc_state = AvatarBcState::Done;
+                g_avatar_bc_error.clear();
+                xSemaphoreGive(g_mutex);
+                // Live apply outside the lock. Sink failure leaves NVS
+                // populated (next boot picks up the new bytecode).
+                if (sink != nullptr) (void)sink(body.data(), body.size());
+                return 0;
+            }
+            case 0xff: { // reset to firmware-embedded default
+                g_avatar_bc_accum.clear();
+                g_avatar_bc_total = 0;
+                AvatarBytecodeSink sink = g_avatar_bc_sink;
+                xSemaphoreGive(g_mutex);
+
+                auto clear_r = avatar_vm::storage::clear();
+                xSemaphoreTake(g_mutex, portMAX_DELAY);
+                if (!clear_r) {
+                    g_avatar_bc_state = AvatarBcState::Failed;
+                    g_avatar_bc_error = avatar_vm::storage::to_string(clear_r.error());
+                    xSemaphoreGive(g_mutex);
+                    return 0;
+                }
+                g_avatar_bc_state = AvatarBcState::Idle;
+                g_avatar_bc_error.clear();
+                xSemaphoreGive(g_mutex);
+                if (sink != nullptr) (void)sink(nullptr, 0);
+                return 0;
+            }
+            default:
+                xSemaphoreGive(g_mutex);
+                return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            }
+        }
         if (attr_handle == g_apply_handle) {
             if (pt.empty()) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
 
@@ -1160,6 +1334,13 @@ static ble_gatt_chr_def kChrs[] = {
         .access_cb = gatt_access_cb,
         .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
         .val_handle = &g_led_state_handle,
+    },
+    {
+        .uuid = &kAvatarBytecodeUuid.u,
+        .access_cb = gatt_access_cb,
+        // R = status JSON; W = chunked upload (begin / data / commit / reset).
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+        .val_handle = &g_avatar_bc_handle,
     },
     {
         .uuid = &kBoardKindUuid.u,
@@ -1354,6 +1535,12 @@ void reset_session()
         g_audio_sink->on_abort(/*user_initiated=*/false);
     }
     g_audio_session_active = false;
+    // Drop any half-finished avatar bytecode upload so a reconnect starts
+    // fresh — the partially received bytecode would be invalid anyway.
+    g_avatar_bc_state = AvatarBcState::Idle;
+    g_avatar_bc_total = 0;
+    g_avatar_bc_accum.clear();
+    g_avatar_bc_error.clear();
     xSemaphoreGive(g_mutex);
 }
 
@@ -1401,6 +1588,11 @@ void set_led_state_getter(LedStateGetter getter)
 void set_led_state_sink(LedStateSink sink)
 {
     g_led_state_sink = sink;
+}
+
+void set_avatar_bytecode_sink(AvatarBytecodeSink sink)
+{
+    g_avatar_bc_sink = sink;
 }
 
 void set_board_kind(std::uint8_t kind)
