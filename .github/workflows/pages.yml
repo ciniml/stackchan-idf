@@ -65,10 +65,20 @@ jobs:
           mkdir -p _site
           cp -a docs/. _site/
           # Canonical settings page lives under tools/ for local development
-          # (file:// + sshfs / python http.server). Mirror it into the
-          # hosted site so users can reach it from the same domain as the
-          # web flasher without keeping two copies in git.
-          cp tools/settings.html _site/settings.html
+          # (file:// + sshfs / python http.server). For deploy we run
+          # tools/avatar_dsl/inject.mjs to inline the DSL compiler bundle
+          # and the preset sources — same script that processes
+          # settings_wifi.html for the firmware build, so the two pages
+          # offer identical authoring UX (the difference is the send path:
+          # HTTP POST on the Wi-Fi page, BLE chr 0x21 chunked write here).
+          # Without injection the page still works in file:// dev — the
+          # DSL editor just reports "コンパイラ未起動".
+          node tools/avatar_dsl/inject.mjs \
+              tools/settings.html \
+              _site/settings.html \
+              "default=assets/default_face.avdsl" \
+              "omega=assets/omega_mouth.avdsl" \
+              "aokko=assets/aokko_face.avdsl"
           # Avatar preview module embedded by settings.html (built above).
           cp build/avatar_web/avatar_module.js _site/avatar_module.js
           # Standalone preview page (shell UI + canvas + DSL editor) — same

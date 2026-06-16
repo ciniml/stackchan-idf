@@ -171,6 +171,56 @@
     font-family: ui-monospace, SFMono-Regular, monospace;
     margin-top: 0.3rem;
   }
+  /* Avatar DSL editor — mirrors settings_wifi.html so authoring the face DSL
+     feels the same in both pages. The send path differs (BLE chr 0x21
+     chunked write here vs HTTP POST on the Wi-Fi page) but the editor UX
+     is identical. */
+  #dsl-src {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 380px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    tab-size: 2;
+    white-space: pre;
+    padding: 0.45rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    resize: vertical;
+  }
+  #dsl-msg {
+    font-size: 0.78rem;
+    color: #666;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    min-height: 1.1em;
+    margin: 0.4rem 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  #dsl-msg.ok { color: #2e7d32; }
+  #dsl-msg.err { color: #c62828; }
+  .dsl-btnrow {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin-top: 0.4rem;
+  }
+  .dsl-btnrow button, .dsl-btnrow label.filebtn, .dsl-btnrow select {
+    flex: 1 1 auto;
+    padding: 0.45rem 0.9rem;
+    font-size: 0.85rem;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    text-align: center;
+  }
+  .dsl-btnrow button.primary { background: #1565c0; color: white; font-weight: 600; }
+  .dsl-btnrow button.secondary { background: #e0e0e0; color: #333; }
+  .dsl-btnrow button.danger { background: #b71c1c; color: white; }
+  .dsl-btnrow button:disabled, .dsl-btnrow select:disabled { opacity: 0.4; cursor: not-allowed; }
+  .dsl-btnrow label.filebtn { background: #e0e0e0; color: #333; }
+  .dsl-btnrow select { background: #e0e0e0; color: #333; border: 1px solid #bbb; }
   .actions { margin-top: 1.5rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
   button {
     padding: 0.55rem 1.2rem;
@@ -535,21 +585,31 @@
   </details>
 
   <details class="jtts-section" id="avatar-dsl-section">
-    <summary>アバターのDSL (顔まるごと差し替え)</summary>
+    <summary>顔描画 DSL (Avatar)</summary>
     <p class="hint" style="margin-bottom:0.5rem">
-      <code>.avbc</code> ファイル (Avatar DSL のコンパイル済みバイトコード) をアップロードすると、
-      上のスライダーで微調整する顔とは別に、<strong>顔の構造そのもの</strong>を差し替えられます。
-      WiFi 経由の設定ページ <code>/avatar.html</code> や <a href="avatar.html">プレビュー ページ</a>
-      でソースを編集 → 「コンパイル & 保存」したものを使うのが想定です。
-      32 KiB 以下の <code>.avbc</code> をそのまま送信します。
+      アバターの顔の描画ロジックを Lua 風 DSL で書いて、ブラウザ内でバイトコード化
+      → BLE 経由で実機に送信して即時反映します。NVS に保存されるので再起動後も維持。
+      <a href="avatar_dsl.html" target="_blank" rel="noopener" style="white-space:nowrap">文法ガイド</a>
+      ／
+      <a href="https://github.com/ciniml/stackchan-idf/blob/main/assets/default_face.avdsl"
+         target="_blank" rel="noopener" style="white-space:nowrap">デフォルト顔ソース</a>
     </p>
-    <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;margin:0.5rem 0">
-      <input type="file" id="avbc-file" accept=".avbc,application/octet-stream"
-             style="flex:1 1 16rem;min-width:0">
-      <button id="btn-avbc-upload" type="button" disabled>送信</button>
-      <button id="btn-avbc-reset" type="button" class="secondary">既定に戻す</button>
+    <textarea id="dsl-src" spellcheck="false" autocomplete="off"
+              autocapitalize="off" autocorrect="off"></textarea>
+    <div id="dsl-msg">DSL コンパイラ未起動</div>
+    <div class="dsl-btnrow">
+      <button type="button" class="primary" id="btn-dsl-send" disabled>コンパイル &amp; 送信</button>
+      <select id="dsl-preset" title="プリセットを選ぶとソースを読込んで実機に送信"></select>
+      <button type="button" class="danger" id="btn-dsl-reset" disabled>実機をデフォルトに戻す</button>
     </div>
-    <div class="hint" id="avbc-status" style="margin-top:0.25rem">未接続</div>
+    <div class="dsl-btnrow">
+      <button type="button" class="secondary" id="btn-dsl-download">.avbc ダウンロード</button>
+      <button type="button" class="secondary" id="btn-dsl-download-src">.avdsl ダウンロード</button>
+      <label class="filebtn" for="dsl-load">.avdsl 読込</label>
+      <input type="file" id="dsl-load" accept=".avdsl,text/plain" style="display:none">
+      <label class="filebtn" for="avbc-file">.avbc 直接送信</label>
+      <input type="file" id="avbc-file" accept=".avbc,application/octet-stream" style="display:none">
+    </div>
   </details>
 
   <details class="jtts-section" id="servo-section">
@@ -689,6 +749,23 @@
      if absent (e.g. local file:// without a build) the avatar preview is skipped
      and BLE tuning still works (see setupAvatarPreview's guard). -->
 <script src="avatar_module.js" onerror="window.__avatarModuleMissing=true"></script>
+<!-- Avatar DSL compiler bundle (lexer/parser/emitter/compile/opcodes from
+     tools/avatar_dsl/), concatenated into an IIFE that hangs the public API
+     on window.AvatarDsl. Injected at Pages-deploy time by tools/avatar_dsl/
+     inject.mjs (see .github/workflows/pages.yml). When this page is loaded
+     locally without inject (file:// during development), the placeholder is
+     left as a comment so the surrounding JS still parses cleanly — the DSL
+     editor will report "DSL コンパイラ未起動" but everything else works. -->
+<script>/*{{AVATAR_DSL_BUNDLE}}*/</script>
+<!-- DSL preset list inlined the same way (`[{name,source}, ...]`). The first
+     entry is the textarea's initial value. When the placeholder is not
+     substituted (local file://) `window.AVATAR_DSL_PRESETS` ends up as the
+     literal placeholder string; setupDslEditor's Array.isArray check handles
+     that — the dropdown stays empty but the editor still works. -->
+<script>
+  window.AVATAR_DSL_PRESETS = "{{AVATAR_DSL_PRESETS}}";
+  window.AVATAR_DSL_DEFAULT_SOURCE = "{{AVATAR_DSL_DEFAULT_SOURCE}}";
+</script>
 <script>
 // --- UUIDs ---
 const SVC_UUID    = 'e3f0a000-7b1c-4d2a-9e6f-2c5a8d4b1f00';
@@ -2792,10 +2869,12 @@ document.getElementById('led-period').addEventListener('input', (e) => {
   scheduleLedWrite();
 });
 
-// ===== Avatar bytecode upload (BLE chr 0x21) =================================
-// Mirrors the HTTP `POST /api/avatar-dsl` flow. The chr is chunked because the
-// AES-GCM plaintext cap (~484 B) is below even a small .avbc (~1.5 KB), so we
-// frame the upload as: begin([total]) → data(chunk) × N → commit(). On the
+// ===== Avatar DSL editor + BLE chr 0x21 chunked transport =====================
+// Mirrors the WiFi page (settings_wifi.html) — same in-browser DSL compiler
+// bundle (window.AvatarDsl) and same preset list, but the send path uses the
+// BLE chr 0x21 chunked frame instead of HTTP POST. The chr is chunked because
+// the AES-GCM plaintext cap (~484 B) is below even a small .avbc (~1.5 KB), so
+// we frame the upload as: begin([total]) → data(chunk) × N → commit(). On the
 // device side, gatt_settings.cpp accumulates the chunks, validates via
 // avatar_vm::storage::save and applies through the registered sink.
 //
@@ -2803,97 +2882,264 @@ document.getElementById('led-period').addEventListener('input', (e) => {
 // the framing eats 1 byte for the op header so the payload is 479 B per write.
 const AVBC_CHUNK_PAYLOAD = OTA_CHUNK_SIZE - 1;
 
-function refreshAvbcButton() {
-  const btn = document.getElementById('btn-avbc-upload');
-  const reset = document.getElementById('btn-avbc-reset');
-  const file = document.getElementById('avbc-file');
-  if (!btn || !reset || !file) return;
-  const hasFile = file.files && file.files.length > 0;
-  btn.disabled = !(chrAvatarBc && hasFile);
-  reset.disabled = !chrAvatarBc;
-  const status = document.getElementById('avbc-status');
-  if (status && !chrAvatarBc) {
-    status.textContent = '未接続 (BLE で接続するとアップロードできます)';
-  } else if (status && !hasFile) {
-    status.textContent = '.avbc ファイルを選んでください';
-  } else if (status) {
-    status.textContent = `${file.files[0].name} (${file.files[0].size} B) を送信できます`;
+// Send a single complete bytecode (.avbc) over chr 0x21 with the begin/data/
+// commit framing. `buf` is Uint8Array; `onProgress(sent, total)` is optional.
+// Returns the device's status JSON (parsed if possible) on success. Throws
+// when the chr isn't available, when the size is out of range, or when any
+// underlying writeEncrypted / readEncrypted fails.
+async function avbcSendBytecode(buf, onProgress) {
+  if (!chrAvatarBc) throw new Error('AvatarBytecode chr 未接続');
+  if (!(buf instanceof Uint8Array)) buf = new Uint8Array(buf);
+  if (buf.length === 0 || buf.length > 32 * 1024) {
+    throw new Error(`サイズ範囲外 (${buf.length} B、1..32768 が許容)`);
   }
+  // op=begin [total:u16 LE]
+  const begin = new Uint8Array(3);
+  begin[0] = 0x00;
+  begin[1] = buf.length & 0xff;
+  begin[2] = (buf.length >> 8) & 0xff;
+  await writeEncrypted(chrAvatarBc, begin);
+
+  // op=data [bytes...]
+  let off = 0;
+  while (off < buf.length) {
+    const take = Math.min(AVBC_CHUNK_PAYLOAD, buf.length - off);
+    const chunk = new Uint8Array(1 + take);
+    chunk[0] = 0x01;
+    chunk.set(buf.subarray(off, off + take), 1);
+    await writeEncrypted(chrAvatarBc, chunk);
+    off += take;
+    if (typeof onProgress === 'function') onProgress(off, buf.length);
+  }
+  // op=commit
+  await writeEncrypted(chrAvatarBc, new Uint8Array([0x02]));
+
+  const respBytes = await readEncrypted(chrAvatarBc);
+  const resp = dec.decode(respBytes);
+  try { return { json: JSON.parse(resp), raw: resp }; }
+  catch { return { json: null, raw: resp }; }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  const file = document.getElementById('avbc-file');
-  if (file) file.addEventListener('change', refreshAvbcButton);
-  refreshAvbcButton();
-});
+// Reset (op=0xff) — clear NVS override + revert to firmware-embedded default.
+async function avbcSendReset() {
+  if (!chrAvatarBc) throw new Error('AvatarBytecode chr 未接続');
+  await writeEncrypted(chrAvatarBc, new Uint8Array([0xff]));
+  const respBytes = await readEncrypted(chrAvatarBc);
+  const resp = dec.decode(respBytes);
+  try { return { json: JSON.parse(resp), raw: resp }; }
+  catch { return { json: null, raw: resp }; }
+}
 
-document.getElementById('btn-avbc-upload')?.addEventListener('click', async () => {
-  if (!chrAvatarBc) { log('AvatarBytecode chr 未接続', 'err'); return; }
-  const file = document.getElementById('avbc-file').files[0];
-  if (!file) { log('ファイル未選択', 'err'); return; }
-  const buf = new Uint8Array(await file.arrayBuffer());
-  if (buf.length === 0 || buf.length > 32 * 1024) {
-    log(`サイズ範囲外 (${buf.length} B、1..32768 が許容)`, 'err');
-    return;
+(function setupDslEditor() {
+  const srcEl = document.getElementById('dsl-src');
+  const msg = document.getElementById('dsl-msg');
+  const sendBtn = document.getElementById('btn-dsl-send');
+  const resetBtn = document.getElementById('btn-dsl-reset');
+  const presetEl = document.getElementById('dsl-preset');
+  if (!srcEl || !msg) return;
+
+  const setMsg = (txt, kind = '') => { msg.textContent = txt; msg.className = kind; };
+
+  const compilerOk = !!(window.AvatarDsl && typeof window.AvatarDsl.compile === 'function');
+  if (!compilerOk) {
+    setMsg('DSL コンパイラ バンドルが読込み失敗 (オフライン file:// では未注入)', 'err');
   }
-  const status = document.getElementById('avbc-status');
-  const btn = document.getElementById('btn-avbc-upload');
-  btn.disabled = true;
-  try {
-    // op=begin [total:u16 LE]
-    const begin = new Uint8Array(3);
-    begin[0] = 0x00;
-    begin[1] = buf.length & 0xff;
-    begin[2] = (buf.length >> 8) & 0xff;
-    await writeEncrypted(chrAvatarBc, begin);
-    log(`AVBC begin (${buf.length} B)`, 'info');
 
-    // op=data [bytes...]
-    let off = 0;
-    while (off < buf.length) {
-      const take = Math.min(AVBC_CHUNK_PAYLOAD, buf.length - off);
-      const chunk = new Uint8Array(1 + take);
-      chunk[0] = 0x01;
-      chunk.set(buf.subarray(off, off + take), 1);
-      await writeEncrypted(chrAvatarBc, chunk);
-      off += take;
-      status.textContent = `送信中… ${off}/${buf.length} B`;
+  // Preset selector. Populated only when injection succeeded; otherwise the
+  // dropdown stays empty (Array.isArray guard).
+  const presets = Array.isArray(window.AVATAR_DSL_PRESETS) ? window.AVATAR_DSL_PRESETS : [];
+  const presetMap = {};
+  presets.forEach((p, idx) => {
+    presetMap[p.name] = p.source;
+    const opt = document.createElement('option');
+    opt.value = p.name;
+    opt.textContent = (idx === 0 ? '↻ ' : '✎ ') + p.name;
+    presetEl.appendChild(opt);
+  });
+  srcEl.value = (presets[0] && presets[0].source) ||
+                (typeof window.AVATAR_DSL_DEFAULT_SOURCE === 'string' &&
+                 !window.AVATAR_DSL_DEFAULT_SOURCE.includes('{{AVATAR_DSL_DEFAULT_SOURCE}}')
+                   ? window.AVATAR_DSL_DEFAULT_SOURCE : '');
+  if (compilerOk) {
+    setMsg('準備完了 — Ctrl/Cmd+Enter または「コンパイル & 送信」で反映');
+  }
+
+  let lastBuf = null;
+
+  function compileNow() {
+    if (!compilerOk) {
+      setMsg('DSL コンパイラ が読込めていないためコンパイルできません', 'err');
+      return null;
     }
-
-    // op=commit
-    await writeEncrypted(chrAvatarBc, new Uint8Array([0x02]));
-
-    // Status JSON read for the result
-    const respBytes = await readEncrypted(chrAvatarBc);
-    const resp = dec.decode(respBytes);
-    log(`AVBC commit: ${resp}`, 'ok');
-    status.textContent = resp;
-  } catch (e) {
-    log(`AVBC upload 失敗: ${e.message}`, 'err');
-    if (status) status.textContent = `失敗: ${e.message}`;
-  } finally {
-    refreshAvbcButton();
+    const t0 = performance.now();
+    let buf;
+    try { buf = window.AvatarDsl.compile(srcEl.value); }
+    catch (e) {
+      setMsg('コンパイル エラー: ' + e.message, 'err');
+      return null;
+    }
+    const compileMs = performance.now() - t0;
+    setMsg(`OK — ${buf.byteLength} bytes, コンパイル ${compileMs.toFixed(1)} ms`, 'ok');
+    lastBuf = buf;
+    return buf;
   }
-});
 
-document.getElementById('btn-avbc-reset')?.addEventListener('click', async () => {
-  if (!chrAvatarBc) { log('AvatarBytecode chr 未接続', 'err'); return; }
-  const status = document.getElementById('avbc-status');
-  const reset = document.getElementById('btn-avbc-reset');
-  reset.disabled = true;
-  try {
-    await writeEncrypted(chrAvatarBc, new Uint8Array([0xff]));
-    const respBytes = await readEncrypted(chrAvatarBc);
-    const resp = dec.decode(respBytes);
-    log(`AVBC reset: ${resp}`, 'ok');
-    if (status) status.textContent = resp;
-  } catch (e) {
-    log(`AVBC reset 失敗: ${e.message}`, 'err');
-    if (status) status.textContent = `失敗: ${e.message}`;
-  } finally {
-    refreshAvbcButton();
+  async function compileAndSend() {
+    if (!chrAvatarBc) { setMsg('BLE 未接続', 'err'); return; }
+    const buf = compileNow();
+    if (!buf) return;
+    sendBtn.disabled = true;
+    const oldText = sendBtn.textContent;
+    sendBtn.textContent = '送信中…';
+    try {
+      const r = await avbcSendBytecode(new Uint8Array(buf), (sent, total) => {
+        sendBtn.textContent = `送信中… ${sent}/${total} B`;
+      });
+      if (r.json && r.json.state === 'done') {
+        setMsg(`送信完了 — NVS に ${r.json.received} バイト保存`, 'ok');
+        log(`Avatar DSL 送信 OK (${r.json.received} B)`, 'ok');
+      } else if (r.json && r.json.state === 'failed') {
+        setMsg(`送信失敗 — ${r.json.error || 'unknown'}`, 'err');
+        log(`Avatar DSL 送信失敗: ${r.json.error}`, 'err');
+      } else {
+        setMsg('送信完了 — レスポンス: ' + r.raw, 'ok');
+        log('Avatar DSL 送信 OK', 'ok');
+      }
+    } catch (e) {
+      setMsg('送信エラー: ' + e.message, 'err');
+      log('Avatar DSL 送信 失敗: ' + e.message, 'err');
+    } finally {
+      sendBtn.textContent = oldText;
+      sendBtn.disabled = !chrAvatarBc;
+    }
   }
-});
+
+  sendBtn.addEventListener('click', compileAndSend);
+  // Ctrl/Cmd+Enter inside the textarea triggers compile+send.
+  srcEl.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      compileAndSend();
+    }
+  });
+
+  // Preset selector: load source + send. For the first preset (= firmware
+  // embedded default) issue a reset (op=0xff) instead of re-uploading the
+  // same bytecode — leaves the NVS slot empty so future boots use the
+  // embedded copy without any persisted override.
+  presetEl.addEventListener('change', async () => {
+    const name = presetEl.value;
+    const src = presetMap[name];
+    if (src == null) return;
+    srcEl.value = src;
+    lastBuf = null;
+    if (!chrAvatarBc) { setMsg('BLE 未接続 — テキストだけ反映しました', 'err'); return; }
+    if (presets[0] && name === presets[0].name) {
+      try {
+        const r = await avbcSendReset();
+        setMsg(`プリセット「${name}」を読込み — 実機を内蔵デフォルトに復帰 (${r.raw})`, 'ok');
+        log(`Avatar DSL プリセット ${name} (reset)`, 'ok');
+      } catch (e) {
+        setMsg('リセット失敗: ' + e.message, 'err');
+      }
+    } else {
+      await compileAndSend();
+    }
+  });
+
+  resetBtn.addEventListener('click', async () => {
+    if (!chrAvatarBc) { setMsg('BLE 未接続', 'err'); return; }
+    if (!confirm('実機の顔を firmware 内蔵 デフォルトに戻します (NVS の override を削除)。よろしいですか?')) return;
+    const oldText = resetBtn.textContent;
+    resetBtn.disabled = true;
+    resetBtn.textContent = '送信中…';
+    try {
+      const r = await avbcSendReset();
+      setMsg(`実機をデフォルト顔に戻しました (${r.raw})`, 'ok');
+      log('Avatar DSL リセット', 'ok');
+    } catch (e) {
+      setMsg('リセット失敗: ' + e.message, 'err');
+      log('Avatar DSL リセット失敗: ' + e.message, 'err');
+    } finally {
+      resetBtn.textContent = oldText;
+      resetBtn.disabled = !chrAvatarBc;
+    }
+  });
+
+  document.getElementById('btn-dsl-download').addEventListener('click', () => {
+    let buf = lastBuf;
+    if (!buf) buf = compileNow();
+    if (!buf) return;
+    const blob = new Blob([buf], { type: 'application/octet-stream' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'face.avbc';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  document.getElementById('btn-dsl-download-src').addEventListener('click', () => {
+    const blob = new Blob([srcEl.value], { type: 'text/plain;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'face.avdsl';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  document.getElementById('dsl-load').addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      srcEl.value = r.result;
+      setMsg('読込みました — 「コンパイル & 送信」で実機に反映してください');
+    };
+    r.readAsText(f);
+    e.target.value = '';
+  });
+
+  // .avbc 直接送信 — for users who already have a compiled bytecode (e.g.
+  // downloaded from the wasm preview or shared by someone else). Skips the
+  // in-browser compiler entirely.
+  document.getElementById('avbc-file').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    if (!chrAvatarBc) { setMsg('BLE 未接続', 'err'); return; }
+    const buf = new Uint8Array(await f.arrayBuffer());
+    setMsg(`${f.name} (${buf.length} B) を送信中…`);
+    try {
+      const r = await avbcSendBytecode(buf, (sent, total) => {
+        setMsg(`${f.name} 送信中… ${sent}/${total} B`);
+      });
+      if (r.json && r.json.state === 'done') {
+        setMsg(`${f.name} 送信完了 — NVS に ${r.json.received} バイト保存`, 'ok');
+        log(`Avatar .avbc 送信 OK (${r.json.received} B)`, 'ok');
+      } else if (r.json && r.json.state === 'failed') {
+        setMsg(`${f.name} 送信失敗 — ${r.json.error || 'unknown'}`, 'err');
+      } else {
+        setMsg(`${f.name} 送信完了 — ${r.raw}`, 'ok');
+      }
+      lastBuf = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    } catch (err) {
+      setMsg('送信エラー: ' + err.message, 'err');
+      log('Avatar .avbc 送信 失敗: ' + err.message, 'err');
+    }
+  });
+})();
+
+function refreshAvbcButton() {
+  // Gate the DSL editor's send / reset buttons on BLE connection state. The
+  // file picker buttons stay enabled (they prompt the user pre-connect too).
+  const sendBtn = document.getElementById('btn-dsl-send');
+  const resetBtn = document.getElementById('btn-dsl-reset');
+  const presetEl = document.getElementById('dsl-preset');
+  const compilerOk = !!(window.AvatarDsl && typeof window.AvatarDsl.compile === 'function');
+  if (sendBtn) sendBtn.disabled = !(chrAvatarBc && compilerOk);
+  if (resetBtn) resetBtn.disabled = !chrAvatarBc;
+  if (presetEl) presetEl.disabled = !chrAvatarBc;
+}
 
 // MCP API token: random-generate / show / clear. The "clear" path sets a
 // data-cleared marker so the apply path POSTs an empty body explicitly
