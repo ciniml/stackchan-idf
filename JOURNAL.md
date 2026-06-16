@@ -9,6 +9,174 @@ stackchan-idf の機能追加・修正の記録。新しいエントリを上に
 
 ---
 
+## 2026-06 (下旬) — aokko 顔 / 会話音声品質 / ネコミミ LED / AtomS3 slim
+
+このシーズンは「ハードウェア バリエーション + 設定 UI 拡張」が主軸。
+リリース v0.4.1 → v0.4.5 → v0.5.0 と細かく刻みつつ、avatar DSL の新
+プリセット (aokko)、会話音声の周波数ドリフト修正、ネコミミ NeoPixel
+LED の追加 (CoreS3 + AtomNyan + 新 AtomS3 slim)、設定 UI に LED + 音声
+diagnostics パネル、を入れた。
+
+### aokko-style 顔プリセット (avatar DSL P1)
+
+コミット: `9026686` (preset 追加), `c74a05f` (まつげ統合)
+
+- `assets/aokko_face.avdsl` を新規追加。`mongonta0716/m5stack-avatar-mic-
+  nekomimi_led` の `aokkoface` ブランチ (MIT 2024 washishi) の見た目を
+  既存 AVDS VM (Lua 風 DSL → バイトコード) で再実装。座標 / 色のような
+  事実情報のみ引用、コードは持ち込まずに書き起こした (BSL-1.0 単独で
+  配布可)。
+- 部品: 縦長 pill 形の目 (矩形 + 上下端 fill_circle、内部で奇数スナップ
+  して矩形と円のピクセル幅を 1px 単位で一致)、六芒星の頬、横長口、
+  眉なし、表情エフェクトなし。HAPPY 時のみ目の下半分マスクで `⌒` 形に。
+- ネコミミの見た目に合わせて「3 本まつげ」を ellipse_eye 内に統合
+  (gaze_h/v で目玉と一緒に動く、open 時は ⌒-fan / close 時は `|||`)。
+- WASM プレビュー (`wasm/build.sh`) に `aokko` プリセット ボタンを追加。
+- 持ち越し: aokko の WiFi 経由プリセット一覧に未登録の件は、
+  components/wifi_config_service/web/settings_wifi.html 側の更新が必要
+  (settings.html / WASM は対応済)。
+
+### 会話音声: ターン跨ぎの周波数ドリフト修正
+
+コミット: `3051e6a` (m5u patch)
+
+- 症状: 会話ターンを重ねると応答音声が徐々に遅くなる (周波数が下がる +
+  ノイズ感)。リブートまで回復しない。CoreS3 では Mic/Speaker が
+  I2S_NUM_1 を共有し毎ターン swap するので、M5Unified の Speaker_Class::
+  end() が `_ch_info[ch].diff` (フラクショナル累算器) / `index` / `flip`
+  / `liner_buf[2][2]` (線形補間 2 サンプル履歴) を保持したまま終了し、
+  次 begin() で中途半端な値から再開していた。
+- 修正: `patches/m5unified.patch` に Speaker_Class::end() の追加リセット
+  (diff/index/flip/liner_buf を 0 クリア) を当てる。実機検証でターンを
+  重ねても周波数低下が起きないことを確認。
+
+### 会話音声パイプラインの計装と外部公開
+
+コミット: `fd8af45` (5 指標), `86e9136` (played_sps), `8eeb17a`
+(BLE / HTTP 公開), `d1b47ea` (settings.html パネル)
+
+- ターン毎に ESP_LOGI で 1 行出力する音声パイプライン統計を追加:
+  decode_us (base64 + memcpy), recv_lag_us (event queue 渡し), recv_to_
+  queued_ms (受信から playRaw 投入までの遅延), spk_queue 深度 (0..2),
+  pcm_lag_samples (未再生サンプル数), played_sps (実効再生レート)。
+- `Stats<T>` テンプレートを `components/conversation/include/conversation/
+  metrics.hpp` に共有、ConversationEvent に `emit_us` フィールド追加。
+- `SharedState::AudioMetrics` snapshot を mutex 保護で公開、HTTP `GET
+  /api/metrics/audio` と BLE chr 0x1f (encrypted READ JSON) 両方から
+  取得可能に。
+- `tools/settings.html` に「音声パイプライン診断」パネル追加 (表組 +
+  自動更新 2 秒)。played_sps / nominal の比が < 99% なら赤強調。
+- 実測結果: ターン跨ぎドリフトは patch 3051e6a で解消。残った played_sps
+  ≈ 23790/24000 (~99.1%) は I2S MCLK 整数分周由来で実用許容。「ターン
+  累積で遅延」と感じていた症状の一部は Telegram クライアントの影響だと
+  判明、無効化で解消。
+- 持ち越し: I2S MCLK 0.9% slow、spk_task stack HWM 300 B 切迫、INT
+  min ~67 B の慢性タイト。
+
+### ネコミミ NeoPixel LED 制御 (GPIO9 / GPIO38)
+
+コミット: `45a4865` (ドライバ), `403d7e5` (BLE/HTTP API), `10aee3c`
+(設定 UI), `d30dba0` (NVS 永続化), `abe6b5c` (虹周期), `df9c1c3`
+(AtomNyan G38)
+
+- Stack-chan のネコミミ部 WS2812 チェーン (左耳 9 + 右耳 9、18 LED) を
+  espressif/led_strip 経由 RMT で駆動。CoreS3 系は GPIO9、AtomNyan
+  (AtomS3R) は Atomic ECHO BASE 経由で GPIO38。
+- LedStrip を抽象基底化、既存 PY32 実装を Py32LedStrip に rename、
+  NekomimiLedStrip を新規追加 (RMT 10 MHz、48 mem symbol、no DMA)。
+  Board::Impl::led_ を std::unique_ptr<LedStrip> 化。
+- BLE encrypted R/W chr 0x20 + HTTP `GET/POST /api/led-state` で動的に
+  mode (off/solid/breath/gradient) / color / brightness / 虹周期を
+  操作可能に。BLE wire は 6 byte `[mode][R][G][B][bright][period_ds]`
+  (5 byte legacy 受理、period 据置)。
+- NVS 永続化: DeviceConfig に 4 keys 追加、`store::save_led_state()` を
+  single writer に。フル `store::save()` から LED keys を撤去 (Apply
+  経路が g_active の boot 値で runtime 変更を上書きする race を排除)。
+- 設定 UI に LED セクション + 4 入力 (mode select / color picker /
+  brightness + 虹周期 slider)、150 ms debounce で BLE 書き込み。
+- 持ち越し: 左右ペア独立アニメーション (`kLedsPerEar = 9` を活用)、
+  WiFi 設定 UI (settings_wifi.html) 側の LED パネル。
+
+### AtomS3 (PSRAM 無し) 向け slim プロファイル
+
+コミット: `e384ac7` (board / Kconfig), `c7f5823` (CI matrix / pages)
+
+- PSRAM が無い AtomS3 (C014) + Atomic ECHO BASE で「avatar + jtts +
+  ネコミミ LED + 管理 UI (BLE/HTTP 設定)」だけを動かすビルド ターゲット。
+  会話タスク / BLE 音声ストリーミング / RTP 受信のような PSRAM 必須機能
+  をコンパイル時に削減。
+- 新 Kconfig フラグ 3 つ (CONVERSATION/AUDIO_STREAM/WIFI_AUDIO_ENABLED、
+  default y、AtomS3 で n)。`main/Kconfig.projbuild` に menu 追加。
+- 新 `sdkconfig.defaults.atoms3`: CONFIG_SPIRAM=n、8MB flash、3 機能 off、
+  Wi-Fi/LWIP/mbedTLS バッファを SRAM 制約向けに縮小。
+- BoardKind::AtomS3 追加。Board::begin() で `M5.getBoard() ==
+  board_M5AtomS3` を検出し AtomS3R 系と統合した軽量 init パス
+  (rotation(0) / PY32+Si12T probe スキップ / NekomimiLedStrip GPIO38)。
+- main/CMakeLists.txt: conversation_task / audio_stream_sink / wifi_audio
+  の SRCS を Kconfig 条件除外。PRIV_REQUIRES の conversation はそのまま
+  (ESP-IDF 早期 expansion で Kconfig 未評価のため条件付きはダメ、dead-
+  code elimination 任せ)。
+- app_main.cpp の seg_buf alloc / start_X 呼出 / ConversationTaskArgs
+  生成 / 関連 include を `#if CONFIG_*` で gate。AtomS3 を is_atom_nyan
+  判定に含めて servo/UI 分岐共通化。
+- render_task.cpp: CONFIG_SPIRAM gate で esp_psram_get_size 呼出を
+  スキップ、direct canvas (partial update) に強制。
+- CI: release.yml の matrix.board に atoms3 追加 (3 並列ビルド)、
+  pages.yml classifier + docs/index.html ボード セレクタに対応。
+- ビルド サイズ: cores3 / atoms3r ~2.65-2.67 MB、**atoms3 2.08 MB**
+  (release ZIP は atoms3 2.89 MB)。
+- 持ち越し: 実機検証 (AtomS3 ハードウェアまだ手元になし)。
+
+### 会話タスク回りのこまごま修正
+
+コミット: `8e48eb2` (AtomNyan led->begin), `ea11b7c` (NVS race)
+
+- AtomNyan の Board::begin() が早期 return して `led->begin()` をスキップ
+  していたため GPIO38 ネコミミ LED が点灯しなかった件を修正。
+- LED 設定の NVS 永続化 race を `store::save()` からの LED keys 撤去で
+  解消 (詳細は LED セクション)。
+
+### remote flasher 拡張 (前シーズン継続)
+
+コミット: `b1a8d85` (`/app/*` 静的配信), `1e08378` (シリアル モニタ),
+`6d88a1f` (README), `3bdf71e` (port 再オープン バグ修正)
+
+- 前シーズンの remote-flasher (Bun サーバ + WebSerial + esptool-js +
+  curl ラッパ) に追加機能:
+  - `/app/*` で Web UI をホストから直接配信 (CDN 不要)
+  - `/monitor` SSE + `monitor-stream.sh` で idf.py monitor 相当
+  - 2 回目 flash で "port already open" になる修正 (stopMonitor で
+    reader cancel → ループ終了待ち → port.close まで完遂)
+
+### リリース履歴
+
+| Tag | 主な変更 |
+|---|---|
+| `v0.4.2` | 会話音声 patch + 音声 metrics 計装 + BLE/HTTP 公開 + UI |
+| `v0.4.3` | ネコミミ LED CoreS3 (GPIO9) + LED 設定 + NVS 永続化 + 虹周期 |
+| `v0.4.4` | AtomNyan ネコミミ LED 対応 (GPIO38) |
+| `v0.4.5` | AtomNyan LED begin() 修正 + LED NVS race 修正 |
+| `v0.5.0` | AtomS3 slim プロファイル (3 ボード matrix) |
+
+### 持ち越し課題 (このシーズン分)
+
+- **WiFi 設定 UI (`settings_wifi.html`) のアバター プリセットに aokko 未掲載**:
+  WASM プレビュー (`wasm/build.sh`) と `tools/settings.html` には登録済
+  だが、HTTP 側のプリセット選択肢に出ない。settings_wifi.html の更新が
+  必要。
+- **Avatar DSL 転送を BLE でも可能に**: 現状 `POST /api/avatar-dsl`
+  (HTTP) のみ。BLE chr 経由でも `.avbc` を送り込めるようにしたい
+  (Avatar 関連は WiFi / BLE 共通機能とする方針)。
+- **AtomS3 実機検証**: ビルドのみ完了、ハードウェア未入手。
+- **左右ペア独立アニメーション モード**: `NekomimiLedStrip::kLedsPerEar`
+  を活用して L/R それぞれに別パターンを当てる。
+- **I2S MCLK 0.9% slow / spk_task stack 300 B / INT min ~67 B**: 慢性
+  メモリ + クロック精度の制約。新機能で問題が再燃したら個別対応。
+- **mcp_events.cpp の stack 3→4 KiB**: カメラ無効化で発生条件は消えた
+  ので未コミット保留 (今後のリリースで取り込み判断)。
+
+---
+
 ## 2026-06 (中旬) — Claude Code Channel / LT / QR / remote flasher
 
 このシーズンは「外部連携」と「機能追加」が混在。MCP Channel での Claude
