@@ -548,6 +548,11 @@
 
     <div id="jtts-section">
       <h2 class="section-title">アイドル時の声 (jtts)</h2>
+      <label class="toggle-label" for="jtts-idle-enabled">
+        <input type="checkbox" id="jtts-idle-enabled" checked>
+        <span>アイドル時の発話を有効にする</span>
+      </label>
+      <p class="hint">オフにすると下のフレーズを話さなくなります。会話機能もオフのときは、マイク入力に合わせて口が動くリップシンク モードに自動で切替わります。保存後の再起動で反映されます。</p>
       <p class="hint" style="margin-bottom:0.5rem">空欄や変更なしで「保存」を押すと現在の設定は維持されます。</p>
 
       <label for="jtts-voice">声タイプ</label>
@@ -891,6 +896,11 @@ const CHR_STATUS  = 'e3f0a005-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_KX      = 'e3f0a006-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_EN      = 'e3f0a007-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 const CHR_RTP_EN  = 'e3f0a011-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+// JttsIdleEnabled — encrypted 1-byte flag. Master switch for the idle babble
+// (the avatar speaking phrases when nothing else is going on). When this is
+// off AND CHR_EN (conversation) is off, the firmware activates a mic-driven
+// lip-sync mode instead. Takes effect after the Apply reboot.
+const CHR_JTTS_IDLE_EN = 'e3f0a022-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // BatteryGauge — encrypted 1-byte flag (show/hide the top-left battery gauge).
 const CHR_BAT_GAUGE = 'e3f0a017-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // ServoLimits — encrypted compact JSON of per-servo zero + motion range.
@@ -985,7 +995,7 @@ const DIS_CHRS = {
 
 // --- State ---
 let bleDevice = null, bleServer = null, svc = null;
-let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null, chrAvatarBc = null;
+let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJttsIdleEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null, chrAvatarBc = null;
 let boardKind = null; // null = unknown (older firmware), else 0/1/2 from BOARD_*
 let batteryPollTimer = null;  // setInterval handle while connected
 let jttsInitialJson = '';  // last read JSON, used to detect Apply-time changes
@@ -2010,6 +2020,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       ['kx',         CHR_KX],
       ['en',         CHR_EN],
       ['rtpEn',      CHR_RTP_EN],
+      ['jttsIdleEn', CHR_JTTS_IDLE_EN],
       ['batGauge',   CHR_BAT_GAUGE],
       ['servoEnabled', CHR_SERVO_ENABLED],
       ['mcpToken',   CHR_MCP_TOKEN],
@@ -2053,6 +2064,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
     chrKx       = found.kx       ?? null;
     chrEn       = found.en       ?? null;
     chrRtpEn    = found.rtpEn    ?? null;
+    chrJttsIdleEn = found.jttsIdleEn ?? null;
     chrBatGauge = found.batGauge ?? null;
     chrServoEnabled = found.servoEnabled ?? null;
     chrMcpToken = found.mcpToken ?? null;
@@ -2143,6 +2155,18 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
         log(`RTP 音声受信: ${enabled ? '有効' : '無効'}`);
       } catch (e) {
         log(`RTP 有効状態の取得失敗: ${e.message}`, 'err');
+      }
+    }
+
+    if (chrJttsIdleEn) {
+      try {
+        const jiBytes = await readEncrypted(chrJttsIdleEn);
+        const enabled = jiBytes.length > 0 && jiBytes[0] !== 0;
+        document.getElementById('jtts-idle-enabled').checked = enabled;
+        document.getElementById('jtts-idle-enabled').dataset.initial = enabled ? '1' : '0';
+        log(`jtts アイドル発話: ${enabled ? '有効' : '無効'}`);
+      } catch (e) {
+        log(`jtts アイドル発話 状態の取得失敗: ${e.message}`, 'err');
       }
     }
 
@@ -2315,13 +2339,14 @@ function onDisconnected() {
   ledStateLoaded = false;
   svRangeOn = false;
   svLiveYaw = svLivePitch = -1;
-  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoEnabled = chrMcpToken = chrLtConfig = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = chrAudioMetrics = chrLedState = chrAvatarBc = null;
+  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJttsIdleEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoEnabled = chrMcpToken = chrLtConfig = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = chrAudioMetrics = chrLedState = chrAvatarBc = null;
   if (typeof refreshAvbcButton === 'function') refreshAvbcButton();
   boardKind = null;
   aesKey = null;
   clearDeviceInfo();
   delete document.getElementById('openai-enabled').dataset.initial;
   delete document.getElementById('rtp-enabled').dataset.initial;
+  delete document.getElementById('jtts-idle-enabled').dataset.initial;
   delete document.getElementById('bat-gauge-enabled').dataset.initial;
   delete document.getElementById('servo-enabled').dataset.initial;
   delete document.getElementById('provider').dataset.initial;
@@ -2415,6 +2440,15 @@ document.getElementById('btn-apply').addEventListener('click', async () => {
     if (chrRtpEn && rtpInitial !== undefined && rtpInitial !== rtpWanted) {
       await writeEncrypted(chrRtpEn, new Uint8Array([rtpCheckbox.checked ? 1 : 0]));
       log(`RTP 音声受信を ${rtpCheckbox.checked ? '有効' : '無効'} に切り替え`, 'ok');
+    }
+
+    // jtts idle babble enable: only push if it changed AND chr is present.
+    const jiCheckbox = document.getElementById('jtts-idle-enabled');
+    const jiInitial = jiCheckbox.dataset.initial;
+    const jiWanted = jiCheckbox.checked ? '1' : '0';
+    if (chrJttsIdleEn && jiInitial !== undefined && jiInitial !== jiWanted) {
+      await writeEncrypted(chrJttsIdleEn, new Uint8Array([jiCheckbox.checked ? 1 : 0]));
+      log(`jtts アイドル発話を ${jiCheckbox.checked ? '有効' : '無効'} に切り替え`, 'ok');
     }
 
     // Battery gauge: only push if it changed AND chr is present.

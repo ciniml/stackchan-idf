@@ -49,6 +49,7 @@ struct StagingBuffer {
     std::optional<std::string> xiaozhi_url, xiaozhi_token, system_prompt, conv_headers;
     std::optional<bool> openai_enabled;
     std::optional<bool> rtp_audio_enabled;
+    std::optional<bool> jtts_idle_enabled;
     std::optional<bool> battery_gauge_enabled;
     std::optional<bool> servo_enabled;
     std::optional<std::string> mcp_api_token;
@@ -251,6 +252,7 @@ esp_err_t handle_status_get(httpd_req_t* req)
     body += "\"has_xiaozhi_token\":" + std::string(cfg.xiaozhi_token.empty() ? "false" : "true") + ",";
     body += "\"openai_enabled\":" + std::string(cfg.openai_enabled ? "true" : "false") + ",";
     body += "\"rtp_audio_enabled\":" + std::string(cfg.rtp_audio_enabled ? "true" : "false") + ",";
+    body += "\"jtts_idle_enabled\":" + std::string(cfg.jtts_idle_enabled ? "true" : "false") + ",";
     body += "\"battery_gauge_enabled\":" + std::string(cfg.battery_gauge_enabled ? "true" : "false") + ",";
     body += "\"servo_enabled\":" + std::string(cfg.servo_enabled ? "true" : "false") + ",";
     // Token itself is never returned; the UI only needs to know whether the
@@ -355,6 +357,17 @@ esp_err_t handle_rtp_enabled_post(httpd_req_t* req)
     const bool enabled = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     g_staging.rtp_audio_enabled = enabled;
+    xSemaphoreGive(g_mutex);
+    return send_empty(req);
+}
+
+esp_err_t handle_jtts_idle_enabled_post(httpd_req_t* req)
+{
+    std::string body;
+    if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
+    const bool enabled = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_staging.jtts_idle_enabled = enabled;
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -485,6 +498,7 @@ esp_err_t handle_apply_post(httpd_req_t* req)
     if (g_staging.api_key)         merged.openai_api_key = *g_staging.api_key;
     if (g_staging.openai_enabled)  merged.openai_enabled = *g_staging.openai_enabled;
     if (g_staging.rtp_audio_enabled) merged.rtp_audio_enabled = *g_staging.rtp_audio_enabled;
+    if (g_staging.jtts_idle_enabled) merged.jtts_idle_enabled = *g_staging.jtts_idle_enabled;
     if (g_staging.battery_gauge_enabled) merged.battery_gauge_enabled = *g_staging.battery_gauge_enabled;
     if (g_staging.servo_enabled)   merged.servo_enabled = *g_staging.servo_enabled;
     if (g_staging.mcp_api_token)   merged.mcp_api_token = *g_staging.mcp_api_token;
@@ -841,6 +855,7 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/xiaozhi-token",    HTTP_POST, handle_xiaozhi_token_post);
     add(server, "/api/openai-enabled",  HTTP_POST, handle_openai_enabled_post);
     add(server, "/api/rtp-enabled",     HTTP_POST, handle_rtp_enabled_post);
+    add(server, "/api/jtts-idle-enabled", HTTP_POST, handle_jtts_idle_enabled_post);
     add(server, "/api/battery-gauge",   HTTP_POST, handle_battery_gauge_post);
     add(server, "/api/servo-enabled",   HTTP_POST, handle_servo_enabled_post);
     add(server, "/api/mcp-token",       HTTP_POST, handle_mcp_token_post);

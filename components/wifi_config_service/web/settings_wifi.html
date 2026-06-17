@@ -448,6 +448,11 @@
 
     <div id="jtts-section">
       <h2 class="section-title">アイドル時の声 (jtts)</h2>
+      <label class="toggle-label" for="jtts-idle-enabled">
+        <input type="checkbox" id="jtts-idle-enabled" checked>
+        <span>アイドル時の発話を有効にする</span>
+      </label>
+      <p class="hint">オフにすると下のフレーズを話さなくなります。会話機能もオフのときは、マイク入力に合わせて口が動くリップシンク モードに自動で切替わります。保存後の再起動で反映されます。</p>
       <p class="hint" style="margin-bottom:0.5rem">空欄や変更なしで「保存」を押すと現在の設定は維持されます。</p>
 
       <label for="jtts-voice">声タイプ</label>
@@ -1008,6 +1013,7 @@ async function refresh() {
     $('provider').value = String(s.provider ?? 0);
     $('openai-enabled').checked = !!s.openai_enabled;
     $('rtp-enabled').checked = (s.rtp_audio_enabled !== false); // default on if absent
+    $('jtts-idle-enabled').checked = (s.jtts_idle_enabled !== false); // default on if absent
     $('bat-gauge-enabled').checked = (s.battery_gauge_enabled !== false); // default on if absent
     $('servo-enabled').checked = (s.servo_enabled !== false); // default on if absent
     $('mcp-token-state').textContent = s.has_mcp_token ? '設定済' : '未設定';
@@ -1075,6 +1081,7 @@ async function apply() {
     const provider = $('provider').value;
     const enabled = $('openai-enabled').checked;
     const rtpEnabled = $('rtp-enabled').checked;
+    const jttsIdleEnabled = $('jtts-idle-enabled').checked;
     const batGauge = $('bat-gauge-enabled').checked;
     const servoEn = $('servo-enabled').checked;
     const jtts = readJttsForm();
@@ -1090,6 +1097,7 @@ async function apply() {
     await postText('/api/provider', provider);
     await postText('/api/openai-enabled', enabled ? '1' : '0');
     await postText('/api/rtp-enabled', rtpEnabled ? '1' : '0');
+    await postText('/api/jtts-idle-enabled', jttsIdleEnabled ? '1' : '0');
     await postText('/api/battery-gauge', batGauge ? '1' : '0');
     await postText('/api/servo-enabled', servoEn ? '1' : '0');
     // MCP token: send only when the user typed something OR explicitly hit

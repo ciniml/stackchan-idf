@@ -39,6 +39,7 @@ set(_main_srcs
     "i2c_dump.cpp"
     "led_task.cpp"
     "lt_timer.cpp"
+    "mic_lip_sync_task.cpp"
     "qr_task.cpp"
     "render_task.cpp"
     "servo_limits.cpp"

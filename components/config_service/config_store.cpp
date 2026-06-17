@@ -21,6 +21,7 @@ constexpr const char* kKeyPass = "wifi_pass";
 constexpr const char* kKeyApiKey = "openai_key";
 constexpr const char* kKeyOpenAiEnabled = "openai_en";
 constexpr const char* kKeyRtpAudioEnabled = "rtp_en";
+constexpr const char* kKeyJttsIdleEnabled = "jtts_idle";
 constexpr const char* kKeyJttsConfig = "jtts_cfg";
 constexpr const char* kKeyGeminiApiKey = "gemini_key";
 constexpr const char* kKeyProvider = "provider";
@@ -98,6 +99,13 @@ DeviceConfig load()
         cfg.rtp_audio_enabled = (rtp_enabled != 0);
     } else if (rtp_err != ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGW(kTag, "nvs_get_u8(%s): %s", kKeyRtpAudioEnabled, esp_err_to_name(rtp_err));
+    }
+    std::uint8_t jtts_idle = 1;
+    esp_err_t ji_err = nvs_get_u8(h, kKeyJttsIdleEnabled, &jtts_idle);
+    if (ji_err == ESP_OK) {
+        cfg.jtts_idle_enabled = (jtts_idle != 0);
+    } else if (ji_err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(kTag, "nvs_get_u8(%s): %s", kKeyJttsIdleEnabled, esp_err_to_name(ji_err));
     }
     std::uint8_t bat_gauge = 1;
     esp_err_t bg_err = nvs_get_u8(h, kKeyBatteryGauge, &bat_gauge);
@@ -182,6 +190,13 @@ tl::expected<void, Error> save(const DeviceConfig& cfg)
     err = nvs_set_u8(h, kKeyRtpAudioEnabled, cfg.rtp_audio_enabled ? 1 : 0);
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "nvs_set_u8(%s): %s", kKeyRtpAudioEnabled, esp_err_to_name(err));
+        nvs_close(h);
+        return tl::unexpected(Error::NvsWrite);
+    }
+
+    err = nvs_set_u8(h, kKeyJttsIdleEnabled, cfg.jtts_idle_enabled ? 1 : 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "nvs_set_u8(%s): %s", kKeyJttsIdleEnabled, esp_err_to_name(err));
         nvs_close(h);
         return tl::unexpected(Error::NvsWrite);
     }

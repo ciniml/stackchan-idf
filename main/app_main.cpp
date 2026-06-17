@@ -44,6 +44,7 @@
 #include "i2c_dump.hpp"
 #include "led_task.hpp"
 #include "lt_timer.hpp"
+#include "mic_lip_sync_task.hpp"
 #include "qr_task.hpp"
 #include "render_task.hpp"
 #include "servo_limits.hpp"
@@ -268,7 +269,7 @@ void record_and_playback(std::uint32_t seconds, const char* label)
     ESP_LOGI(kTag, "%s: done", label);
 }
 
-void demo_loop(const std::string& jtts_config_json, bool has_battery, bool is_atom_nyan, bool conversation_enabled, const stackchan::app::ServoLimits& limits)
+void demo_loop(const std::string& jtts_config_json, bool has_battery, bool is_atom_nyan, bool conversation_enabled, bool jtts_idle_enabled, const stackchan::app::ServoLimits& limits)
 {
     using namespace stackchan;
 
@@ -442,47 +443,54 @@ void demo_loop(const std::string& jtts_config_json, bool has_battery, bool is_at
         }
 
         if (allow_full_demo) {
-            // Mouth opens with the current speech envelope; closed while silent.
-            g_state->mouth_open.store(speech.current_mouth_open(), std::memory_order_relaxed);
+            // When idle jtts babble is enabled, drive the mouth from the
+            // speech envelope and run the Wi-Fi check + random babble. When
+            // disabled, demo_loop becomes a no-op on the mouth so the mic
+            // lip-sync task (main/mic_lip_sync_task.cpp), if active, owns
+            // `mouth_open` without us overwriting it with 0 every tick.
+            if (jtts_idle_enabled) {
+                // Mouth opens with the current speech envelope; closed while silent.
+                g_state->mouth_open.store(speech.current_mouth_open(), std::memory_order_relaxed);
 
-            // The "Wi-Fi: 切断中" balloon and the babble suppression below only
-            // make sense when the assistant actually needs the network — i.e.
-            // when the conversation backend (OpenAI / Gemini / XiaoZhi) is on.
-            // With conversation disabled the demo is fully self-contained
-            // (local jtts babble), so we ignore Wi-Fi state entirely and let
-            // the idle behaviour run from boot without waiting for an AP.
-            const bool wifi_ok = !conversation_enabled || app::wifi_is_connected();
-            if (!wifi_ok && !wifi_warning_active) {
-                speech.stop();
-                // hold_ms = UINT32_MAX so the balloon stays put until we clear it.
-                g_state->set_balloon_text("Wi-Fi: 切断中", /*hold_ms=*/UINT32_MAX);
-                balloon_in_flight.store(false, std::memory_order_release);
-                wifi_warning_active = true;
-            } else if (wifi_ok && wifi_warning_active) {
-                g_state->clear_balloon();
-                wifi_warning_active = false;
-                next_speech_ms = now_ms + 1500;
-            }
-
-            // Kick off a new babble + balloon once the previous balloon is done
-            // (callback resets balloon_in_flight) AND audio is idle AND the
-            // random dwell time has elapsed. Suppressed while Wi-Fi is down so
-            // the disconnected balloon stays visible.
-            if (!wifi_warning_active &&
-                now_ms >= next_speech_ms &&
-                !speech.is_speaking() &&
-                !balloon_in_flight.load(std::memory_order_acquire)) {
-                // Speak a phrase and show ITS display text in the balloon —
-                // babble() returns the display (発話内容) of the same phrase
-                // it synthesises (発声内容), so screen and voice always match.
-                const std::string display = speech.babble(esp_random());
-                if (!display.empty()) {
-                    balloon_in_flight.store(true, std::memory_order_release);
-                    g_state->set_balloon_text(display, /*hold_ms=*/0, [] {
-                        balloon_in_flight.store(false, std::memory_order_release);
-                    });
+                // The "Wi-Fi: 切断中" balloon and the babble suppression below only
+                // make sense when the assistant actually needs the network — i.e.
+                // when the conversation backend (OpenAI / Gemini / XiaoZhi) is on.
+                // With conversation disabled the demo is fully self-contained
+                // (local jtts babble), so we ignore Wi-Fi state entirely and let
+                // the idle behaviour run from boot without waiting for an AP.
+                const bool wifi_ok = !conversation_enabled || app::wifi_is_connected();
+                if (!wifi_ok && !wifi_warning_active) {
+                    speech.stop();
+                    // hold_ms = UINT32_MAX so the balloon stays put until we clear it.
+                    g_state->set_balloon_text("Wi-Fi: 切断中", /*hold_ms=*/UINT32_MAX);
+                    balloon_in_flight.store(false, std::memory_order_release);
+                    wifi_warning_active = true;
+                } else if (wifi_ok && wifi_warning_active) {
+                    g_state->clear_balloon();
+                    wifi_warning_active = false;
+                    next_speech_ms = now_ms + 1500;
                 }
-                next_speech_ms = now_ms + rand_range_ms(kSpeechMinMs, kSpeechMaxMs);
+
+                // Kick off a new babble + balloon once the previous balloon is done
+                // (callback resets balloon_in_flight) AND audio is idle AND the
+                // random dwell time has elapsed. Suppressed while Wi-Fi is down so
+                // the disconnected balloon stays visible.
+                if (!wifi_warning_active &&
+                    now_ms >= next_speech_ms &&
+                    !speech.is_speaking() &&
+                    !balloon_in_flight.load(std::memory_order_acquire)) {
+                    // Speak a phrase and show ITS display text in the balloon —
+                    // babble() returns the display (発話内容) of the same phrase
+                    // it synthesises (発声内容), so screen and voice always match.
+                    const std::string display = speech.babble(esp_random());
+                    if (!display.empty()) {
+                        balloon_in_flight.store(true, std::memory_order_release);
+                        g_state->set_balloon_text(display, /*hold_ms=*/0, [] {
+                            balloon_in_flight.store(false, std::memory_order_release);
+                        });
+                    }
+                    next_speech_ms = now_ms + rand_range_ms(kSpeechMinMs, kSpeechMaxMs);
+                }
             }
         }
 
@@ -1130,6 +1138,20 @@ extern "C" void app_main()
     ESP_LOGI(kTag, "conversation: disabled at compile time (slim build)");
 #endif
 
+    // Mic-driven lip sync. Activates only when BOTH the conversation backend
+    // AND the jtts idle babble are off — that way nothing else is driving
+    // `mouth_open` and the I2S bus stays free for the mic to own. The task
+    // yields to any speaker activity (balloon say / MCP say / OTA chime) and
+    // re-acquires the mic afterwards. See main/mic_lip_sync_task.cpp.
+    if (!cfg.openai_enabled && !cfg.jtts_idle_enabled) {
+        ESP_LOGI(kTag, "mic lip-sync: starting (conversation off, jtts idle off)");
+        stackchan::app::start_mic_lip_sync_task(*g_state);
+    } else {
+        ESP_LOGI(kTag, "mic lip-sync: not started (conv=%d jtts_idle=%d)",
+                 static_cast<int>(cfg.openai_enabled),
+                 static_cast<int>(cfg.jtts_idle_enabled));
+    }
+
     // Channel /mcp/events bring-up — deferred until after conv-task is created
     // so the conv-task's seg_buf_ alloc (3 × 8 KB internal-RAM contiguous) and
     // initial TLS / WebSocket setup don't race the SSE queue + monitor-task
@@ -1188,5 +1210,5 @@ extern "C" void app_main()
 #endif
 
     demo_loop(cfg.jtts_config_json, board.has_battery(), is_atom_nyan,
-              cfg.openai_enabled, servo_limits);
+              cfg.openai_enabled, cfg.jtts_idle_enabled, servo_limits);
 }
