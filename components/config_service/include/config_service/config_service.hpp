@@ -138,6 +138,14 @@ struct DeviceConfig {
     // to true, and the migration path in config_store::load preserves any
     // explicit override the user already saved before this field existed).
     OperationMode operation_mode = OperationMode::Conversation;
+    // Touch barge-in: when on, tapping the head during AI reply playback
+    // interrupts the reply (so the user can cut in). The Si12T capacitive
+    // pad on the head is sensitive enough that incidental contact (sleeve
+    // brushing, hat fitting, putting Stack-chan back on the desk) fires
+    // false barge-ins, so this defaults OFF — users opt in explicitly.
+    // The nadenade stroke detector is independent of this flag and stays
+    // active either way (it's a deliberate front→mid→back gesture).
+    bool barge_in_enabled = false;
 };
 
 enum class Error {

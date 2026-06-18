@@ -745,6 +745,13 @@
         <input type="checkbox" id="openai-enabled" checked>
         <span>会話機能を有効にする</span>
       </label>
+
+      <h2 class="section-title">タッチ操作</h2>
+      <label class="toggle-label" for="barge-in-enabled">
+        <input type="checkbox" id="barge-in-enabled">
+        <span>頭タッチで会話を中断する (バージイン)</span>
+      </label>
+      <p class="hint">応答再生中にアバター画面 (頭) をタップで AI 応答を中断します。タッチ センサが敏感で誤動作しやすいので、初期値はオフです。なでなで (前→中→後の連続タッチ) は本トグルとは独立で常に有効です。保存後の再起動で反映されます。</p>
     </div>
   </section><!-- /tab-panel "chat" -->
 
@@ -987,6 +994,10 @@ const CHR_LED_MOUTH_SYNC = 'e3f0a024-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // 2=Conversation). Single source of truth for the avatar's primary
 // behaviour. Staged via Apply path (reboot required).
 const CHR_OPERATION_MODE = 'e3f0a025-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+// BargeInEnabled — encrypted 1-byte flag (0=disabled, 1=enabled). When
+// on, a screen tap mid-reply interrupts the AI; off by default because
+// the capacitive pad fires false positives from incidental contact.
+const CHR_BARGE_IN_ENABLED = 'e3f0a026-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // AvatarBytecode — encrypted RW. Chunked upload of the avatar face .avbc
 // (mirrors `POST /api/avatar-dsl` on the HTTP side). READ returns a status
 // JSON; WRITE accepts a 1-byte op header followed by op-specific payload:
@@ -1044,7 +1055,7 @@ const DIS_CHRS = {
 
 // --- State ---
 let bleDevice = null, bleServer = null, svc = null;
-let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJttsIdleEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null, chrMicLipGain = null, chrLedMouthSync = null, chrOperationMode = null, chrAvatarBc = null;
+let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJttsIdleEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null, chrMicLipGain = null, chrLedMouthSync = null, chrOperationMode = null, chrBargeIn = null, chrAvatarBc = null;
 let boardKind = null; // null = unknown (older firmware), else 0/1/2 from BOARD_*
 let batteryPollTimer = null;  // setInterval handle while connected
 let jttsInitialJson = '';  // last read JSON, used to detect Apply-time changes
@@ -2101,6 +2112,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       ['micLipGain', CHR_MIC_LIP_GAIN],
       ['ledMouthSync', CHR_LED_MOUTH_SYNC],
       ['operationMode', CHR_OPERATION_MODE],
+      ['bargeIn',       CHR_BARGE_IN_ENABLED],
       ['avatarBc',  CHR_AVATAR_BC],
     ];
     const settled = await Promise.allSettled(
@@ -2148,6 +2160,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
     chrMicLipGain = found.micLipGain ?? null;
     chrLedMouthSync = found.ledMouthSync ?? null;
     chrOperationMode = found.operationMode ?? null;
+    chrBargeIn = found.bargeIn ?? null;
     chrAvatarBc = found.avatarBc ?? null;
     log(`Characteristics 取得完了 (missing: ${missing.length ? missing.join(', ') : 'none'})`,
         missing.length ? 'info' : 'ok');
@@ -2253,6 +2266,18 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
         }
       } catch (e) {
         log(`動作モード 状態の取得失敗: ${e.message}`, 'err');
+      }
+    }
+
+    if (chrBargeIn) {
+      try {
+        const biBytes = await readEncrypted(chrBargeIn);
+        const enabled = biBytes.length > 0 && biBytes[0] !== 0;
+        document.getElementById('barge-in-enabled').checked = enabled;
+        document.getElementById('barge-in-enabled').dataset.initial = enabled ? '1' : '0';
+        log(`バージイン (頭タッチで会話中断): ${enabled ? '有効' : '無効'}`);
+      } catch (e) {
+        log(`バージイン 状態の取得失敗: ${e.message}`, 'err');
       }
     }
 
@@ -2431,7 +2456,7 @@ function onDisconnected() {
   micLipLoaded = false;
   svRangeOn = false;
   svLiveYaw = svLivePitch = -1;
-  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJttsIdleEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoEnabled = chrMcpToken = chrLtConfig = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = chrAudioMetrics = chrLedState = chrMicLipGain = chrLedMouthSync = chrOperationMode = chrAvatarBc = null;
+  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJttsIdleEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoEnabled = chrMcpToken = chrLtConfig = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = chrAudioMetrics = chrLedState = chrMicLipGain = chrLedMouthSync = chrOperationMode = chrBargeIn = chrAvatarBc = null;
   if (typeof refreshAvbcButton === 'function') refreshAvbcButton();
   boardKind = null;
   aesKey = null;
@@ -2441,6 +2466,7 @@ function onDisconnected() {
   delete document.getElementById('jtts-idle-enabled').dataset.initial;
   delete document.getElementById('led-mouth-sync').dataset.initial;
   delete document.getElementById('operation-mode').dataset.initial;
+  delete document.getElementById('barge-in-enabled').dataset.initial;
   delete document.getElementById('bat-gauge-enabled').dataset.initial;
   delete document.getElementById('servo-enabled').dataset.initial;
   delete document.getElementById('provider').dataset.initial;
@@ -2562,6 +2588,15 @@ document.getElementById('btn-apply').addEventListener('click', async () => {
       await writeEncrypted(chrOperationMode, new Uint8Array([v]));
       const labels = {0:'マイクでリップシンク',1:'JTTS ランダム発話',2:'会話応答'};
       log(`動作モードを ${labels[v] || `mode ${v}`} に切り替え`, 'ok');
+    }
+
+    // Barge-in: only push if it changed AND chr is present.
+    const biCheckbox = document.getElementById('barge-in-enabled');
+    const biInitial = biCheckbox.dataset.initial;
+    const biWanted = biCheckbox.checked ? '1' : '0';
+    if (chrBargeIn && biInitial !== undefined && biInitial !== biWanted) {
+      await writeEncrypted(chrBargeIn, new Uint8Array([biCheckbox.checked ? 1 : 0]));
+      log(`バージインを ${biCheckbox.checked ? '有効' : '無効'} に切り替え`, 'ok');
     }
 
     // Battery gauge: only push if it changed AND chr is present.

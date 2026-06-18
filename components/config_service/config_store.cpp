@@ -43,6 +43,7 @@ constexpr const char* kKeyMicLipIn  = "mic_lip_in";  // mic input gain percent (
 constexpr const char* kKeyMicLipOut = "mic_lip_out"; // mouth output gain percent (u16)
 constexpr const char* kKeyLedMouthSync = "led_msync"; // u8 bool
 constexpr const char* kKeyOperationMode = "op_mode";  // u8 OperationMode
+constexpr const char* kKeyBargeIn       = "bargein_en"; // u8 bool
 
 std::string nvs_read_str(nvs_handle_t h, const char* key)
 {
@@ -172,6 +173,13 @@ DeviceConfig load()
     } else {
         ESP_LOGW(kTag, "nvs_get_u8(%s): %s", kKeyOperationMode, esp_err_to_name(op_err));
     }
+    std::uint8_t barge_in = cfg.barge_in_enabled ? 1 : 0;
+    esp_err_t bi_err = nvs_get_u8(h, kKeyBargeIn, &barge_in);
+    if (bi_err == ESP_OK) {
+        cfg.barge_in_enabled = (barge_in != 0);
+    } else if (bi_err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(kTag, "nvs_get_u8(%s): %s", kKeyBargeIn, esp_err_to_name(bi_err));
+    }
     nvs_close(h);
     return cfg;
 }
@@ -254,6 +262,13 @@ tl::expected<void, Error> save(const DeviceConfig& cfg)
     err = nvs_set_u8(h, kKeyOperationMode, static_cast<std::uint8_t>(cfg.operation_mode));
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "nvs_set_u8(%s): %s", kKeyOperationMode, esp_err_to_name(err));
+        nvs_close(h);
+        return tl::unexpected(Error::NvsWrite);
+    }
+
+    err = nvs_set_u8(h, kKeyBargeIn, cfg.barge_in_enabled ? 1 : 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "nvs_set_u8(%s): %s", kKeyBargeIn, esp_err_to_name(err));
         nvs_close(h);
         return tl::unexpected(Error::NvsWrite);
     }

@@ -598,6 +598,13 @@
         <input type="checkbox" id="openai-enabled" checked>
         <span>会話機能を有効にする</span>
       </label>
+
+      <h2 class="section-title">タッチ操作</h2>
+      <label class="toggle-label" for="barge-in-enabled">
+        <input type="checkbox" id="barge-in-enabled">
+        <span>頭タッチで会話を中断する (バージイン)</span>
+      </label>
+      <p class="hint">応答再生中にアバター画面 (頭) をタップで AI 応答を中断します。タッチ センサが敏感で誤動作しやすいので、初期値はオフです。なでなで (前→中→後の連続タッチ) は本トグルとは独立で常に有効です。保存後の再起動で反映されます。</p>
     </div>
   </section><!-- /tab-panel "chat" -->
 
@@ -1052,6 +1059,7 @@ async function refresh() {
     if (typeof s.operation_mode === 'number') {
       $('operation-mode').value = String(s.operation_mode);
     }
+    $('barge-in-enabled').checked = !!s.barge_in_enabled; // default false if absent
     $('rtp-enabled').checked = (s.rtp_audio_enabled !== false); // default on if absent
     $('jtts-idle-enabled').checked = (s.jtts_idle_enabled !== false); // default on if absent
     $('led-mouth-sync').checked = !!s.led_mouth_sync_enabled; // default off if absent
@@ -1138,6 +1146,7 @@ async function apply() {
     if (xzToken)   { await postText('/api/xiaozhi-token', xzToken);           log('XiaoZhi トークン送信', 'ok'); }
     await postText('/api/provider', provider);
     await postText('/api/operation-mode', $('operation-mode').value);
+    await postText('/api/barge-in', $('barge-in-enabled').checked ? '1' : '0');
     await postText('/api/openai-enabled', enabled ? '1' : '0');
     await postText('/api/rtp-enabled', rtpEnabled ? '1' : '0');
     await postText('/api/jtts-idle-enabled', jttsIdleEnabled ? '1' : '0');

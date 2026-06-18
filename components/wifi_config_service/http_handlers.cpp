@@ -57,6 +57,7 @@ struct StagingBuffer {
     std::optional<std::string> lt_config;
     std::optional<config::Provider> provider;
     std::optional<config::OperationMode> operation_mode;
+    std::optional<bool> barge_in_enabled;
 };
 
 config::DeviceConfig g_active;
@@ -261,6 +262,7 @@ esp_err_t handle_status_get(httpd_req_t* req)
     body += "\"servo_enabled\":" + std::string(cfg.servo_enabled ? "true" : "false") + ",";
     body += "\"led_mouth_sync_enabled\":" + std::string(cfg.led_mouth_sync_enabled ? "true" : "false") + ",";
     body += "\"operation_mode\":" + std::to_string(static_cast<int>(cfg.operation_mode)) + ",";
+    body += "\"barge_in_enabled\":" + std::string(cfg.barge_in_enabled ? "true" : "false") + ",";
     // Token itself is never returned; the UI only needs to know whether the
     // /mcp/* API is reachable (= has a token).
     body += "\"has_mcp_token\":" + std::string(g_mcp_active_token.empty() ? "false" : "true") + ",";
@@ -408,6 +410,17 @@ esp_err_t handle_operation_mode_post(httpd_req_t* req)
     return send_empty(req);
 }
 
+esp_err_t handle_barge_in_enabled_post(httpd_req_t* req)
+{
+    std::string body;
+    if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
+    const bool enabled = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_staging.barge_in_enabled = enabled;
+    xSemaphoreGive(g_mutex);
+    return send_empty(req);
+}
+
 esp_err_t handle_battery_gauge_post(httpd_req_t* req)
 {
     std::string body;
@@ -537,6 +550,7 @@ esp_err_t handle_apply_post(httpd_req_t* req)
     if (g_staging.jtts_idle_enabled) merged.jtts_idle_enabled = *g_staging.jtts_idle_enabled;
     if (g_staging.led_mouth_sync_enabled) merged.led_mouth_sync_enabled = *g_staging.led_mouth_sync_enabled;
     if (g_staging.operation_mode) merged.operation_mode = *g_staging.operation_mode;
+    if (g_staging.barge_in_enabled) merged.barge_in_enabled = *g_staging.barge_in_enabled;
     if (g_staging.battery_gauge_enabled) merged.battery_gauge_enabled = *g_staging.battery_gauge_enabled;
     if (g_staging.servo_enabled)   merged.servo_enabled = *g_staging.servo_enabled;
     if (g_staging.mcp_api_token)   merged.mcp_api_token = *g_staging.mcp_api_token;
@@ -942,6 +956,7 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/jtts-idle-enabled", HTTP_POST, handle_jtts_idle_enabled_post);
     add(server, "/api/led-mouth-sync",  HTTP_POST, handle_led_mouth_sync_post);
     add(server, "/api/operation-mode",  HTTP_POST, handle_operation_mode_post);
+    add(server, "/api/barge-in",        HTTP_POST, handle_barge_in_enabled_post);
     add(server, "/api/battery-gauge",   HTTP_POST, handle_battery_gauge_post);
     add(server, "/api/servo-enabled",   HTTP_POST, handle_servo_enabled_post);
     add(server, "/api/mcp-token",       HTTP_POST, handle_mcp_token_post);

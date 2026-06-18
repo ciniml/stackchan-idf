@@ -136,6 +136,12 @@ public:
     // semantics (NVS-persisted, not a slider). Off by default.
     std::atomic<bool> led_mouth_sync_enabled{false};
 
+    // Touch barge-in master switch. Read on every nadenade-detect tick in
+    // demo_loop; when false the screen-tap path that sets
+    // `barge_in_request` is skipped entirely. Seeded from
+    // DeviceConfig::barge_in_enabled at boot.
+    std::atomic<bool> barge_in_enabled{false};
+
     // LT timekeeper (main/lt_timer.cpp; ticked by demo_loop). The on-device
     // LT tab writes lt_command / lt_total_s and renders lt_active /
     // lt_remaining_s. Command is exchange()d to 0 by the timer so each press

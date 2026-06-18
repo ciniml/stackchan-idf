@@ -438,6 +438,7 @@ void demo_loop(const std::string& jtts_config_json, bool has_battery, bool is_at
                 // interrupts. The conversation task consumes this during
                 // playback.
                 if (!ui_before && !app::ui::active() &&
+                    g_state->barge_in_enabled.load(std::memory_order_relaxed) &&
                     g_state->conversation_active.load(std::memory_order_relaxed) &&
                     !g_state->conversation_idle.load(std::memory_order_relaxed)) {
                     g_state->barge_in_request.store(true, std::memory_order_relaxed);
@@ -887,6 +888,8 @@ extern "C" void app_main()
         std::memory_order_relaxed);
     g_state->led_mouth_sync_enabled.store(cfg.led_mouth_sync_enabled,
                                           std::memory_order_relaxed);
+    g_state->barge_in_enabled.store(cfg.barge_in_enabled,
+                                    std::memory_order_relaxed);
     stackchan::config::set_face_config_sink(&on_face_config);
     stackchan::config::set_lt_config_sink(+[](std::string_view json) {
         if (g_state != nullptr) g_state->set_lt_config(json);

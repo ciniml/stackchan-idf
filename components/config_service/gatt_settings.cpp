@@ -289,6 +289,12 @@ static const ble_uuid128_t kLedMouthSyncUuid = BLE_UUID128_INIT(
 static const ble_uuid128_t kOperationModeUuid = BLE_UUID128_INIT(
     0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
     0x2a, 0x4d, 0x1c, 0x7b, 0x25, 0xa0, 0xf0, 0xe3);
+// BargeInEnabled — encrypted 1-byte flag. When 1, a screen tap during AI
+// reply playback fires barge_in_request; otherwise the tap is ignored.
+// Defaults off (false positives from incidental touch were too easy).
+static const ble_uuid128_t kBargeInEnabledUuid = BLE_UUID128_INIT(
+    0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
+    0x2a, 0x4d, 0x1c, 0x7b, 0x26, 0xa0, 0xf0, 0xe3);
 
 // --- Mutable state guarded by g_mutex ---
 static SemaphoreHandle_t g_mutex = nullptr;
@@ -306,6 +312,7 @@ struct StagingBuffer {
     std::optional<std::string> lt_config;
     std::optional<Provider> provider;
     std::optional<OperationMode> operation_mode;
+    std::optional<bool> barge_in_enabled;
 };
 
 static DeviceConfig g_active;
@@ -346,6 +353,7 @@ static MicLipGainGetter g_mic_lip_gain_getter = nullptr;
 static MicLipGainSink g_mic_lip_gain_sink = nullptr;
 static uint16_t g_led_mouth_sync_handle = 0;
 static uint16_t g_operation_mode_handle = 0;
+static uint16_t g_barge_in_enabled_handle = 0;
 static uint16_t g_avatar_bc_handle = 0;
 static AvatarBytecodeSink g_avatar_bc_sink = nullptr;
 
@@ -610,6 +618,17 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
                 return BLE_ATT_ERR_UNLIKELY;
             }
             const std::uint8_t byte = static_cast<std::uint8_t>(g_active.operation_mode);
+            const bool ok = append_encrypted(ctxt->om, {&byte, 1});
+            xSemaphoreGive(g_mutex);
+            return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
+        }
+        if (attr_handle == g_barge_in_enabled_handle) {
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            if (!g_session.is_established()) {
+                xSemaphoreGive(g_mutex);
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            const std::uint8_t byte = g_active.barge_in_enabled ? 1 : 0;
             const bool ok = append_encrypted(ctxt->om, {&byte, 1});
             xSemaphoreGive(g_mutex);
             return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
@@ -1041,6 +1060,13 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             xSemaphoreGive(g_mutex);
             return 0;
         }
+        if (attr_handle == g_barge_in_enabled_handle) {
+            if (pt.size() != 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            g_staging.barge_in_enabled = (pt[0] != 0);
+            xSemaphoreGive(g_mutex);
+            return 0;
+        }
         if (attr_handle == g_bat_gauge_handle) {
             if (pt.size() != 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             xSemaphoreTake(g_mutex, portMAX_DELAY);
@@ -1317,6 +1343,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (g_staging.jtts_idle_enabled) merged.jtts_idle_enabled = *g_staging.jtts_idle_enabled;
             if (g_staging.led_mouth_sync_enabled) merged.led_mouth_sync_enabled = *g_staging.led_mouth_sync_enabled;
             if (g_staging.operation_mode) merged.operation_mode = *g_staging.operation_mode;
+            if (g_staging.barge_in_enabled) merged.barge_in_enabled = *g_staging.barge_in_enabled;
             if (g_staging.battery_gauge_enabled) merged.battery_gauge_enabled = *g_staging.battery_gauge_enabled;
             if (g_staging.servo_enabled) merged.servo_enabled = *g_staging.servo_enabled;
             if (g_staging.mcp_api_token) merged.mcp_api_token = *g_staging.mcp_api_token;
@@ -1499,6 +1526,12 @@ static ble_gatt_chr_def kChrs[] = {
         // R = current mode byte; W = stage new mode for Apply (reboot).
         .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
         .val_handle = &g_operation_mode_handle,
+    },
+    {
+        .uuid = &kBargeInEnabledUuid.u,
+        .access_cb = gatt_access_cb,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+        .val_handle = &g_barge_in_enabled_handle,
     },
     {
         .uuid = &kBoardKindUuid.u,
