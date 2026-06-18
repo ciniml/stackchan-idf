@@ -832,6 +832,11 @@
           <input type="range" id="led-period" min="1" max="255" step="1" value="60" style="width:100%">
         </div>
       </div>
+      <label class="toggle-label" for="led-mouth-sync" style="margin-top:1rem">
+        <input type="checkbox" id="led-mouth-sync">
+        <span>口の動きに合わせて輝度を変化させる</span>
+      </label>
+      <p class="hint">アバターの口が開くほど LED が明るくなります (会話再生・jtts 発話・マイク リップシンク いずれの口元アニメーションでも有効)。OFF のときは設定した明るさ で固定。保存後の再起動で反映されます。</p>
     </div>
   </section><!-- /tab-panel "device" -->
 
@@ -957,6 +962,9 @@ const CHR_LED_STATE = 'e3f0a020-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // Live calibration for main/mic_lip_sync_task. NVS-persisted; same wire format
 // as `GET/POST /api/mic-lip-gain` on the WiFi side.
 const CHR_MIC_LIP_GAIN = 'e3f0a023-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+// LedMouthSyncEnabled — encrypted 1-byte flag. When 1, the LED brightness
+// follows the avatar's mouth_open. Staged via Apply path (reboot required).
+const CHR_LED_MOUTH_SYNC = 'e3f0a024-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // AvatarBytecode — encrypted RW. Chunked upload of the avatar face .avbc
 // (mirrors `POST /api/avatar-dsl` on the HTTP side). READ returns a status
 // JSON; WRITE accepts a 1-byte op header followed by op-specific payload:
@@ -1014,7 +1022,7 @@ const DIS_CHRS = {
 
 // --- State ---
 let bleDevice = null, bleServer = null, svc = null;
-let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJttsIdleEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null, chrMicLipGain = null, chrAvatarBc = null;
+let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJttsIdleEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null, chrMicLipGain = null, chrLedMouthSync = null, chrAvatarBc = null;
 let boardKind = null; // null = unknown (older firmware), else 0/1/2 from BOARD_*
 let batteryPollTimer = null;  // setInterval handle while connected
 let jttsInitialJson = '';  // last read JSON, used to detect Apply-time changes
@@ -2069,6 +2077,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       ['audioMetrics', CHR_AUDIO_METRICS],
       ['ledState',  CHR_LED_STATE],
       ['micLipGain', CHR_MIC_LIP_GAIN],
+      ['ledMouthSync', CHR_LED_MOUTH_SYNC],
       ['avatarBc',  CHR_AVATAR_BC],
     ];
     const settled = await Promise.allSettled(
@@ -2114,6 +2123,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
     chrAudioMetrics = found.audioMetrics ?? null;
     chrLedState = found.ledState ?? null;
     chrMicLipGain = found.micLipGain ?? null;
+    chrLedMouthSync = found.ledMouthSync ?? null;
     chrAvatarBc = found.avatarBc ?? null;
     log(`Characteristics 取得完了 (missing: ${missing.length ? missing.join(', ') : 'none'})`,
         missing.length ? 'info' : 'ok');
@@ -2192,6 +2202,18 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
         log(`jtts アイドル発話: ${enabled ? '有効' : '無効'}`);
       } catch (e) {
         log(`jtts アイドル発話 状態の取得失敗: ${e.message}`, 'err');
+      }
+    }
+
+    if (chrLedMouthSync) {
+      try {
+        const lmsBytes = await readEncrypted(chrLedMouthSync);
+        const enabled = lmsBytes.length > 0 && lmsBytes[0] !== 0;
+        document.getElementById('led-mouth-sync').checked = enabled;
+        document.getElementById('led-mouth-sync').dataset.initial = enabled ? '1' : '0';
+        log(`LED 口の動きと連動: ${enabled ? '有効' : '無効'}`);
+      } catch (e) {
+        log(`LED 連動 状態の取得失敗: ${e.message}`, 'err');
       }
     }
 
@@ -2370,7 +2392,7 @@ function onDisconnected() {
   micLipLoaded = false;
   svRangeOn = false;
   svLiveYaw = svLivePitch = -1;
-  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJttsIdleEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoEnabled = chrMcpToken = chrLtConfig = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = chrAudioMetrics = chrLedState = chrMicLipGain = chrAvatarBc = null;
+  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJttsIdleEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoEnabled = chrMcpToken = chrLtConfig = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = chrAudioMetrics = chrLedState = chrMicLipGain = chrLedMouthSync = chrAvatarBc = null;
   if (typeof refreshAvbcButton === 'function') refreshAvbcButton();
   boardKind = null;
   aesKey = null;
@@ -2378,6 +2400,7 @@ function onDisconnected() {
   delete document.getElementById('openai-enabled').dataset.initial;
   delete document.getElementById('rtp-enabled').dataset.initial;
   delete document.getElementById('jtts-idle-enabled').dataset.initial;
+  delete document.getElementById('led-mouth-sync').dataset.initial;
   delete document.getElementById('bat-gauge-enabled').dataset.initial;
   delete document.getElementById('servo-enabled').dataset.initial;
   delete document.getElementById('provider').dataset.initial;
@@ -2480,6 +2503,15 @@ document.getElementById('btn-apply').addEventListener('click', async () => {
     if (chrJttsIdleEn && jiInitial !== undefined && jiInitial !== jiWanted) {
       await writeEncrypted(chrJttsIdleEn, new Uint8Array([jiCheckbox.checked ? 1 : 0]));
       log(`jtts アイドル発話を ${jiCheckbox.checked ? '有効' : '無効'} に切り替え`, 'ok');
+    }
+
+    // LED mouth-sync: only push if it changed AND chr is present.
+    const lmsCheckbox = document.getElementById('led-mouth-sync');
+    const lmsInitial = lmsCheckbox.dataset.initial;
+    const lmsWanted = lmsCheckbox.checked ? '1' : '0';
+    if (chrLedMouthSync && lmsInitial !== undefined && lmsInitial !== lmsWanted) {
+      await writeEncrypted(chrLedMouthSync, new Uint8Array([lmsCheckbox.checked ? 1 : 0]));
+      log(`LED 口の動き連動を ${lmsCheckbox.checked ? '有効' : '無効'} に切り替え`, 'ok');
     }
 
     // Battery gauge: only push if it changed AND chr is present.

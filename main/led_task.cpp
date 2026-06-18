@@ -78,10 +78,26 @@ void led_task_entry(void* arg)
     for (;;) {
         const std::uint8_t mode = state.led_mode.load(std::memory_order_relaxed);
         const std::uint32_t color = state.led_color.load(std::memory_order_relaxed);
-        const std::uint8_t bright = state.led_brightness.load(std::memory_order_relaxed);
+        const std::uint8_t base_bright = state.led_brightness.load(std::memory_order_relaxed);
         const std::uint8_t cr = static_cast<std::uint8_t>((color >> 16) & 0xFF);
         const std::uint8_t cg = static_cast<std::uint8_t>((color >>  8) & 0xFF);
         const std::uint8_t cb = static_cast<std::uint8_t>( color        & 0xFF);
+
+        // When the user opts into mouth-driven brightness, blend the base
+        // brightness with the avatar's current mouth opening. Quiet → base
+        // (resting glow), mouth wide open → 255 (full strip drive). All
+        // mouth_open writers (mic lip-sync, jtts babble, conversation
+        // playback) feed through the same atomic so the ears pulse for
+        // every audio source. Off → use base_bright unchanged.
+        std::uint8_t bright = base_bright;
+        if (state.led_mouth_sync_enabled.load(std::memory_order_relaxed)) {
+            float m = state.mouth_open.load(std::memory_order_relaxed);
+            if (m < 0.0f) m = 0.0f;
+            if (m > 1.0f) m = 1.0f;
+            const float blended = static_cast<float>(base_bright)
+                + (255.0f - static_cast<float>(base_bright)) * m;
+            bright = static_cast<std::uint8_t>(blended < 0 ? 0 : (blended > 255 ? 255 : blended));
+        }
 
         const float t = now_ms() / 1000.0f;
 

@@ -600,6 +600,12 @@
         <span>サーボを有効にする</span>
       </label>
       <p class="hint">無効にするとサーボ電源を入れず、サーボタスクも起動しません（保存後の再起動で反映）。操作画面の脱力/復帰トグルとは別物で、こちらは NVS に永続化されます。</p>
+
+      <label class="toggle-label" for="led-mouth-sync" style="margin-top:1rem">
+        <input type="checkbox" id="led-mouth-sync">
+        <span>ネコミミ LED の輝度を口の動きと連動させる</span>
+      </label>
+      <p class="hint">アバターの口が開くほど LED が明るくなります (会話再生・jtts 発話・マイク リップシンク いずれの口元アニメーションでも有効)。OFF のときは設定した明るさで固定。保存後の再起動で反映されます。</p>
     </div>
 
     <div id="servo-section">
@@ -1029,6 +1035,7 @@ async function refresh() {
     $('openai-enabled').checked = !!s.openai_enabled;
     $('rtp-enabled').checked = (s.rtp_audio_enabled !== false); // default on if absent
     $('jtts-idle-enabled').checked = (s.jtts_idle_enabled !== false); // default on if absent
+    $('led-mouth-sync').checked = !!s.led_mouth_sync_enabled; // default off if absent
     $('bat-gauge-enabled').checked = (s.battery_gauge_enabled !== false); // default on if absent
     $('servo-enabled').checked = (s.servo_enabled !== false); // default on if absent
     $('mcp-token-state').textContent = s.has_mcp_token ? '設定済' : '未設定';
@@ -1097,6 +1104,7 @@ async function apply() {
     const enabled = $('openai-enabled').checked;
     const rtpEnabled = $('rtp-enabled').checked;
     const jttsIdleEnabled = $('jtts-idle-enabled').checked;
+    const ledMouthSync = $('led-mouth-sync').checked;
     const batGauge = $('bat-gauge-enabled').checked;
     const servoEn = $('servo-enabled').checked;
     const jtts = readJttsForm();
@@ -1113,6 +1121,7 @@ async function apply() {
     await postText('/api/openai-enabled', enabled ? '1' : '0');
     await postText('/api/rtp-enabled', rtpEnabled ? '1' : '0');
     await postText('/api/jtts-idle-enabled', jttsIdleEnabled ? '1' : '0');
+    await postText('/api/led-mouth-sync', ledMouthSync ? '1' : '0');
     await postText('/api/battery-gauge', batGauge ? '1' : '0');
     await postText('/api/servo-enabled', servoEn ? '1' : '0');
     // MCP token: send only when the user typed something OR explicitly hit

@@ -111,6 +111,12 @@ struct DeviceConfig {
     // mouth response; users can dial down on noisier boards.
     std::uint16_t mic_lip_input_gain_pct = 200;
     std::uint16_t mic_lip_output_gain_pct = 100;
+    // Modulate the nekomimi LED brightness with SharedState::mouth_open so the
+    // ears pulse along with whatever's driving the avatar's mouth (mic
+    // lip-sync, jtts babble, conversation playback, …). Off by default —
+    // opt-in to keep the default look conservative. Implemented in
+    // main/led_task.cpp: brightness = base + (max - base) * mouth_open.
+    bool led_mouth_sync_enabled = false;
 };
 
 enum class Error {

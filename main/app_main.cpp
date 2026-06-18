@@ -861,6 +861,8 @@ extern "C" void app_main()
     g_state->mic_lip_output_gain_pct.store(
         cfg.mic_lip_output_gain_pct ? cfg.mic_lip_output_gain_pct : 100,
         std::memory_order_relaxed);
+    g_state->led_mouth_sync_enabled.store(cfg.led_mouth_sync_enabled,
+                                          std::memory_order_relaxed);
     stackchan::config::set_face_config_sink(&on_face_config);
     stackchan::config::set_lt_config_sink(+[](std::string_view json) {
         if (g_state != nullptr) g_state->set_lt_config(json);

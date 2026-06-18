@@ -41,6 +41,7 @@ constexpr const char* kKeyLedBright = "led_bright";
 constexpr const char* kKeyLedPeriod = "led_period";  // gradient revolution period, deciseconds
 constexpr const char* kKeyMicLipIn  = "mic_lip_in";  // mic input gain percent (u16)
 constexpr const char* kKeyMicLipOut = "mic_lip_out"; // mouth output gain percent (u16)
+constexpr const char* kKeyLedMouthSync = "led_msync"; // u8 bool
 
 std::string nvs_read_str(nvs_handle_t h, const char* key)
 {
@@ -149,6 +150,10 @@ DeviceConfig load()
     if (nvs_get_u16(h, kKeyMicLipIn, &mic_in) == ESP_OK) cfg.mic_lip_input_gain_pct = mic_in;
     std::uint16_t mic_out = cfg.mic_lip_output_gain_pct;
     if (nvs_get_u16(h, kKeyMicLipOut, &mic_out) == ESP_OK) cfg.mic_lip_output_gain_pct = mic_out;
+    std::uint8_t led_msync = cfg.led_mouth_sync_enabled ? 1 : 0;
+    if (nvs_get_u8(h, kKeyLedMouthSync, &led_msync) == ESP_OK) {
+        cfg.led_mouth_sync_enabled = (led_msync != 0);
+    }
     nvs_close(h);
     return cfg;
 }
@@ -217,6 +222,13 @@ tl::expected<void, Error> save(const DeviceConfig& cfg)
     err = nvs_set_u8(h, kKeyServoEnabled, cfg.servo_enabled ? 1 : 0);
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "nvs_set_u8(%s): %s", kKeyServoEnabled, esp_err_to_name(err));
+        nvs_close(h);
+        return tl::unexpected(Error::NvsWrite);
+    }
+
+    err = nvs_set_u8(h, kKeyLedMouthSync, cfg.led_mouth_sync_enabled ? 1 : 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "nvs_set_u8(%s): %s", kKeyLedMouthSync, esp_err_to_name(err));
         nvs_close(h);
         return tl::unexpected(Error::NvsWrite);
     }
