@@ -659,18 +659,31 @@ private:
         ESP_LOGI(kTag, "speaking (streaming)");
     }
 
-    // Mouth-open is derived on the fly from the 16 ms window of reply audio
-    // currently being played — no precomputed envelope, so it works while
-    // assistant_pcm_ is still being streamed in.
+    // Mouth-open is derived on the fly from the most-recently-queued 16 ms
+    // window of reply audio — no precomputed envelope, so it works while
+    // assistant_pcm_ is still being streamed in. We use seg_pos_ (the
+    // sample-accurate queue cursor) rather than wall-clock elapsed so the
+    // envelope tracks actual playback even when the stream falls behind
+    // real-time. The old wall-clock derivation silently stuck the mouth at
+    // 0 whenever the network/decoder couldn't keep up with realtime: once
+    // (elapsed/step)*window overtook assistant_pcm_.size(), the
+    // out-of-bounds guard short-circuited and the mouth never moved again
+    // for the rest of the reply, even though the speaker kept playing.
+    // seg_pos_ is bounded by assistant_pcm_.size() in service_playback,
+    // so the window we read is always populated.
+    //
+    // The window we sample ends at seg_pos_ (newest queued samples) rather
+    // than where DMA is physically playing — that lags by up to
+    // 2 × kSegmentSamples (≈30–50 ms), which is below the perceptual
+    // threshold and avoids needing a DMA position read out of M5.Speaker.
     void update_mouth()
     {
         const std::size_t window = speaker_sample_rate_ * kEnvelopeStepMs / 1000u;
-        const std::uint32_t elapsed = now_ms() - playback_start_ms_;
-        const std::size_t begin = (elapsed / kEnvelopeStepMs) * window;
-        if (begin + window > assistant_pcm_.size()) {
+        if (seg_pos_ < window) {
             state_.mouth_open.store(0.0f, std::memory_order_relaxed);
             return;
         }
+        const std::size_t begin = seg_pos_ - window;
         std::int32_t peak = 0;
         for (std::size_t i = begin; i < begin + window; ++i) {
             peak = std::max(peak, std::abs(static_cast<std::int32_t>(assistant_pcm_[i])));
