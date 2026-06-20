@@ -68,6 +68,16 @@ avatar::FaceTuning parse_face_tuning(std::string_view json)
     apply_int(root, "mouth_minh", t.mouth_min_h);
     apply_int(root, "mouth_maxh", t.mouth_max_h);
 
+    const cJSON* cheek = cJSON_GetObjectItemCaseSensitive(root, "cheek");
+    if (cJSON_IsBool(cheek)) {
+        t.cheeks_visible = cJSON_IsTrue(cheek);
+    } else if (cJSON_IsNumber(cheek)) {
+        t.cheeks_visible = cheek->valueint != 0;
+    }
+    apply_number(root, "cheek_r", t.cheek_radius);
+    apply_number(root, "cheek_ox", t.cheek_off_x);
+    apply_number(root, "cheek_oy", t.cheek_off_y);
+
     const cJSON* face_color = cJSON_GetObjectItemCaseSensitive(root, "face_color");
     if (cJSON_IsString(face_color)) t.face_color = hex_to_565(face_color->valuestring, t.face_color);
     const cJSON* bg_color = cJSON_GetObjectItemCaseSensitive(root, "bg_color");

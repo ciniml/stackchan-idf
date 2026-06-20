@@ -299,6 +299,20 @@ EMSCRIPTEN_KEEPALIVE void avatar_set_eyebrow_params(float off_x, float off_y)
     g_direct.request_full_repaint();
 }
 
+EMSCRIPTEN_KEEPALIVE void avatar_set_cheeks_visible(int on)
+{
+    g_tune.cheeks_visible = on != 0;
+    g_direct.request_full_repaint();
+}
+
+EMSCRIPTEN_KEEPALIVE void avatar_set_cheek_params(float radius, float off_x, float off_y)
+{
+    g_tune.cheek_radius = radius < 1.0f ? 1.0f : radius;
+    g_tune.cheek_off_x = off_x;
+    g_tune.cheek_off_y = off_y;
+    g_direct.request_full_repaint();
+}
+
 EMSCRIPTEN_KEEPALIVE void avatar_set_mouth_params(float off_x, float off_y,
                                                   int min_w, int max_w, int min_h, int max_h)
 {

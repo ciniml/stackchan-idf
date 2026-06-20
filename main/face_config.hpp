@@ -18,6 +18,7 @@ namespace stackchan::app {
 //   {"brow":0|1, "eye_r":<num>, "eye_ox":<num>, "eye_oy":<num>,
 //    "brow_ox":<num>, "brow_oy":<num>, "mouth_ox":<num>, "mouth_oy":<num>,
 //    "mouth_minw":<int>, "mouth_maxw":<int>, "mouth_minh":<int>, "mouth_maxh":<int>,
+//    "cheek":0|1, "cheek_r":<num>, "cheek_ox":<num>, "cheek_oy":<num>,
 //    "face_color":"#rrggbb", "bg_color":"#rrggbb"}
 avatar::FaceTuning parse_face_tuning(std::string_view json);
 

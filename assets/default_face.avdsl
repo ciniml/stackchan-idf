@@ -188,5 +188,16 @@ fn draw()
     eyebrow(tx(96  - brow_off_x), ty(67 + brow_off_y), bw, bh, false, bo)
     eyebrow(tx(230 + brow_off_x), ty(72 + brow_off_y), bw, bh, true,  bo)
   end
+  -- Optional cheek marks (off by default — opt-in via FaceTuning so the
+  -- standard face is unchanged for existing users). Same horizontal-
+  -- symmetric layout as the eyes / brows: positive cheek_off_x spreads
+  -- the pair outward. Drawn as soft filled circles in primary colour.
+  if cheeks_visible then
+    let cr = sz(cheek_radius)
+    -- Resting cheek baseline at y=140 in 320x240 design space, just
+    -- below the eyes and above the mouth.
+    fill_circle(tx(90  - cheek_off_x), ty(140 + cheek_off_y), cr, primary)
+    fill_circle(tx(230 + cheek_off_x), ty(140 + cheek_off_y), cr, primary)
+  end
   effect()
 end

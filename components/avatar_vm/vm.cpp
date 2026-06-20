@@ -73,6 +73,10 @@ inline float read_var(Var v, const avatar::Canvas& canvas, const avatar::DrawCon
     case Var::MouthMinH: return static_cast<float>(t.mouth_min_h);
     case Var::MouthMaxH: return static_cast<float>(t.mouth_max_h);
     case Var::EyebrowsVisible: return t.eyebrows_visible ? 1.0f : 0.0f;
+    case Var::CheeksVisible: return t.cheeks_visible ? 1.0f : 0.0f;
+    case Var::CheekRadius: return t.cheek_radius;
+    case Var::CheekOffX: return t.cheek_off_x;
+    case Var::CheekOffY: return t.cheek_off_y;
     default: return 0.0f;
     }
 }

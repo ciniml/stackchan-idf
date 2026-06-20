@@ -99,6 +99,10 @@ enum class Var : std::uint8_t {
     MouthMinH = 0x18,
     MouthMaxH = 0x19,
     EyebrowsVisible = 0x1A,
+    CheeksVisible = 0x1B,
+    CheekRadius = 0x1C,
+    CheekOffX = 0x1D,
+    CheekOffY = 0x1E,
     VarCount,
 };
 

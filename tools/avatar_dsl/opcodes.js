@@ -68,6 +68,10 @@ export const Var = Object.freeze({
   mouth_min_h: 0x18,
   mouth_max_h: 0x19,
   eyebrows_visible: 0x1A,
+  cheeks_visible: 0x1B,
+  cheek_radius: 0x1C,
+  cheek_off_x: 0x1D,
+  cheek_off_y: 0x1E,
 });
 
 export const ConstTag = Object.freeze({

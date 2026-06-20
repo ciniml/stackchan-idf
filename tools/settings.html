@@ -511,6 +511,17 @@
       <div class="av-row"><label for="av-mouth-maxh">開口 最大 (開)</label>
         <input type="range" id="av-mouth-maxh" min="2" max="120" step="1" value="60">
         <span class="av-val" id="av-mouth-maxh-v">60</span></div>
+      <div class="av-row"><label for="av-cheek-show">ほっぺを表示</label>
+        <input type="checkbox" id="av-cheek-show"></div>
+      <div class="av-row"><label for="av-cheek-r">ほっぺ 半径</label>
+        <input type="range" id="av-cheek-r" min="2" max="30" step="0.5" value="10">
+        <span class="av-val" id="av-cheek-r-v">10.0</span></div>
+      <div class="av-row"><label for="av-cheek-ox">ほっぺ 横オフセット</label>
+        <input type="range" id="av-cheek-ox" min="-40" max="40" step="1" value="0">
+        <span class="av-val" id="av-cheek-ox-v">0</span></div>
+      <div class="av-row"><label for="av-cheek-oy">ほっぺ 縦オフセット</label>
+        <input type="range" id="av-cheek-oy" min="-40" max="40" step="1" value="0">
+        <span class="av-val" id="av-cheek-oy-v">0</span></div>
       <div class="av-row"><label for="av-col-face">顔の色</label>
         <input type="color" id="av-col-face" value="#ffffff"></div>
       <div class="av-row"><label for="av-col-bg">背景色</label>
@@ -2768,10 +2779,12 @@ loadOtaReleases();
 // reboot). "保存 & 再起動" persists the last value to NVS device-side.
 const AV_READOUT = { 'av-eye-r': 1, 'av-eye-ox': 0, 'av-eye-oy': 0,
   'av-brow-ox': 0, 'av-brow-oy': 0, 'av-mouth-ox': 0, 'av-mouth-oy': 0,
-  'av-mouth-minw': 0, 'av-mouth-maxw': 0, 'av-mouth-minh': 0, 'av-mouth-maxh': 0 };
+  'av-mouth-minw': 0, 'av-mouth-maxw': 0, 'av-mouth-minh': 0, 'av-mouth-maxh': 0,
+  'av-cheek-r': 1, 'av-cheek-ox': 0, 'av-cheek-oy': 0 };
 const AV_CONTROL_IDS = ['av-brow-show', 'av-eye-r', 'av-eye-ox', 'av-eye-oy',
   'av-brow-ox', 'av-brow-oy', 'av-mouth-ox', 'av-mouth-oy',
   'av-mouth-minw', 'av-mouth-maxw', 'av-mouth-minh', 'av-mouth-maxh',
+  'av-cheek-show', 'av-cheek-r', 'av-cheek-ox', 'av-cheek-oy',
   'av-col-face', 'av-col-bg'];
 
 let avModule = null;     // resolved AvatarModule instance, or null when absent
@@ -2799,6 +2812,10 @@ function avPushPreview() {
   m._avatar_set_eyebrow_params(avNum('av-brow-ox'), avNum('av-brow-oy'));
   m._avatar_set_mouth_params(avNum('av-mouth-ox'), avNum('av-mouth-oy'),
     avInt('av-mouth-minw'), avInt('av-mouth-maxw'), avInt('av-mouth-minh'), avInt('av-mouth-maxh'));
+  if (typeof m._avatar_set_cheeks_visible === 'function') {
+    m._avatar_set_cheeks_visible(avEl('av-cheek-show').checked ? 1 : 0);
+    m._avatar_set_cheek_params(avNum('av-cheek-r'), avNum('av-cheek-ox'), avNum('av-cheek-oy'));
+  }
   m._avatar_set_colors(avHexRgb(avEl('av-col-face').value), avHexRgb(avEl('av-col-bg').value));
 }
 
@@ -2811,6 +2828,8 @@ function avFaceConfigJson() {
     mouth_ox: avNum('av-mouth-ox'), mouth_oy: avNum('av-mouth-oy'),
     mouth_minw: avInt('av-mouth-minw'), mouth_maxw: avInt('av-mouth-maxw'),
     mouth_minh: avInt('av-mouth-minh'), mouth_maxh: avInt('av-mouth-maxh'),
+    cheek: avEl('av-cheek-show').checked ? 1 : 0,
+    cheek_r: avNum('av-cheek-r'), cheek_ox: avNum('av-cheek-ox'), cheek_oy: avNum('av-cheek-oy'),
     face_color: avEl('av-col-face').value, bg_color: avEl('av-col-bg').value });
 }
 
@@ -2843,6 +2862,8 @@ function seedAvatarControls(json) {
   set('av-mouth-ox', o.mouth_ox); set('av-mouth-oy', o.mouth_oy);
   set('av-mouth-minw', o.mouth_minw); set('av-mouth-maxw', o.mouth_maxw);
   set('av-mouth-minh', o.mouth_minh); set('av-mouth-maxh', o.mouth_maxh);
+  if ('cheek' in o) avEl('av-cheek-show').checked = !!o.cheek;
+  set('av-cheek-r', o.cheek_r); set('av-cheek-ox', o.cheek_ox); set('av-cheek-oy', o.cheek_oy);
   if (typeof o.face_color === 'string') set('av-col-face', o.face_color);
   if (typeof o.bg_color === 'string') set('av-col-bg', o.bg_color);
   avUpdateReadouts();
