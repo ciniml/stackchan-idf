@@ -72,6 +72,13 @@ constexpr TickType_t kI2sSettle = pdMS_TO_TICKS(20);
 // Recover from a stuck "Thinking" (no audio, no tool follow-up) after this long.
 constexpr std::uint32_t kThinkingTimeoutMs = 15000;
 
+// Recover from a stuck "Speaking" (assistant playback drained but the
+// generationComplete / interrupted / turnComplete event never arrived,
+// so finish_speaking() can't fire on its own). Long enough to cover the
+// worst legitimate reply length we've seen, short enough to unstick the
+// avatar inside a single user-noticeable pause. See GitHub issue #2.
+constexpr std::uint32_t kSpeakingTimeoutMs = 30000;
+
 // Local half-duplex state machine. Distinct from conv::ConversationState
 // (which tracks the protocol) because we hold "Speaking" until the speaker
 // has physically drained, independent of when response.done arrives.
@@ -508,7 +515,19 @@ private:
             }
             break;
         case Local::Speaking:
-            service_playback();
+            // Belt-and-braces timeout: if the assistant has been "speaking"
+            // for longer than any realistic reply, force the same path
+            // finish_speaking() would have taken once audio_complete_
+            // flipped. Otherwise a missed generationComplete (e.g. Gemini
+            // Live `interrupted` without the fall-through) leaves us stuck
+            // here forever with mouth_open frozen at 0. See issue #2.
+            if (now_ms() - playback_start_ms_ > kSpeakingTimeoutMs) {
+                ESP_LOGW(kTag, "speaking timed out (%u ms), forcing finish",
+                         static_cast<unsigned>(now_ms() - playback_start_ms_));
+                finish_speaking();
+            } else {
+                service_playback();
+            }
             break;
         case Local::Yielded:
             // Handled at the top of run() — we should never actually

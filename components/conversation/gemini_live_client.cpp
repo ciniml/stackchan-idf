@@ -646,10 +646,19 @@ private:
             }
         }
 
-        // interrupted: barge-in (user spoke over the model).
-        const cJSON* interrupted = cJSON_GetObjectItemCaseSensitive(sc, "interrupted");
-        if (cJSON_IsTrue(interrupted)) {
-            ESP_LOGI(kTag, "serverContent.interrupted");
+        // interrupted: the server cut the model's audio stream short (server-
+        // side VAD detected the user speaking over the reply, or another
+        // back-pressure signal). The model will NOT emit generationComplete
+        // for this turn, so we need to drive the same downstream cleanup as
+        // generationComplete — otherwise conversation_task stays stuck in
+        // Local::Speaking (audio_complete_ never flips to true) and mouth_open
+        // freezes at 0 because update_mouth() exhausts assistant_pcm_. See
+        // GitHub issue #2.
+        if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(sc, "interrupted"))) {
+            ESP_LOGI(kTag, "serverContent.interrupted → AssistantAudioDone");
+            ConversationEvent ev{};
+            ev.type = ConversationEventType::AssistantAudioDone;
+            emit(ev);
         }
 
         // generationComplete: model has finished generating audio. Mirror
