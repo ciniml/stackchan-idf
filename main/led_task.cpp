@@ -83,20 +83,23 @@ void led_task_entry(void* arg)
         const std::uint8_t cg = static_cast<std::uint8_t>((color >>  8) & 0xFF);
         const std::uint8_t cb = static_cast<std::uint8_t>( color        & 0xFF);
 
-        // When the user opts into mouth-driven brightness, blend the base
-        // brightness with the avatar's current mouth opening. Quiet → base
-        // (resting glow), mouth wide open → 255 (full strip drive). All
-        // mouth_open writers (mic lip-sync, jtts babble, conversation
-        // playback) feed through the same atomic so the ears pulse for
-        // every audio source. Off → use base_bright unchanged.
+        // When the user opts into mouth-driven brightness, scale the strip
+        // brightness with the avatar's current mouth opening so the user's
+        // configured brightness acts as the *ceiling* (loudest peak → exactly
+        // `base_bright`) rather than as the floor. A small floor keeps the
+        // ears visibly lit during silence so the strip doesn't turn off
+        // entirely between phrases. All mouth_open writers (mic lip-sync,
+        // jtts babble, conversation playback) feed through the same atomic.
+        // Off → use base_bright unchanged.
+        constexpr float kMouthFloor = 0.25f;
         std::uint8_t bright = base_bright;
         if (state.led_mouth_sync_enabled.load(std::memory_order_relaxed)) {
             float m = state.mouth_open.load(std::memory_order_relaxed);
             if (m < 0.0f) m = 0.0f;
             if (m > 1.0f) m = 1.0f;
-            const float blended = static_cast<float>(base_bright)
-                + (255.0f - static_cast<float>(base_bright)) * m;
-            bright = static_cast<std::uint8_t>(blended < 0 ? 0 : (blended > 255 ? 255 : blended));
+            const float scaled = static_cast<float>(base_bright) *
+                                 (kMouthFloor + (1.0f - kMouthFloor) * m);
+            bright = static_cast<std::uint8_t>(scaled < 0 ? 0 : (scaled > 255 ? 255 : scaled));
         }
 
         const float t = now_ms() / 1000.0f;
