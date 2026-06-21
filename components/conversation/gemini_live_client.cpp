@@ -399,13 +399,23 @@ private:
                 last_close_code_ = code;
                 last_close_reason_.assign(reason, reason_len);
 
-                // Gemini returns code=1008 with reason
-                // "BidiGenerateContent session not found" when the cached
-                // resumption handle has expired or been invalidated on the
-                // server. Without clearing session_handle_ the conv-task
-                // recovery path replays the same dead handle on every
-                // reconnect and we ping-pong forever. Drop the handle so
-                // send_setup() opens a fresh session on the next attempt.
+                // Gemini returns code=1008 (RFC 6455 "Policy Violation") for
+                // a few different reasons. The two we've observed in the
+                // wild that ALL indicate a dead resumption handle are:
+                //   - "BidiGenerateContent session not found"
+                //   - "Requested entity was not found."
+                // A third 1008 cause exists ("Operation is not implemented,
+                // or supported, or enabled." — sent when we accidentally
+                // post audio frames mid-turn) and that one technically
+                // leaves the handle valid. But on close the connection's
+                // gone either way, and the cost of needlessly clearing the
+                // handle is just losing one turn's worth of conversation
+                // context on the reconnect. The cost of NOT clearing when
+                // we should is an infinite reconnect storm (the same dead
+                // handle gets replayed on every attempt → another 1008 →
+                // backoff cap → unrecoverable). So we treat every 1008 as
+                // handle-invalidating; the reason gets logged for any
+                // future Google wording changes.
                 //
                 // We deliberately do NOT clear on 1011 ("Internal error
                 // occurred."). Per the official docs the resumption token is
@@ -413,15 +423,12 @@ private:
                 // documented relationship between close code and token
                 // validity. LiveKit's Google plugin (the reference impl)
                 // also keeps the handle across 1011 and just retries with
-                // backoff. Mirror that behavior here; if a stale handle
-                // does cause repeat failures, the 1008 path catches it.
-                if (code == 1008 && reason_len > 0 &&
-                    std::string_view(reason, reason_len).find("session not found") != std::string_view::npos) {
-                    if (!session_handle_.empty()) {
-                        ESP_LOGW(kTag, "discarding stale resumption handle (%u bytes)",
-                                 static_cast<unsigned>(session_handle_.size()));
-                        session_handle_.clear();
-                    }
+                // backoff.
+                if (code == 1008 && !session_handle_.empty()) {
+                    ESP_LOGW(kTag, "1008 reason='%.*s' → discarding resumption handle (%u bytes)",
+                             reason_len, reason,
+                             static_cast<unsigned>(session_handle_.size()));
+                    session_handle_.clear();
                 }
             }
             return;
