@@ -891,13 +891,13 @@ extern "C" void app_main()
         //   - internal AW88298 (BCK=34 / WS=33 / DOUT=13) stops getting an
         //     I2S signal → silent (acceptable; Module Audio is the only
         //     speaker path while fitted)
-        //   - internal ES7210 mic (mck=0 / bck=34 / ws=33 / din=14) can no
+        //   - internal ES7210 mic (mck=0 / bck=34 / ws=33 / dout = 13) can no
         //     longer record because its pins are now driven by Module
         //     Audio's signals. M5Unified's CoreS3 mic_enable_cb still runs
         //     on M5.Mic.begin() but is a harmless I2C side-effect — no
         //     audio data reaches the chip
         //   - Module Audio gets MCLK on GPIO7, BCK on GPIO0, WS on GPIO6,
-        //     DOUT (ESP→codec) on GPIO14
+        //     DOUT (ESP→codec, labelled "DIN" on the M144 connector) on GPIO14
         // After this M5.Speaker.tone() / playRaw() comes out of the
         // module's 3.5 mm jack (the codec has no on-board amp, so an
         // active speaker / headphones must be plugged in).
@@ -921,7 +921,14 @@ extern "C" void app_main()
             spk.pin_mck       = GPIO_NUM_7;
             spk.pin_bck       = GPIO_NUM_0;
             spk.pin_ws        = GPIO_NUM_6;
-            spk.pin_data_out  = GPIO_NUM_14;
+            // M144 connector labels signals from the ESP's perspective:
+            // "DOUT G13" = ESP's data-out (i.e. to the codec's input).
+            // G13 is the same physical pin the internal AW88298 expects
+            // for its DIN, but the two codecs see different BCK / WS
+            // pins (Module Audio = G0/G6, internal = G34/G33) so only
+            // one decodes the I2S stream at a time — whichever pair
+            // matches the current pin config.
+            spk.pin_data_out  = GPIO_NUM_13;
         }
         M5.Speaker.config(spk);
         M5.Speaker.end();
@@ -950,6 +957,32 @@ extern "C" void app_main()
     }
     while (M5.Speaker.isPlaying()) {
         vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    // JTTS-rate playRaw probe: synth a brief 16 kHz 440 Hz tone and push
+    // it through M5.Speaker.playRaw. JTTS babble plays at the same
+    // sample rate so this isolates "JTTS-specific failure" from
+    // "16 kHz-playRaw-specific failure" — if this probe is audible
+    // through Module Audio, the JTTS silence is downstream of sample
+    // rate / playRaw path (we'd look at speech.cpp config / mic
+    // contention instead). If this probe is also silent while the
+    // arpeggio (48 kHz tone) was audible, the codec / I2S clock chain
+    // doesn't like the 16 kHz fs.
+    {
+        constexpr std::uint32_t kProbeRate = 16'000;
+        constexpr std::size_t kProbeSamples = kProbeRate * 300 / 1000; // 300 ms
+        static std::int16_t probe_pcm[kProbeSamples];
+        constexpr float kProbeFreq = 440.0f;
+        constexpr float kTwoPi = 6.28318530718f;
+        for (std::size_t i = 0; i < kProbeSamples; ++i) {
+            probe_pcm[i] = static_cast<std::int16_t>(
+                20000.0f * std::sin(kTwoPi * kProbeFreq * static_cast<float>(i) /
+                                    static_cast<float>(kProbeRate)));
+        }
+        ESP_LOGI(kTag, "16 kHz playRaw probe (300 ms, 440 Hz)");
+        M5.Speaker.playRaw(probe_pcm, kProbeSamples, kProbeRate, /*stereo=*/false);
+        while (M5.Speaker.isPlaying()) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
     }
     M5.Speaker.end();
     vTaskDelay(pdMS_TO_TICKS(20));
@@ -1232,8 +1265,18 @@ extern "C" void app_main()
     ESP_LOGI(kTag, "wifi_audio: disabled at compile time (slim build)");
 #endif
 
-    // Mic / loopback sanity check at startup.
-    record_and_playback(2, "mic test");
+    // Mic / loopback sanity check at startup — DISABLED. Calling
+    // M5.Mic.record here reconfigures the shared I2S_NUM_1 peripheral
+    // onto the internal ES7210 pin set (G0=MCLK / G34=BCK / G33=WS /
+    // G14=DIN), which collides with the Module Audio pin override above
+    // (G0=BCK / G14=DIN-mic-side). Even though the next Speaker.begin
+    // restores the Module Audio pins from spk_cfg, the side effect of
+    // having driven G0 as MCLK for the 2 s recording window appears to
+    // leave the ES8388 in a state where later 16 kHz playRaw silently
+    // drops samples (boot arpeggio at 48 kHz still works, JTTS at
+    // 16 kHz doesn't). The mic loopback was a Phase-1 bring-up tool;
+    // not needed in normal operation.
+    // record_and_playback(2, "mic test");
 
     // is_atom_nyan: legacy predicate covering "no servo bus + no LCD touch
     // → use atom_status button overlay UI". AtomS3R / AtomS3 fall here.

@@ -198,6 +198,21 @@ bool Speech::say(std::u32string_view reading)
     start_ms_.store(static_cast<std::uint32_t>(esp_timer_get_time() / 1000),
                     std::memory_order_release);
 
+    // Diagnostic: dump the live Speaker config pins right before playRaw so
+    // we can confirm the Module Audio overrides (mck=G7 / bck=G0 / ws=G6 /
+    // data_out=G13) are still in effect at JTTS playback time. If a stray
+    // task has re-configured the speaker to internal AW88298 pins
+    // (mck=NC / bck=34 / ws=33 / data_out=13) the line-out goes silent
+    // even though the channel mixer says "playing". Remove once JTTS-on-
+    // Module-Audio is stable.
+    {
+        auto live = M5.Speaker.config();
+        ESP_LOGI("speech",
+                 "play: mck=%d bck=%d ws=%d dout=%d sr=%u samples=%u",
+                 live.pin_mck, live.pin_bck, live.pin_ws, live.pin_data_out,
+                 static_cast<unsigned>(live.sample_rate),
+                 static_cast<unsigned>(pcm_.size()));
+    }
     M5.Speaker.playRaw(pcm_.data(), pcm_.size(), kSampleRate, /*stereo=*/false,
                        /*repeat=*/1, /*channel=*/-1,
                        /*stop_current_sound=*/true);
