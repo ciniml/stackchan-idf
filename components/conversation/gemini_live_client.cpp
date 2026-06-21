@@ -161,6 +161,21 @@ public:
             return tl::unexpected{ConversationError::InvalidState};
         }
 
+        // Metric: push-interval. Skip the first push (no prior reference) and
+        // any monotonic-clock wraparound (esp_timer is 64-bit but we project
+        // it down to 32-bit ms here; the diff stays meaningful as long as the
+        // gap is < 49 days, which is fine).
+        const std::uint32_t now_ms =
+            static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
+        if (last_push_ms_ != 0) {
+            push_interval_ms_.record(static_cast<float>(now_ms - last_push_ms_));
+        }
+        last_push_ms_ = now_ms;
+        // Metric: queue depth at the moment we attempt the enqueue. Recorded
+        // BEFORE the send so a full queue shows up as depth == capacity.
+        queue_depth_.record(
+            static_cast<float>(uxQueueMessagesWaiting(audio_tx_queue_)));
+
         // Allocate the chunk in PSRAM, copy raw PCM16 samples (LE on this
         // chip already — no conversion needed; Gemini wants exactly that).
         const std::size_t alloc =
@@ -183,6 +198,7 @@ public:
                 ESP_LOGW(kTag, "audio tx queue stuck; dropping chunk");
                 return tl::unexpected{ConversationError::SendFailed};
             }
+            ++eviction_count_;
             ESP_LOGW(kTag, "audio tx queue full; evicted oldest chunk");
         }
         return {};
@@ -725,6 +741,43 @@ private:
                          static_cast<double>(decode_us_.max()));
                 decode_us_.reset();
             }
+            // TX pipeline summary for this turn. Logged when ANY of the
+            // counters is non-zero so quiet turns don't spam the log.
+            // Pairs with main/conversation_task's metrics(play) line printed
+            // shortly after on the same turn — together they cover the full
+            // mic → WS / WS → speaker pipeline. queue_depth/send_dt spikes
+            // localise the bottleneck (CPU / WS link / Gemini RX), and the
+            // counters surface silently-dropped or evicted chunks that
+            // wouldn't otherwise show up in the trace.
+            if (send_dt_ms_.count > 0 || eviction_count_ > 0 ||
+                send_fail_count_ > 0 || silent_drop_count_ > 0) {
+                ESP_LOGI(kTag,
+                         "metrics(mic): sent=%u  send_dt_ms avg=%.1f min=%.0f max=%.0f  "
+                         "queue_depth avg=%.1f min=%.0f max=%.0f  evicted=%u send_fail=%u silent_drop=%u  "
+                         "push_interval_ms avg=%.1f min=%.0f max=%.0f  encode_us avg=%.0f min=%.0f max=%.0f",
+                         static_cast<unsigned>(send_dt_ms_.count),
+                         send_dt_ms_.mean(), static_cast<double>(send_dt_ms_.min()),
+                         static_cast<double>(send_dt_ms_.max()),
+                         queue_depth_.mean(), static_cast<double>(queue_depth_.min()),
+                         static_cast<double>(queue_depth_.max()),
+                         static_cast<unsigned>(eviction_count_),
+                         static_cast<unsigned>(send_fail_count_),
+                         static_cast<unsigned>(silent_drop_count_),
+                         push_interval_ms_.mean(), static_cast<double>(push_interval_ms_.min()),
+                         static_cast<double>(push_interval_ms_.max()),
+                         encode_us_.mean(), static_cast<double>(encode_us_.min()),
+                         static_cast<double>(encode_us_.max()));
+                send_dt_ms_.reset();
+                queue_depth_.reset();
+                push_interval_ms_.reset();
+                encode_us_.reset();
+                eviction_count_ = 0;
+                send_fail_count_ = 0;
+                silent_drop_count_ = 0;
+                // Don't reset last_push_ms_: push_interval is meaningful
+                // across turns (a long Speaking gap will show up as a single
+                // huge interval, which is expected and informative).
+            }
             ConversationEvent ev{};
             ev.type = ConversationEventType::ResponseDone;
             emit(ev);
@@ -812,9 +865,13 @@ private:
 
     void send_one_chunk(AudioChunk* chunk)
     {
-        if (client_ == nullptr) return;
-        if (!esp_websocket_client_is_connected(client_)) return;
-        if (!setup_sent_) return; // wait until setup has been emitted
+        // All four early-return paths are "silently dropped at the sender" —
+        // the chunk is freed by the caller. Count them so the per-turn log
+        // can show how many mic samples never reached Gemini and why this
+        // isn't a Gemini-side issue.
+        if (client_ == nullptr) { ++silent_drop_count_; return; }
+        if (!esp_websocket_client_is_connected(client_)) { ++silent_drop_count_; return; }
+        if (!setup_sent_) { ++silent_drop_count_; return; }
         // Don't stream mic audio while the server is mid-response. Gemini's
         // server closes the WS with `code=1008 'Operation is not
         // implemented, or supported, or enabled.'` when it receives audio
@@ -823,21 +880,29 @@ private:
         // queued just before the transition still arrive here — silently
         // discard them too.
         if (state_.load(std::memory_order_relaxed) != ConversationState::Listening) {
+            ++silent_drop_count_;
             return;
         }
 
         const auto* raw_ptr = reinterpret_cast<const std::uint8_t*>(chunk->data);
         const std::size_t raw_len = chunk->len_samples * sizeof(std::int16_t);
         const std::size_t needed_b64 = base64::encoded_size(raw_len);
-        if (needed_b64 > b64_scratch_.size()) return;
+        if (needed_b64 > b64_scratch_.size()) { ++silent_drop_count_; return; }
 
+        // Metric: base64 + JSON wrap time. CPU-bound, useful for splitting
+        // "client slow" vs "network slow" when the queue overflows.
+        const std::int64_t encode_t0 = esp_timer_get_time();
         auto enc = base64::encode_into({raw_ptr, raw_len}, b64_scratch_);
-        if (!enc) return;
+        if (!enc) { ++silent_drop_count_; return; }
         const int n = std::snprintf(
             json_scratch_.data(), json_scratch_.size(),
             "{\"realtimeInput\":{\"audio\":{\"data\":\"%.*s\",\"mimeType\":\"audio/pcm;rate=16000\"}}}",
             static_cast<int>(*enc), b64_scratch_.data());
-        if (n <= 0 || static_cast<std::size_t>(n) >= json_scratch_.size()) return;
+        if (n <= 0 || static_cast<std::size_t>(n) >= json_scratch_.size()) {
+            ++silent_drop_count_;
+            return;
+        }
+        encode_us_.record(static_cast<float>(esp_timer_get_time() - encode_t0));
 
         const std::uint32_t t0 = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
         int send_rc;
@@ -846,8 +911,10 @@ private:
             send_rc = esp_websocket_client_send_text(client_, json_scratch_.data(), n, kSendTimeout);
         }
         const std::uint32_t dt = static_cast<std::uint32_t>(esp_timer_get_time() / 1000) - t0;
+        send_dt_ms_.record(static_cast<float>(dt));
         ++audio_seq_;
         if (send_rc <= 0) {
+            ++send_fail_count_;
             ESP_LOGW(kTag, "audio send failed seq=%lu dt=%lums size=%dB rc=%d",
                      static_cast<unsigned long>(audio_seq_),
                      static_cast<unsigned long>(dt), n, send_rc);
@@ -878,6 +945,19 @@ private:
     // Logged + reset on turnComplete so the line shows up alongside the conv-task
     // playback metrics for the same turn (correlatable by timestamp).
     Stats<float> decode_us_;  // base64+memcpy time per inlineData chunk (us)
+
+    // Per-turn TX-side metrics, logged on turnComplete next to decode_us_.
+    // Mirrors RX-side `metrics(play)` (see main/conversation_task.cpp
+    // log_playback_metrics) so a single turn yields metrics(mic) +
+    // metrics(decode) + metrics(play) lines in chronological order.
+    Stats<float> send_dt_ms_;       // WS send wall-clock per chunk (ms)
+    Stats<float> queue_depth_;      // tx queue messages waiting at push time
+    Stats<float> push_interval_ms_; // wall-clock between push_audio calls (ms)
+    Stats<float> encode_us_;        // base64 + JSON wrap time per chunk (us)
+    std::size_t eviction_count_{0};   // push_audio dropped oldest on full queue
+    std::size_t send_fail_count_{0};  // esp_websocket_client_send_text rc <= 0
+    std::size_t silent_drop_count_{0};// send_one_chunk silently dropped (state != Listening etc.)
+    std::uint32_t last_push_ms_{0};   // for push_interval_ms_ deltas; 0 = no prior
 
     // Resumption handle from goAway / sessionResumptionUpdate. Empty means
     // no prior session.
