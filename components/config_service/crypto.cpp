@@ -130,7 +130,19 @@ tl::expected<void, Error> Session::complete_handshake(std::span<const std::uint8
         if (mbedtls_mpi_lset(&Qp.private_Z, 1) != 0) break;
         if (mbedtls_ecdh_compute_shared(&grp, &z, &Qp, &d,
                                          mbedtls_ctr_drbg_random, &g_drbg) != 0) break;
-        if (mbedtls_mpi_write_binary_le(&z, shared.data(), 32) != 0) break;
+        // ESP-IDF 5.4.2 mbedtls' write_binary_le returns rc=0 but leaves the
+        // output buffer untouched when the source mpi was produced by an
+        // HW-MPI-backed routine (observed for mbedtls_ecdh_compute_shared
+        // result with MBEDTLS_HARDWARE_MPI enabled — z_bitlen reports
+        // 254..255 yet write_binary_le writes all-zero). The plain
+        // write_binary (big-endian) variant works correctly on the same mpi,
+        // so we write BE then reverse to get the RFC-7748 little-endian
+        // u-coordinate encoding the X25519 spec mandates.
+        {
+            std::array<std::uint8_t, 32> shared_be{};
+            if (mbedtls_mpi_write_binary(&z, shared_be.data(), 32) != 0) break;
+            for (int i = 0; i < 32; ++i) shared[i] = shared_be[31 - i];
+        }
         ok = true;
     } while (false);
 
@@ -162,10 +174,23 @@ tl::expected<void, Error> Session::complete_handshake(std::span<const std::uint8
         ESP_LOGW(kTag, "hkdf failed: -0x%04x", -rc);
         return tl::unexpected{Error::CryptoBadKey};
     }
-
     // The private scalar is no longer needed after deriving the AES key.
+    // Also drop the keypair_ready_ flag so a subsequent ensure_device_keypair()
+    // call (e.g. the BLE client retrying the handshake after a password
+    // prompt — the empty-salt first attempt derives the wrong AES key, the
+    // client then re-runs setupSession() with SHA-256(password) as salt and
+    // expects a fresh device keypair) regenerates a new device priv/pub
+    // pair instead of returning the now-zeroed private key.
     mbedtls_platform_zeroize(device_priv_.data(), device_priv_.size());
+    keypair_ready_ = false;
 
+    // HW-AES setkey is known to silently keep the prior key on the second
+    // call (observed: aes_key derivation produces a new value, mbedtls_gcm
+    // self-test roundtrips fine because both enc and dec use the same
+    // context, but the client decrypt with the freshly-derived key fails).
+    // Force a full context recycle to guarantee the new key is installed.
+    mbedtls_gcm_free(&gcm_);
+    mbedtls_gcm_init(&gcm_);
     rc = mbedtls_gcm_setkey(&gcm_, MBEDTLS_CIPHER_ID_AES, aes_key_.data(), 256);
     if (rc != 0) {
         ESP_LOGW(kTag, "gcm_setkey failed: -0x%04x", -rc);
