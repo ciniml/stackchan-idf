@@ -84,6 +84,10 @@ stackchan::app::ConversationTaskArgs* g_conversation_args = nullptr;
 #endif
 stackchan::app::LedTaskArgs* g_led_args = nullptr;
 stackchan::board::Si12tTouch* g_touch = nullptr;
+// Global Board accessor — only used from demo_loop for things that don't
+// fit into the existing args (e.g. Board::vibrate() haptic pulses on
+// StopWatch). Set once after Board::begin() before any task starts.
+stackchan::board::Board* g_board = nullptr;
 
 // Live face-config sink: invoked from the BLE host task on each FaceConfig
 // WRITE. Just stashes the raw JSON in SharedState (cheap, host-task-safe); the
@@ -387,11 +391,54 @@ void demo_loop(const std::string& jtts_config_json, bool has_battery, bool is_at
     // clear the balloon so normal demo behaviour resumes.
     bool wifi_warning_active = false;
 
+    // BMI270 shake → randomized expression. Cheap to poll (one I2C read);
+    // the cooldown keeps a single jerk from cascading into rapid-fire
+    // changes. Magnitude threshold is in g-units after subtracting 1 g of
+    // gravity, so it ignores normal handheld motion and only fires on
+    // deliberate flicks of the wrist. Available on any board M5Unified
+    // configured an IMU for (StopWatch's BMI270 in this scope; harmless
+    // no-op on CoreS3 where the IMU isn't initialised — getAccel returns
+    // false and we skip).
+    constexpr float kShakeThresholdG = 1.6f;       // |a| ≥ 1.6 g (≈ 0.6 g jerk)
+    constexpr std::uint32_t kShakeCooldownMs = 800;
+    std::uint32_t next_shake_ms = 0;
+
     for (;;) {
         // Drive M5.update() so M5.Touch / M5.BtnPWR latch their state machines.
         M5.update();
 
         const std::uint32_t now_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
+
+        // IMU shake → cycle to a random expression. Runs before the
+        // touch/UI block so a shake during conv idle interrupts the
+        // expression rotation immediately (no wait for the 5 s timer).
+        // A brief haptic confirms the shake actually registered (handy
+        // when the user can't see the avatar on a wrist-worn device).
+        if (now_ms >= next_shake_ms) {
+            float ax = 0, ay = 0, az = 0;
+            if (M5.Imu.getAccel(&ax, &ay, &az)) {
+                const float mag = std::sqrt(ax * ax + ay * ay + az * az);
+                if (mag >= kShakeThresholdG) {
+                    next_shake_ms = now_ms + kShakeCooldownMs;
+                    const int cur = g_state->expression.load(std::memory_order_relaxed);
+                    int next = cur;
+                    for (int i = 0; i < 4 && next == cur; ++i) {
+                        next = static_cast<int>(esp_random() % 6);
+                    }
+                    g_state->expression.store(next, std::memory_order_relaxed);
+                    ESP_LOGI(kTag, "shake |a|=%.2fg → expression %d", mag, next);
+                    if (g_board != nullptr) (void)g_board->vibrate(60);
+                }
+            }
+        }
+        // BtnB (StopWatch Blue / G1) — manual expression cycle with haptic
+        // confirmation. wasPressed() is false on boards without BtnB so the
+        // check is harmless universally.
+        if (M5.BtnB.wasPressed()) {
+            const int cur = g_state->expression.load(std::memory_order_relaxed);
+            g_state->expression.store((cur + 1) % 6, std::memory_order_relaxed);
+            if (g_board != nullptr) (void)g_board->vibrate(30);
+        }
 
         // LT timekeeper: re-configure when BLE/HTTP (or the boot seed) pushed
         // a new config JSON, then consume UI commands / update the countdown /
@@ -711,6 +758,7 @@ extern "C" void app_main()
         }
     }
     auto& board = *board_result;
+    g_board = &board;
 
     // Reserve the conversation task's internal-RAM speaker ring *now*, before
     // anything else has a chance to chew up DRAM. The conversation task itself

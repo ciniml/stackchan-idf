@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <ctime>
 #include <string>
 
 #include <M5Unified.h>
@@ -169,15 +170,45 @@ bool draw(avatar::RichCanvas& canvas)
     const ConvStatus cs = g_state ? g_state->conversation_status.load(std::memory_order_relaxed)
                                   : ConvStatus::Disabled;
 
-    canvas.setFont(&fonts::lgfxJapanGothic_12);
+    // Format wall-clock time. SNTP sets system time on first WiFi GOT_IP
+    // (wifi_sta.cpp); show "--:--:--" until that lands. tm_year > 100 = >2000
+    // is a quick way to gate "actually synced" vs "1970 epoch boot value".
+    char time_buf[12] = "--:--:--";
+    {
+        time_t now = 0;
+        ::time(&now);
+        struct tm tm_now{};
+        localtime_r(&now, &tm_now);
+        if (tm_now.tm_year > 100) {
+            std::snprintf(time_buf, sizeof(time_buf), "%02d:%02d:%02d",
+                          tm_now.tm_hour, tm_now.tm_min, tm_now.tm_sec);
+        }
+    }
+
+    // Per-display layout. Small panels (AtomS3 / AtomS3R, 128×128) keep
+    // the original compact 12-pt rendering; large round panels (StopWatch,
+    // 466×466 AMOLED) get a 24-pt layout centered in the inscribed square
+    // so text doesn't fall off the visible circle.
+    const bool large = w >= 256;
+    const int row_h = large ? 30 : 14;
+    const int safe_inset = large
+        ? static_cast<int>(w * (1.0f - 0.70710678f) * 0.5f) + 4
+        : 4;
+    const int key_x = safe_inset;
+    const int val_x = safe_inset + (large ? 96 : 40);
+    const int y0 = large
+        ? (h - 8 * row_h) / 2  // 8 rows centered vertically
+        : 6;
+
+    canvas.setFont(large ? &fonts::lgfxJapanGothic_20 : &fonts::lgfxJapanGothic_12);
     canvas.setTextDatum(lgfx::textdatum_t::top_left);
 
     auto kv = [&](int row, const char* key, const char* value, std::uint16_t vcolor) {
-        const int y = 6 + row * 14;
+        const int y = y0 + row * row_h;
         canvas.setTextColor(dim);
-        canvas.drawString(key, 4, y);
+        canvas.drawString(key, key_x, y);
         canvas.setTextColor(vcolor);
-        canvas.drawString(value, 44, y);
+        canvas.drawString(value, val_x, y);
     };
 
     int row = 0;
@@ -188,11 +219,13 @@ bool draw(avatar::RichCanvas& canvas)
     kv(row++, "BLE",  ble ? "conn" : "wait", ble ? ok : fg);
     kv(row++, "Conv", conv_status_label(cs), fg);
     kv(row++, "Mode", op_mode_short(g_op_mode), fg);
+    kv(row++, "Time", time_buf, fg);
 
     // Hint: short tap dismisses; long press cycles mode + reboots.
     canvas.setTextColor(dim);
     canvas.setTextDatum(lgfx::textdatum_t::bottom_center);
-    canvas.drawString("hold BtnA: mode", w / 2, h - 2);
+    const int hint_y = large ? h - safe_inset : h - 2;
+    canvas.drawString("hold BtnA: mode", w / 2, hint_y);
     return true;
 }
 

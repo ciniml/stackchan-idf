@@ -9,9 +9,12 @@
 #include <esp_event.h>
 #include <esp_log.h>
 #include <esp_netif.h>
+#include <esp_netif_sntp.h>
 #include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <time.h>
+#include <M5Unified.h>
 
 #include <config_service/config_service.hpp>
 #include <wifi_config_service/wifi_config_service.hpp>
@@ -58,6 +61,47 @@ void event_handler(void* /*arg*/, esp_event_base_t base, int32_t id, void* data)
             }
         }
         wifi_config::notify_wifi_connected(true);
+
+        // SNTP — start once on the first connection. esp_netif_sntp_init
+        // sets up the lwIP SNTP client in background; it will write the
+        // system time as soon as a response comes back. We also push the
+        // synced time into M5.Rtc once it's valid so the watch keeps
+        // sensible time across short power loss (RX8130CE is battery-
+        // backed via the M5PM1 PMIC). JST is hardcoded — no UI to pick
+        // a TZ on a wearable, and the dev unit lives in JP.
+        static bool sntp_started = false;
+        if (!sntp_started) {
+            sntp_started = true;
+            setenv("TZ", "JST-9", 1);
+            tzset();
+            esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+            cfg.start = true;
+            esp_netif_sntp_init(&cfg);
+            // Mirror system time into M5.Rtc once SNTP has converged.
+            // Block briefly here to give the first sync a chance; if it
+            // hasn't arrived in 5 s we move on and the next reconnect
+            // will retry. ESP_OK = synced, ERR_TIMEOUT = not yet.
+            if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(5000)) == ESP_OK) {
+                time_t now = 0;
+                ::time(&now);
+                struct tm tm_now{};
+                localtime_r(&now, &tm_now);
+                m5::rtc_datetime_t dt{};
+                dt.date.year    = tm_now.tm_year + 1900;
+                dt.date.month   = tm_now.tm_mon + 1;
+                dt.date.date    = tm_now.tm_mday;
+                dt.date.weekDay = tm_now.tm_wday;
+                dt.time.hours   = tm_now.tm_hour;
+                dt.time.minutes = tm_now.tm_min;
+                dt.time.seconds = tm_now.tm_sec;
+                M5.Rtc.setDateTime(dt);
+                ESP_LOGI(kTag, "SNTP synced → RTC set %04d-%02d-%02d %02d:%02d:%02d JST",
+                         dt.date.year, dt.date.month, dt.date.date,
+                         dt.time.hours, dt.time.minutes, dt.time.seconds);
+            } else {
+                ESP_LOGW(kTag, "SNTP sync timeout (will keep trying in background)");
+            }
+        }
     }
 }
 

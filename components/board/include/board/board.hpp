@@ -83,6 +83,12 @@ public:
     // should null-check (animation tasks skip themselves when absent).
     LedStrip* led_strip() noexcept;
 
+    // Brief tactile pulse on the vibration motor (StopWatch M5IOE1 PYG9).
+    // Blocking — duration_ms ≤ 200 is the intended range. No-op on boards
+    // without a motor (returns immediately). Returns true if a pulse was
+    // actually fired so callers can attribute haptic feedback in logs.
+    bool vibrate(std::uint32_t duration_ms);
+
 private:
     Board() = default;
     class Impl;

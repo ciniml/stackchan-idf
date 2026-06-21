@@ -277,4 +277,30 @@ LedStrip* Board::led_strip() noexcept
     return impl_->led();
 }
 
+bool Board::vibrate(std::uint32_t duration_ms)
+{
+    // StopWatch only: vibration motor wired to M5IOE1 PYG9. Other boards
+    // have no motor and return immediately. Direct I2C poke on the M5IOE1
+    // (addr 0x4F) — M5Unified configures PYG10 (PA) on the same output
+    // register 0x06 at boot, so register 0x04 (direction) bit 0 for PYG9
+    // must be set to output first. We do that lazily here (cheap I2C write
+    // each call; vibrate is rare). Stays atomic w.r.t. M5Unified's own
+    // M5IOE1 traffic because bit-OR-ing into 0x04 / 0x14 is read-modify-
+    // write through m5::In_I2C which serializes on its internal mutex.
+    if (impl_->kind() != BoardKind::StopWatch) return false;
+    if (duration_ms == 0) return false;
+    if (duration_ms > 1000) duration_ms = 1000; // upper bound
+    constexpr std::uint8_t kM5ioe1Addr = 0x4F;
+    constexpr std::uint32_t kI2cFreq = 100'000;
+    // direction = output (reg 0x04 bit 0 = 1).
+    m5::In_I2C.bitOn(kM5ioe1Addr, 0x04, 0b00000001, kI2cFreq);
+    // input enable = off (reg 0x14 bit 0 = 0).
+    m5::In_I2C.bitOff(kM5ioe1Addr, 0x14, 0b00000001, kI2cFreq);
+    // output high (reg 0x06 bit 0).
+    m5::In_I2C.bitOn(kM5ioe1Addr, 0x06, 0b00000001, kI2cFreq);
+    vTaskDelay(pdMS_TO_TICKS(duration_ms));
+    m5::In_I2C.bitOff(kM5ioe1Addr, 0x06, 0b00000001, kI2cFreq);
+    return true;
+}
+
 } // namespace stackchan::board
