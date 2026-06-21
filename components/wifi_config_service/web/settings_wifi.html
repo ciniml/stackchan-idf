@@ -406,19 +406,6 @@
     <option value="0">マイクでリップシンク (MicLipSync)</option>
   </select>
 
-  <h2 class="section-title">音声出力</h2>
-  <p class="hint" style="margin-bottom:0.5rem">
-    音声の出力先を選びます。「自動」は M5 Module Audio が装着されていれば
-    そちらを優先、未装着なら内蔵スピーカ。「内蔵」と「Module Audio」は
-    強制指定 (Module Audio 未装着で「Module Audio」を選ぶと内蔵に
-    フォールバックします)。保存後の再起動で切替わります。
-  </p>
-  <select id="audio-output">
-    <option value="0">自動 (Auto)</option>
-    <option value="1">内蔵スピーカ (Internal)</option>
-    <option value="2">M5 Module Audio (ModuleAudio)</option>
-  </select>
-
   <label for="ssid">Wi-Fi SSID</label>
   <input type="text" id="ssid" maxlength="32" placeholder="MyNetwork">
   <p class="hint">空欄のままにすると現在の値を変更しません</p>
@@ -481,6 +468,21 @@
 
   <!-- ===== 音声 ===== -->
   <section class="tab-panel" data-tab="audio">
+    <div id="audio-output-section">
+      <h2 class="section-title">音声出力</h2>
+      <p class="hint" style="margin-bottom:0.5rem">
+        音声の出力先を選びます。「自動」は M5 Module Audio が装着されていれば
+        そちらを優先、未装着なら内蔵スピーカ。「内蔵」と「Module Audio」は
+        強制指定 (Module Audio 未装着で「Module Audio」を選ぶと内蔵に
+        フォールバックします)。保存後の再起動で切替わります。
+      </p>
+      <select id="audio-output">
+        <option value="0">自動 (Auto)</option>
+        <option value="1">内蔵スピーカ (Internal)</option>
+        <option value="2">M5 Module Audio (ModuleAudio)</option>
+      </select>
+    </div>
+
     <div id="rtp-section">
       <h2 class="section-title">Wi-Fi RTP 音声受信</h2>
       <label class="toggle-label" for="rtp-enabled">
