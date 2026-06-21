@@ -881,6 +881,18 @@ extern "C" void app_main()
         if (board.kind() == stackchan::board::BoardKind::StopWatch) {
             spk.magnification = 16;
         }
+        if (has_audio_module) {
+            // ES8388 has no amp; its LOUT1/2 jack drive is line-level.
+            // The factory CoreS3 magnification (4) plus AW88298's class-D
+            // gain assumed the internal speaker downstream — Module
+            // Audio's TRRS load needs more digital pre-gain to reach the
+            // same perceived loudness through a passive headphone or a
+            // typical 0.5 W powered speaker. 8 doubles the headroom
+            // without pushing every sample to full scale (which would
+            // soft-clip the M5Unified mixer when multiple sources
+            // overlap, e.g. JTTS + LT chime).
+            spk.magnification = 8;
+        }
         // Module Audio (ES8388) uses a COMPLETELY DIFFERENT I2S pinout from
         // CoreS3's internal AW88298 / ES7210, so when the module is fitted
         // we have to re-route the (single) M5.Speaker I2S to its pads. The
@@ -948,8 +960,14 @@ extern "C" void app_main()
     // AtomNyan ECHO BASE chain. Bump to the top end so the bench unit's
     // 8Ω/1W speaker is actually audible; other boards keep the historical
     // 128 (≈ 50%) which was comfortable on a desk.
-    const std::uint8_t spk_volume =
-        (board.kind() == stackchan::board::BoardKind::StopWatch) ? 255 : 128;
+    // Module Audio (M144) has NO on-board amp — ES8388 drives the TRRS
+    // jack directly at line level, so we need full digital gain on the
+    // ESP side. Otherwise the user has to crank their downstream
+    // powered-speaker / headphone amp uncomfortably high.
+    const std::uint8_t spk_volume = (board.kind() == stackchan::board::BoardKind::StopWatch ||
+                                     has_audio_module)
+                                        ? 255
+                                        : 128;
     M5.Speaker.setVolume(spk_volume);
     for (float freq : {523.25f, 659.25f, 783.99f}) { // C5 – E5 – G5
         M5.Speaker.tone(freq, 150);

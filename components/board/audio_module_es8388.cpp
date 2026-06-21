@@ -68,8 +68,13 @@ tl::expected<void, Error> init()
             return tl::unexpected{Error::ExpanderWrite};
         }
     }
-    // Default to ~0 dB on both jacks; callers can adjust via set_volume().
-    return set_volume(30);
+    // Default to the codec's max line-out gain (+4.5 dB). The module has
+    // no power amplifier so anything driven directly into a TRRS load is
+    // line-level — picking the codec's ceiling here gives the most
+    // headroom for downstream speaker / headphone amps without adding
+    // digital pre-gain (which would risk DAC clipping). Callers can dial
+    // back via set_volume() if a loud powered speaker is wired in.
+    return set_volume(33);
 }
 
 tl::expected<void, Error> set_volume(std::uint8_t vol_0_33)
