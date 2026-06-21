@@ -844,6 +844,23 @@ extern "C" void app_main()
             ESP_LOGW(kTag, "Module Audio (ES8388) detected but init failed");
         }
     }
+    // Always run the MCU-side RGB diagnostic when EITHER the codec OR the
+    // MCU shows up. The MCU lives at 0x33 (LED strip + buttons) and is on
+    // the same M-BUS I2C as the codec but doesn't depend on it — useful for
+    // bisecting "codec didn't probe but MCU does" cases (jumper / power
+    // wiring issue on the codec side specifically).
+    if (m5::In_I2C.scanID(stackchan::board::es8388::kMcuI2cAddress, 100'000)) {
+        ESP_LOGI(kTag, "Module Audio MCU ACK at 0x%02X — running LED diag",
+                 stackchan::board::es8388::kMcuI2cAddress);
+        (void)stackchan::board::es8388::diagnose_rgb_pattern();
+        if (auto hp = stackchan::board::es8388::headphone_inserted(); hp) {
+            ESP_LOGI(kTag, "Module Audio HP jack: %s",
+                     *hp ? "inserted" : "not inserted");
+        }
+    } else if (has_audio_module) {
+        ESP_LOGW(kTag, "Module Audio MCU absent at 0x%02X but codec is present",
+                 stackchan::board::es8388::kMcuI2cAddress);
+    }
 
     {
         auto spk = M5.Speaker.config();
@@ -864,18 +881,47 @@ extern "C" void app_main()
         if (board.kind() == stackchan::board::BoardKind::StopWatch) {
             spk.magnification = 16;
         }
-        // Module Audio (ES8388) requires an actual MCLK input — its DAC PLL
-        // won't lock from BCLK alone, so without this line GPIO0 stays idle
-        // and the line-out / HP jacks are silent even after the I2C register
-        // init succeeds. AW88298 (CoreS3's internal amp) ignores MCLK so the
-        // extra pin assignment is harmless when the module isn't fitted.
-        // GPIO0 is the M5Stack-standard MCLK pin on the M-Bus for codec
-        // accessories (Module Audio, Atomic Echo etc.). Speaker_Class only
-        // routes MCLK to the pad when pin_mck < GPIO_NUM_MAX, so the
-        // M5Unified default of I2S_PIN_NO_CHANGE leaves the pad floating —
-        // that's the Phase-1 gap the ES8388 init was missing.
+        // Module Audio (ES8388) uses a COMPLETELY DIFFERENT I2S pinout from
+        // CoreS3's internal AW88298 / ES7210, so when the module is fitted
+        // we have to re-route the (single) M5.Speaker I2S to its pads. The
+        // original hpp header claim that "Config B shares BCK=34 / WS=33 /
+        // DIN=13 with the internal codec" was wrong (verified against the
+        // M144 schematic + ES7210 conflict on G0 / G14). With these
+        // overrides:
+        //   - internal AW88298 (BCK=34 / WS=33 / DOUT=13) stops getting an
+        //     I2S signal → silent (acceptable; Module Audio is the only
+        //     speaker path while fitted)
+        //   - internal ES7210 mic (mck=0 / bck=34 / ws=33 / din=14) can no
+        //     longer record because its pins are now driven by Module
+        //     Audio's signals. M5Unified's CoreS3 mic_enable_cb still runs
+        //     on M5.Mic.begin() but is a harmless I2C side-effect — no
+        //     audio data reaches the chip
+        //   - Module Audio gets MCLK on GPIO7, BCK on GPIO0, WS on GPIO6,
+        //     DOUT (ESP→codec) on GPIO14
+        // After this M5.Speaker.tone() / playRaw() comes out of the
+        // module's 3.5 mm jack (the codec has no on-board amp, so an
+        // active speaker / headphones must be plugged in).
+        // Phase 1 policy: any module presence flips to Module Audio (internal
+        // speaker stays silent for the whole session).
+        //
+        // Phase 2 (TODO, not implemented yet): hot-switch based on HP-jack
+        // insertion (MCU 0x33 reg 0x20). Outline:
+        //   - poll headphone_inserted() at ~2 Hz from demo_loop
+        //   - on transition: M5.Speaker.end() → rewrite spk.pin_* (internal
+        //     pins when unplugged, module pins when plugged) →
+        //     M5.Speaker.config(spk). Next playRaw / tone lazy-inits
+        //   - watch out for two failure modes: (a) re-route mid-playback
+        //     truncates the current segment — gate the switch on
+        //     M5.Speaker.isPlaying() == 0, (b) ES8388 init persists across
+        //     end()/begin() since registers are sticky once the codec rail
+        //     is powered, no need to re-run es8388::init() per switch.
+        //   - keep the I2S port the same (I2S_NUM_1) so we don't fight the
+        //     M5Unified mic instance over the I2S peripheral
         if (has_audio_module) {
-            spk.pin_mck = GPIO_NUM_0;
+            spk.pin_mck       = GPIO_NUM_7;
+            spk.pin_bck       = GPIO_NUM_0;
+            spk.pin_ws        = GPIO_NUM_6;
+            spk.pin_data_out  = GPIO_NUM_14;
         }
         M5.Speaker.config(spk);
         M5.Speaker.end();

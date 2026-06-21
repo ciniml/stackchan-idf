@@ -84,4 +84,46 @@ tl::expected<void, Error> set_volume(std::uint8_t vol_0_33)
     return {};
 }
 
+tl::expected<void, Error> diagnose_rgb_pattern()
+{
+    // Target the Module Audio MCU at 0x33 (handles LED strip / buttons).
+    // LED1 = red, LED2 = green, LED3 = blue — each LED gets 3 bytes
+    // (R, G, B) packed contiguously at 0x40 / 0x43 / 0x46.
+    static constexpr struct {
+        std::uint8_t reg;
+        std::uint8_t val;
+    } kPattern[] = {
+        {0x40, 0xFF}, {0x41, 0x00}, {0x42, 0x00}, // LED1 red
+        {0x43, 0x00}, {0x44, 0xFF}, {0x45, 0x00}, // LED2 green
+        {0x46, 0x00}, {0x47, 0x00}, {0x48, 0xFF}, // LED3 blue
+    };
+    bool any_failure = false;
+    for (const auto& p : kPattern) {
+        const bool ok = m5::In_I2C.writeRegister8(kMcuI2cAddress, p.reg, p.val, kI2cFreq);
+        ESP_LOGI(kTag, "diag MCU write reg=0x%02X val=0x%02X -> %s",
+                 p.reg, p.val, ok ? "ACK" : "NAK");
+        if (!ok) any_failure = true;
+    }
+    if (any_failure) {
+        ESP_LOGW(kTag, "diag: at least one register write was NAK'd at MCU 0x%02X "
+                       "(check M-BUS / jumpers)", kMcuI2cAddress);
+        return tl::unexpected{Error::ExpanderWrite};
+    }
+    ESP_LOGI(kTag, "diag: all 9 register writes ACK'd at MCU 0x%02X — I2C reachable",
+             kMcuI2cAddress);
+    return {};
+}
+
+tl::expected<bool, Error> headphone_inserted()
+{
+    std::uint8_t v = 0;
+    if (!m5::In_I2C.readRegister(kMcuI2cAddress, 0x20, &v, 1, kI2cFreq)) {
+        ESP_LOGW(kTag, "HP insertion read NAK at MCU 0x%02X reg 0x20", kMcuI2cAddress);
+        return tl::unexpected{Error::ExpanderWrite};
+    }
+    // Non-zero = inserted (we don't know which bit pattern the MCU uses for
+    // multi-bit status, so just non-zero is the safe interpretation).
+    return v != 0;
+}
+
 } // namespace stackchan::board::es8388
