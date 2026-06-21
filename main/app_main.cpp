@@ -439,6 +439,19 @@ void demo_loop(const std::string& jtts_config_json, bool has_battery, bool is_at
             g_state->expression.store((cur + 1) % 6, std::memory_order_relaxed);
             if (g_board != nullptr) (void)g_board->vibrate(30);
         }
+        // BtnA on StopWatch (= Yellow / G2) — toggle the device_ui open/close.
+        // The corner tap-to-open hot zone on a round AMOLED is awkward to hit
+        // (corners are within the visible circle but at the edge of the touch
+        // pad), so a physical button is a more reliable opener. On other
+        // boards BtnA either has no role (CoreS3 uses touch only) or is
+        // already claimed by atom_status::poll_button (AtomS3R / AtomS3 →
+        // is_atom_nyan branch above, which doesn't reach this path).
+        if (g_board != nullptr &&
+            g_board->kind() == stackchan::board::BoardKind::StopWatch &&
+            M5.BtnA.wasPressed()) {
+            app::ui::toggle();
+            (void)g_board->vibrate(20);
+        }
 
         // LT timekeeper: re-configure when BLE/HTTP (or the boot seed) pushed
         // a new config JSON, then consume UI commands / update the countdown /

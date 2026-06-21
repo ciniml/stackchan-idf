@@ -22,6 +22,12 @@ namespace stackchan::app::ui {
 
 void init(SharedState& state);
 void handle_tap(int x, int y);
+// Open / close the UI without going through a tap. Used by physical-button
+// inputs (e.g. StopWatch's BtnA) when the corner of a round panel makes the
+// tap-to-open hot zone awkward to hit. Mirrors the open/close behaviour of
+// a tap in the avatar's top-right corner: load staged values + show 情報
+// when opening, drop range mode + close when closing.
+void toggle();
 bool active();
 // Render into the caller-owned drawing surface (the render task's Canvas).
 // Returns true if it repainted this frame; the caller presents (end_frame) then.

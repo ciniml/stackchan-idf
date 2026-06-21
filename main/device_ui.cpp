@@ -735,6 +735,25 @@ bool active()
     return g_active.load(std::memory_order_relaxed);
 }
 
+void toggle()
+{
+    if (g_active.load(std::memory_order_relaxed)) {
+        // Closing — mirror the close branch of handle_tap's top-bar close
+        // hit: drop range mode so the servo task re-engages torque, then
+        // clear active.
+        update_range_mode_for_page(-1);
+        g_active.store(false, std::memory_order_relaxed);
+    } else {
+        // Opening — same prep as the corner-tap path: reload NVS-backed
+        // staged values, jump to 情報 page, force a full repaint.
+        load_staged();
+        g_page.store(kInfo, std::memory_order_relaxed);
+        g_tab_page.store(0, std::memory_order_relaxed);
+        g_active.store(true, std::memory_order_relaxed);
+        g_dirty.store(true, std::memory_order_relaxed);
+    }
+}
+
 void handle_tap(int x, int y)
 {
     // Translate physical touch coords into the 320×240 design space the
