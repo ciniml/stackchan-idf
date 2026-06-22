@@ -1306,6 +1306,43 @@ async function setupSession(saltBytes = new Uint8Array(0)) {
 // password field has autocomplete="current-password" + a hidden
 // username field so browser password managers can save / fill the
 // credential per origin.
+// Try the Credential Management API first — explicit, doesn't rely on
+// browser form heuristics. Returns the stored password or null when no
+// credential is saved / API unsupported. mediation:'optional' means the
+// browser may auto-fill silently if it's confident, or prompt if not.
+async function tryAutofillCredential(deviceName) {
+  if (!window.PasswordCredential || !navigator.credentials) return null;
+  try {
+    const cred = await navigator.credentials.get({
+      password: true,
+      mediation: 'optional',
+    });
+    if (cred && cred.password) {
+      // If the device name was known, only use the credential when it
+      // matches; else accept any.
+      if (!deviceName || cred.id === deviceName || cred.id === 'stackchan') {
+        return cred.password;
+      }
+    }
+  } catch (_) { /* ignore — fall through to prompt */ }
+  return null;
+}
+
+// Ask the browser to save the credential. Uses PasswordCredential
+// constructed from the form so id (username) / password / name align
+// with the autocomplete fields. Silently ignores when the API isn't
+// available (Firefox, older browsers).
+async function offerCredentialSave(form) {
+  if (!window.PasswordCredential || !navigator.credentials) return;
+  try {
+    const cred = new PasswordCredential(form);
+    await navigator.credentials.store(cred);
+  } catch (e) {
+    // Save prompt cancelled by user — not an error.
+    console.debug('credentials.store skipped:', e);
+  }
+}
+
 function promptForAuthPassword(deviceName) {
   return new Promise((resolve, reject) => {
     const backdrop = document.getElementById('auth-modal-backdrop');
@@ -1330,16 +1367,23 @@ function promptForAuthPassword(deviceName) {
       form.removeEventListener('submit', onSubmit);
       cancelEl.removeEventListener('click', onCancel);
       showEl.removeEventListener('change', onShowChange);
-      // Reset back to masked so the toggle state doesn't leak across opens.
       pwdEl.type = 'password';
       showEl.checked = false;
     };
-    const onSubmit = (e) => {
+    const onSubmit = async (e) => {
       e.preventDefault();
       const pwd = pwdEl.value;
+      if (!pwd) {
+        cleanup();
+        reject(new Error('空のパスワード — 認証に進めません'));
+        return;
+      }
+      // Offer to save the credential to the browser's password manager
+      // BEFORE closing the modal — Credential Management API needs the
+      // form to still be in the DOM with its current values.
+      await offerCredentialSave(form);
       cleanup();
-      if (!pwd) reject(new Error('空のパスワード — 認証に進めません'));
-      else resolve(pwd);
+      resolve(pwd);
     };
     const onCancel = () => {
       cleanup();
@@ -1366,9 +1410,17 @@ async function ensureAuthenticated() {
   } catch (_) {
     // Fall through to the password prompt.
   }
-  log('Status 読み取り失敗 → デバイス側で認証パスワードが設定済の可能性。入力を求めます。', 'info');
+  log('Status 読み取り失敗 → デバイス側で認証パスワードが設定済の可能性。', 'info');
   const deviceName = (bleDevice && bleDevice.name) || '';
-  const pwd = await promptForAuthPassword(deviceName);
+  // Try browser's password manager first (silent autofill if a saved
+  // credential matches). On success skips the modal entirely.
+  let pwd = await tryAutofillCredential(deviceName);
+  if (pwd) {
+    log('パスワード マネージャから自動入力', 'info');
+  } else {
+    log('入力を求めます。', 'info');
+    pwd = await promptForAuthPassword(deviceName);
+  }
   if (pwd === '') {
     throw new Error('空のパスワード — 認証に進めません');
   }
