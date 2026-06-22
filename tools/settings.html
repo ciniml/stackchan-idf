@@ -374,14 +374,22 @@
      password set; replaces window.prompt() which is plaintext + invisible
      to password managers. -->
 <div id="auth-modal-backdrop" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center">
-  <form id="auth-modal-form" autocomplete="on" style="background:white;padding:1.5rem;border-radius:8px;min-width:300px;max-width:90vw;box-shadow:0 4px 24px rgba(0,0,0,0.3)">
+  <!-- method="dialog" makes the form a no-op submitter (no navigation,
+       no GET), but Chrome / Edge / Safari password managers still see a
+       valid form-submit gesture and offer to save the credential.
+       autocomplete="on" + a visible username field + the proper
+       autocomplete tokens (username / current-password) are the
+       combination that triggers the save prompt — display:none on the
+       username field is a known reason Chrome's heuristic skips the
+       form, so the field is shown (readonly) instead. -->
+  <form id="auth-modal-form" method="dialog" action="#" autocomplete="on"
+        style="background:white;padding:1.5rem;border-radius:8px;min-width:300px;max-width:90vw;box-shadow:0 4px 24px rgba(0,0,0,0.3)">
     <h2 style="margin:0 0 0.5rem 0;font-size:1.1rem">BLE 接続パスワード</h2>
     <p class="hint" style="margin:0 0 1rem 0">このデバイスは認証パスワードが設定されています。</p>
-    <!-- Hidden username so password managers can scope the credential
-         to a specific device. We use the BLE device name when known,
-         falling back to a generic placeholder. -->
-    <input id="auth-modal-username" name="username" autocomplete="username"
-           style="display:none" value="stackchan" readonly>
+    <label for="auth-modal-username" style="display:block;font-size:0.9rem;margin-bottom:0.25rem">デバイス</label>
+    <input type="text" id="auth-modal-username" name="username" autocomplete="username"
+           value="stackchan" readonly tabindex="-1"
+           style="width:100%;box-sizing:border-box;padding:0.5rem;font-size:1rem;margin-bottom:0.5rem;background:#f4f4f4;color:#555">
     <label for="auth-modal-password" style="display:block;font-size:0.9rem;margin-bottom:0.25rem">パスワード</label>
     <input type="password" id="auth-modal-password" name="password"
            autocomplete="current-password" required minlength="1" maxlength="64"
