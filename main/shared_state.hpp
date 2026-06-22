@@ -130,6 +130,11 @@ public:
     // take effect on the next ~16 ms tick without a reboot.
     std::atomic<std::uint16_t> mic_lip_input_gain_pct{200};
     std::atomic<std::uint16_t> mic_lip_output_gain_pct{100};
+    // Adaptive noise-floor AGC enable. When true (default),
+    // main/mic_lip_sync_task rebases its dB window on the tracked
+    // ambient noise level; when false, a fixed floor is used. Live —
+    // read every mic frame, no reboot needed.
+    std::atomic<bool> mic_lip_agc_enabled{true};
     // Modulate the LED brightness with `mouth_open` when on. Read by
     // main/led_task on every frame; live-applied from BLE/HTTP through the
     // staging path on Apply (reboot) — so this matches `battery_gauge_enabled`

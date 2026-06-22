@@ -627,6 +627,11 @@
           <input type="range" id="mic-lip-output" min="10" max="500" step="10" value="100" style="width:100%">
         </div>
       </div>
+      <label class="toggle-label" for="mic-lip-agc" style="margin-top:0.5rem">
+        <input type="checkbox" id="mic-lip-agc">
+        <span>自動ゲイン制御 (AGC) を有効にする</span>
+      </label>
+      <p class="hint">周辺の雑音レベルを自動追跡して、静かな部屋でも騒音下でも声に反応するよう感度を調整します。OFF にすると固定閾値で判定 (環境変化に弱いが予測しやすい)。保存後の再起動で反映されます。</p>
 
       <h2 class="section-title" style="margin-top:1rem">jtts ボイス</h2>
       <p class="hint" style="margin-bottom:0.5rem">空欄や変更なしで「保存」を押すと現在の設定は維持されます。</p>
@@ -1068,6 +1073,9 @@ const CHR_AUDIO_OUTPUT = 'e3f0a029-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // Selects how main/led_task renders mouth_open when led_mouth_sync_enabled
 // is on. Staged via Apply path (reboot required).
 const CHR_LIP_SYNC_MODE = 'e3f0a02a-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+// MicLipAgcEnabled — encrypted 1-byte flag. When 1, mic lip-sync uses
+// adaptive noise-floor tracking. Staged via Apply path (reboot required).
+const CHR_MIC_LIP_AGC = 'e3f0a02b-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // AvatarBytecode — encrypted RW. Chunked upload of the avatar face .avbc
 // (mirrors `POST /api/avatar-dsl` on the HTTP side). READ returns a status
 // JSON; WRITE accepts a 1-byte op header followed by op-specific payload:
@@ -1133,7 +1141,7 @@ const DIS_CHRS = {
 
 // --- State ---
 let bleDevice = null, bleServer = null, svc = null;
-let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJttsIdleEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null, chrMicLipGain = null, chrLedMouthSync = null, chrLipSyncMode = null, chrOperationMode = null, chrAudioOutput = null, chrBargeIn = null, chrDeviceName = null, chrAuthPassword = null, chrAvatarBc = null;
+let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJttsIdleEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null, chrMicLipGain = null, chrLedMouthSync = null, chrLipSyncMode = null, chrMicLipAgc = null, chrOperationMode = null, chrAudioOutput = null, chrBargeIn = null, chrDeviceName = null, chrAuthPassword = null, chrAvatarBc = null;
 let boardKind = null; // null = unknown (older firmware), else 0/1/2 from BOARD_*
 let batteryPollTimer = null;  // setInterval handle while connected
 let jttsInitialJson = '';  // last read JSON, used to detect Apply-time changes
@@ -2259,6 +2267,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       ['micLipGain', CHR_MIC_LIP_GAIN],
       ['ledMouthSync', CHR_LED_MOUTH_SYNC],
       ['lipSyncMode',  CHR_LIP_SYNC_MODE],
+      ['micLipAgc',    CHR_MIC_LIP_AGC],
       ['operationMode', CHR_OPERATION_MODE],
       ['audioOutput',   CHR_AUDIO_OUTPUT],
       ['bargeIn',       CHR_BARGE_IN_ENABLED],
@@ -2311,6 +2320,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
     chrMicLipGain = found.micLipGain ?? null;
     chrLedMouthSync = found.ledMouthSync ?? null;
     chrLipSyncMode = found.lipSyncMode ?? null;
+    chrMicLipAgc = found.micLipAgc ?? null;
     chrOperationMode = found.operationMode ?? null;
     chrAudioOutput = found.audioOutput ?? null;
     chrBargeIn = found.bargeIn ?? null;
@@ -2424,6 +2434,18 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
         }
       } catch (e) {
         log(`リップシンク モード 状態の取得失敗: ${e.message}`, 'err');
+      }
+    }
+
+    if (chrMicLipAgc) {
+      try {
+        const agcBytes = await readEncrypted(chrMicLipAgc);
+        const enabled = agcBytes.length > 0 && agcBytes[0] !== 0;
+        document.getElementById('mic-lip-agc').checked = enabled;
+        document.getElementById('mic-lip-agc').dataset.initial = enabled ? '1' : '0';
+        log(`マイク AGC: ${enabled ? '有効' : '無効'}`);
+      } catch (e) {
+        log(`マイク AGC 状態の取得失敗: ${e.message}`, 'err');
       }
     }
 
@@ -2676,7 +2698,7 @@ function onDisconnected() {
   micLipLoaded = false;
   svRangeOn = false;
   svLiveYaw = svLivePitch = -1;
-  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJttsIdleEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoEnabled = chrMcpToken = chrLtConfig = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = chrAudioMetrics = chrLedState = chrMicLipGain = chrLedMouthSync = chrLipSyncMode = chrOperationMode = chrAudioOutput = chrBargeIn = chrAvatarBc = null;
+  chrSsid = chrPass = chrKey = chrApply = chrStatus = chrKx = chrEn = chrRtpEn = chrJttsIdleEn = chrJtts = chrOtaCtrl = chrOtaData = chrProvider = chrGeminiKey = chrXiaozhiUrl = chrXiaozhiToken = chrFaceConfig = chrBattery = chrBatGauge = chrServoEnabled = chrMcpToken = chrLtConfig = chrServoLimits = chrServoRangeMode = chrServoPositions = chrBoardKind = chrWifiIp = chrWifiMac = chrAudioCtrl = chrAudioData = chrAudioCredit = chrAudioMetrics = chrLedState = chrMicLipGain = chrLedMouthSync = chrLipSyncMode = chrMicLipAgc = chrOperationMode = chrAudioOutput = chrBargeIn = chrAvatarBc = null;
   if (typeof refreshAvbcButton === 'function') refreshAvbcButton();
   boardKind = null;
   aesKey = null;
@@ -2686,6 +2708,7 @@ function onDisconnected() {
   delete document.getElementById('jtts-idle-enabled').dataset.initial;
   delete document.getElementById('led-mouth-sync').dataset.initial;
   delete document.getElementById('lip-sync-mode').dataset.initial;
+  delete document.getElementById('mic-lip-agc').dataset.initial;
   delete document.getElementById('operation-mode').dataset.initial;
   delete document.getElementById('audio-output').dataset.initial;
   delete document.getElementById('barge-in-enabled').dataset.initial;
@@ -2810,6 +2833,15 @@ document.getElementById('btn-apply').addEventListener('click', async () => {
       await writeEncrypted(chrLipSyncMode, new Uint8Array([v]));
       const labels = {0:'輝度',1:'レベル メーター'};
       log(`リップシンク モードを ${labels[v] || `mode ${v}`} に切り替え`, 'ok');
+    }
+
+    // Mic lip-sync AGC: only push if it changed AND chr is present.
+    const agcCheckbox = document.getElementById('mic-lip-agc');
+    const agcInitial = agcCheckbox.dataset.initial;
+    const agcWanted = agcCheckbox.checked ? '1' : '0';
+    if (chrMicLipAgc && agcInitial !== undefined && agcInitial !== agcWanted) {
+      await writeEncrypted(chrMicLipAgc, new Uint8Array([agcCheckbox.checked ? 1 : 0]));
+      log(`マイク AGC を ${agcCheckbox.checked ? '有効' : '無効'} に切り替え`, 'ok');
     }
 
     // Operation mode: only push if it changed AND chr is present.

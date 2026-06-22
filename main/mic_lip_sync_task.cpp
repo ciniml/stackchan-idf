@@ -61,14 +61,32 @@ std::array<float, kFftSize * 2> g_fft_io{};
 constexpr float kAttack = 0.55f;
 constexpr float kRelease = 0.20f;
 
-// Voice-band log-energy normalisation window, in band-limited dBFS (the
-// time-domain RMS that would carry the same in-band energy, expressed
-// relative to i16 full-scale). Derived from the old RMS-based bounds
-// (kMinRms=200 / kMaxRms=5000 in i16 units → -44 / -16 dBFS on the same
-// scale) so the calibration starts roughly equivalent to the previous
-// implementation. Tweak after watching the diag log on real audio.
-constexpr float kFloorDb = -44.0f;
-constexpr float kCeilDb  = -16.0f;
+// Voice-band log-energy normalisation: an adaptive noise-floor follower
+// tracks the running quiet level (asymmetric EWMA — fast down, slow up
+// so the follower won't ride speech), then the effective floor is
+// (tracked_db + kFloorMarginDb) and the ceiling is (floor + kDynRangeDb).
+// This auto-compensates for differences between rooms (quiet office vs
+// noisy cafe) and mic gains without per-deploy threshold tuning.
+//
+//   kInitFloorDb       — startup estimate, conservative (CoreS3 internal
+//                          mic in a typical room sits around -42..-46 dBFS)
+//   kFloorMarginDb     — dB above the tracked noise floor where the
+//                          mouth starts to open (avoids opening on the
+//                          noise itself)
+//   kDynRangeDb        — dB above the floor where the mouth saturates
+//                          (full open). Roughly matches typical speech
+//                          peak-to-noise SNR on a desk mic.
+//   kFollowDownPerSec  — dB/s the follower can fall (catches up to
+//                          a newly-quiet room in a few seconds)
+//   kFollowUpPerSec    — dB/s the follower can rise (slow — must be
+//                          dominated by continuous noise, not occasional
+//                          speech; ~20 s to recover from a misleading
+//                          drop to a momentary silence)
+constexpr float kInitFloorDb       = -42.0f;
+constexpr float kFloorMarginDb     = 4.0f;
+constexpr float kDynRangeDb        = 24.0f;
+constexpr float kFollowDownPerSec  = 6.0f;   // dB/s
+constexpr float kFollowUpPerSec    = 0.5f;   // dB/s
 
 // Spectral-flux onset detector contribution. Flux is sum of positive
 // frame-to-frame magnitude deltas in the voice band, normalised so a
@@ -90,6 +108,11 @@ constexpr float kEnergyScale = 2.0f /
     (static_cast<float>(kFftSize) * static_cast<float>(kFftSize) * 0.375f);
 
 bool g_fft_ready = false;
+
+// Tracked noise-floor estimate in dBFS — updated each frame by an
+// asymmetric EWMA (see kFollowDown/Up). Persisted across calls so the
+// follower's history survives the per-frame estimator.
+float g_noise_floor_db = kInitFloorDb;
 
 // One-shot FFT table init. Returns true if dsps_fft2r_init_fc32 succeeded.
 bool init_fft_once()
@@ -123,7 +146,7 @@ bool init_fft_once()
 // `gain` multiplies the linear time-domain signal before windowing, so
 // the user's input-gain slider shifts dBFS but doesn't risk clipping —
 // FFT bin energies grow / shrink linearly with the input.
-float estimate_mouth_open(const std::int16_t* buf, std::size_t n, float gain)
+float estimate_mouth_open(const std::int16_t* buf, std::size_t n, float gain, bool agc_enabled)
 {
     if (n != kFftSize) return 0.0f;
     if (!init_fft_once()) return 0.0f;
@@ -158,10 +181,37 @@ float estimate_mouth_open(const std::int16_t* buf, std::size_t n, float gain)
 
     // Convert FFT band sum-of-squares → band-limited time-domain RMS via
     // Parseval (with Hann-window energy correction). 20*log10 puts it on
-    // a dBFS scale comparable to the legacy kMinRms / kMaxRms thresholds.
+    // a dBFS scale.
     const float band_rms = std::sqrt(band_sumsq * kEnergyScale) + 1e-9f;
     const float db = 20.0f * std::log10(band_rms);
-    float env = (db - kFloorDb) / (kCeilDb - kFloorDb);
+
+    // AGC: when enabled, update the noise-floor follower with an asymmetric
+    // per-frame EWMA step (fast down, slow up so brief speech doesn't
+    // pull the follower up). When disabled, freeze the tracked floor at
+    // its current value — caller can disable AGC for a predictable static
+    // calibration (env will drift if the room noise changes after that).
+    constexpr float kFrameSec = static_cast<float>(kFftSize) /
+                                 static_cast<float>(kSampleRate);
+    if (agc_enabled) {
+        const float max_down = kFollowDownPerSec * kFrameSec;
+        const float max_up   = kFollowUpPerSec   * kFrameSec;
+        if (db < g_noise_floor_db) {
+            const float delta = g_noise_floor_db - db;
+            g_noise_floor_db -= std::min(delta, max_down);
+        } else {
+            const float delta = db - g_noise_floor_db;
+            g_noise_floor_db += std::min(delta, max_up);
+        }
+    } else {
+        // AGC off: snap follower to the static default so toggling AGC
+        // off after it tracked low doesn't keep using a stale low floor.
+        g_noise_floor_db = kInitFloorDb;
+    }
+
+    // Effective floor / ceil derived from the tracked noise floor.
+    const float floor_db = g_noise_floor_db + kFloorMarginDb;
+    const float ceil_db  = floor_db + kDynRangeDb;
+    float env = (db - floor_db) / (ceil_db - floor_db);
     if (env < 0.0f) env = 0.0f;
     if (env > 1.0f) env = 1.0f;
 
@@ -184,8 +234,9 @@ float estimate_mouth_open(const std::int16_t* buf, std::size_t n, float gain)
     if (++log_counter >= 30) {  // ~30 * 16ms ≈ 0.5 s
         log_counter = 0;
         ESP_LOGI(kTag,
-                 "diag: band_rms=%.5f db=%.1f env=%.2f flux_raw=%.4f flux_n=%.2f combined=%.2f gain=%.2f",
-                 band_rms, db, env, flux, flux_n, combined, gain);
+                 "diag: db=%.1f floor=%.1f env=%.2f flux_raw=%.2f flux_n=%.2f combined=%.2f gain=%.2f agc=%d",
+                 db, g_noise_floor_db, env, flux, flux_n, combined, gain,
+                 agc_enabled ? 1 : 0);
     }
     return combined;
 }
@@ -264,7 +315,8 @@ void mic_lip_sync_task_entry(void* arg)
         // FFT-based voice-band log energy + spectral-flux onset detector.
         // estimate_mouth_open already normalises to [0, 1]; output gain
         // scales beyond that, saturating quiet inputs to full mouth open.
-        float level = estimate_mouth_open(buf.data(), buf.size(), in_gain);
+        const bool agc_on = state->mic_lip_agc_enabled.load(std::memory_order_relaxed);
+        float level = estimate_mouth_open(buf.data(), buf.size(), in_gain, agc_on);
         level *= out_gain;
         if (level > 1.0f) level = 1.0f;
         if (level < 0.0f) level = 0.0f;

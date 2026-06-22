@@ -160,6 +160,13 @@ struct DeviceConfig {
     // mouth response; users can dial down on noisier boards.
     std::uint16_t mic_lip_input_gain_pct = 200;
     std::uint16_t mic_lip_output_gain_pct = 100;
+    // Adaptive noise-floor AGC for the mic lip-sync envelope estimator.
+    // When true (default), main/mic_lip_sync_task tracks the ambient
+    // noise floor and rebases the mouth_open normalisation window on
+    // top of it (auto-compensates for different rooms / mic gains).
+    // When false, a fixed floor is used (legacy behaviour). Live atomic
+    // — takes effect on the next mic frame without reboot.
+    bool mic_lip_agc_enabled = true;
     // Modulate the nekomimi LED brightness with SharedState::mouth_open so the
     // ears pulse along with whatever's driving the avatar's mouth (mic
     // lip-sync, jtts babble, conversation playback, …). Off by default —

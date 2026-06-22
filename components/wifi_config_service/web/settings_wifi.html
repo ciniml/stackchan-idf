@@ -515,6 +515,11 @@
           <input type="range" id="mic-lip-output" min="10" max="500" step="10" value="100" style="width:100%">
         </div>
       </div>
+      <label class="toggle-label" for="mic-lip-agc" style="margin-top:0.5rem">
+        <input type="checkbox" id="mic-lip-agc">
+        <span>自動ゲイン制御 (AGC) を有効にする</span>
+      </label>
+      <p class="hint">周辺の雑音レベルを自動追跡して感度を調整します。OFF にすると固定閾値で判定。保存後の再起動で反映されます。</p>
 
       <h2 class="section-title" style="margin-top:1rem">jtts ボイス</h2>
       <p class="hint" style="margin-bottom:0.5rem">空欄や変更なしで「保存」を押すと現在の設定は維持されます。</p>
@@ -1143,6 +1148,7 @@ async function refresh() {
     if (typeof s.lip_sync_mode === 'number') {
       $('lip-sync-mode').value = String(s.lip_sync_mode);
     }
+    $('mic-lip-agc').checked = (s.mic_lip_agc_enabled !== false); // default true
     $('bat-gauge-enabled').checked = (s.battery_gauge_enabled !== false); // default on if absent
     $('servo-enabled').checked = (s.servo_enabled !== false); // default on if absent
     $('mcp-token-state').textContent = s.has_mcp_token ? '設定済' : '未設定';
@@ -1255,6 +1261,7 @@ async function apply() {
     await postText('/api/jtts-idle-enabled', jttsIdleEnabled ? '1' : '0');
     await postText('/api/led-mouth-sync', ledMouthSync ? '1' : '0');
     await postText('/api/lip-sync-mode', $('lip-sync-mode').value);
+    await postText('/api/mic-lip-agc', $('mic-lip-agc').checked ? '1' : '0');
     await postText('/api/battery-gauge', batGauge ? '1' : '0');
     await postText('/api/servo-enabled', servoEn ? '1' : '0');
     // MCP token: send only when the user typed something OR explicitly hit

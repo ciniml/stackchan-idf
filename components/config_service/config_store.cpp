@@ -48,6 +48,7 @@ constexpr const char* kKeyDeviceName    = "dev_name";   // user-set BLE / mDNS n
 constexpr const char* kKeyAuthPassword  = "auth_pwd";   // BLE handshake salt + HTTP Basic Auth (empty = no auth)
 constexpr const char* kKeyAudioOutput   = "audio_out";  // u8 AudioOutput (Auto/Internal/ModuleAudio)
 constexpr const char* kKeyLipSyncMode   = "lipsync_md"; // u8 LipSyncMode (Brightness/LevelMeter)
+constexpr const char* kKeyMicLipAgc     = "ml_agc";     // u8 bool mic_lip_agc_enabled
 
 std::string nvs_read_str(nvs_handle_t h, const char* key)
 {
@@ -214,6 +215,14 @@ DeviceConfig load()
     } else if (lsm_err != ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGW(kTag, "nvs_get_u8(%s): %s", kKeyLipSyncMode, esp_err_to_name(lsm_err));
     }
+    // mic_lip_agc_enabled: missing key → true (preserve default behaviour).
+    std::uint8_t agc = cfg.mic_lip_agc_enabled ? 1 : 0;
+    esp_err_t agc_err = nvs_get_u8(h, kKeyMicLipAgc, &agc);
+    if (agc_err == ESP_OK) {
+        cfg.mic_lip_agc_enabled = (agc != 0);
+    } else if (agc_err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(kTag, "nvs_get_u8(%s): %s", kKeyMicLipAgc, esp_err_to_name(agc_err));
+    }
     nvs_close(h);
     return cfg;
 }
@@ -312,6 +321,13 @@ tl::expected<void, Error> save(const DeviceConfig& cfg)
     err = nvs_set_u8(h, kKeyLipSyncMode, static_cast<std::uint8_t>(cfg.lip_sync_mode));
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "nvs_set_u8(%s): %s", kKeyLipSyncMode, esp_err_to_name(err));
+        nvs_close(h);
+        return tl::unexpected(Error::NvsWrite);
+    }
+
+    err = nvs_set_u8(h, kKeyMicLipAgc, cfg.mic_lip_agc_enabled ? 1 : 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "nvs_set_u8(%s): %s", kKeyMicLipAgc, esp_err_to_name(err));
         nvs_close(h);
         return tl::unexpected(Error::NvsWrite);
     }

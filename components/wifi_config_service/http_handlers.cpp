@@ -61,6 +61,7 @@ struct StagingBuffer {
     std::optional<config::OperationMode> operation_mode;
     std::optional<config::AudioOutput> audio_output;
     std::optional<config::LipSyncMode> lip_sync_mode;
+    std::optional<bool> mic_lip_agc_enabled;
     std::optional<bool> barge_in_enabled;
     std::optional<std::string> device_name;
     std::optional<std::string> auth_password;
@@ -323,6 +324,7 @@ esp_err_t handle_status_get(httpd_req_t* req)
     body += "\"operation_mode\":" + std::to_string(static_cast<int>(cfg.operation_mode)) + ",";
     body += "\"audio_output\":" + std::to_string(static_cast<int>(cfg.audio_output)) + ",";
     body += "\"lip_sync_mode\":" + std::to_string(static_cast<int>(cfg.lip_sync_mode)) + ",";
+    body += "\"mic_lip_agc_enabled\":" + std::string(cfg.mic_lip_agc_enabled ? "true" : "false") + ",";
     body += "\"barge_in_enabled\":" + std::string(cfg.barge_in_enabled ? "true" : "false") + ",";
     body += "\"device_name\":\"" + escape_json(cfg.device_name) + "\",";
     body += "\"has_auth_password\":" + std::string(cfg.auth_password.empty() ? "false" : "true") + ",";
@@ -524,6 +526,18 @@ esp_err_t handle_lip_sync_mode_post(httpd_req_t* req)
     return send_empty(req);
 }
 
+esp_err_t handle_mic_lip_agc_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
+    const bool enabled = !body.empty() && body[0] == '1';
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_staging.mic_lip_agc_enabled = enabled;
+    xSemaphoreGive(g_mutex);
+    return send_empty(req);
+}
+
 esp_err_t handle_barge_in_enabled_post(httpd_req_t* req)
 {
     if (!require_auth(req)) return ESP_OK;
@@ -700,6 +714,7 @@ esp_err_t handle_apply_post(httpd_req_t* req)
     if (g_staging.operation_mode) merged.operation_mode = *g_staging.operation_mode;
     if (g_staging.audio_output) merged.audio_output = *g_staging.audio_output;
     if (g_staging.lip_sync_mode) merged.lip_sync_mode = *g_staging.lip_sync_mode;
+    if (g_staging.mic_lip_agc_enabled) merged.mic_lip_agc_enabled = *g_staging.mic_lip_agc_enabled;
     if (g_staging.barge_in_enabled) merged.barge_in_enabled = *g_staging.barge_in_enabled;
     if (g_staging.battery_gauge_enabled) merged.battery_gauge_enabled = *g_staging.battery_gauge_enabled;
     if (g_staging.servo_enabled)   merged.servo_enabled = *g_staging.servo_enabled;
@@ -1121,6 +1136,7 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/operation-mode",  HTTP_POST, handle_operation_mode_post);
     add(server, "/api/audio-output",    HTTP_POST, handle_audio_output_post);
     add(server, "/api/lip-sync-mode",   HTTP_POST, handle_lip_sync_mode_post);
+    add(server, "/api/mic-lip-agc",     HTTP_POST, handle_mic_lip_agc_post);
     add(server, "/api/barge-in",        HTTP_POST, handle_barge_in_enabled_post);
     add(server, "/api/battery-gauge",   HTTP_POST, handle_battery_gauge_post);
     add(server, "/api/servo-enabled",   HTTP_POST, handle_servo_enabled_post);

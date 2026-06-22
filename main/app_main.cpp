@@ -1095,6 +1095,8 @@ extern "C" void app_main()
                                           std::memory_order_relaxed);
     g_state->lip_sync_mode.store(static_cast<std::uint8_t>(cfg.lip_sync_mode),
                                  std::memory_order_relaxed);
+    g_state->mic_lip_agc_enabled.store(cfg.mic_lip_agc_enabled,
+                                       std::memory_order_relaxed);
     g_state->barge_in_enabled.store(cfg.barge_in_enabled,
                                     std::memory_order_relaxed);
     stackchan::config::set_face_config_sink(&on_face_config);
