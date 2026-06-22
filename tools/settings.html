@@ -385,10 +385,15 @@
     <label for="auth-modal-password" style="display:block;font-size:0.9rem;margin-bottom:0.25rem">パスワード</label>
     <input type="password" id="auth-modal-password" name="password"
            autocomplete="current-password" required minlength="1" maxlength="64"
-           style="width:100%;box-sizing:border-box;padding:0.5rem;font-size:1rem;margin-bottom:1rem">
+           style="width:100%;box-sizing:border-box;padding:0.5rem;font-size:1rem;margin-bottom:0.5rem">
+    <label class="toggle-label" for="auth-modal-show" style="margin:0 0 1rem 0">
+      <input type="checkbox" id="auth-modal-show">
+      <span>パスワードを表示</span>
+    </label>
     <div style="display:flex;gap:0.5rem;justify-content:flex-end">
+      <button type="submit" id="auth-modal-ok"
+              style="background:#2563eb;color:white;border:none;padding:0.5rem 1rem;border-radius:4px;cursor:pointer;font-weight:600">接続</button>
       <button type="button" id="auth-modal-cancel" class="secondary">キャンセル</button>
-      <button type="submit" id="auth-modal-ok">接続</button>
     </div>
   </form>
 </div>
@@ -1300,16 +1305,26 @@ function promptForAuthPassword(deviceName) {
     const pwdEl    = document.getElementById('auth-modal-password');
     const userEl   = document.getElementById('auth-modal-username');
     const cancelEl = document.getElementById('auth-modal-cancel');
+    const showEl   = document.getElementById('auth-modal-show');
     // Scope the saved credential by the device name when known so the
     // browser can offer the right one back the next time we connect.
     userEl.value = deviceName || 'stackchan';
     pwdEl.value = '';
+    pwdEl.type = 'password';
+    showEl.checked = false;
     backdrop.style.display = 'flex';
     setTimeout(() => pwdEl.focus(), 0);
+    const onShowChange = () => {
+      pwdEl.type = showEl.checked ? 'text' : 'password';
+    };
     const cleanup = () => {
       backdrop.style.display = 'none';
       form.removeEventListener('submit', onSubmit);
       cancelEl.removeEventListener('click', onCancel);
+      showEl.removeEventListener('change', onShowChange);
+      // Reset back to masked so the toggle state doesn't leak across opens.
+      pwdEl.type = 'password';
+      showEl.checked = false;
     };
     const onSubmit = (e) => {
       e.preventDefault();
@@ -1324,6 +1339,7 @@ function promptForAuthPassword(deviceName) {
     };
     form.addEventListener('submit', onSubmit);
     cancelEl.addEventListener('click', onCancel);
+    showEl.addEventListener('change', onShowChange);
   });
 }
 
