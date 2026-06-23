@@ -518,8 +518,8 @@ void demo_loop(const std::string& jtts_config_json, bool has_battery, bool is_at
                 constexpr float kCenter = 233.0f;          // 466 / 2
                 constexpr float kOuterR = 233.0f;          // panel edge
                 constexpr float kInnerR = 180.0f;          // ring inner edge
-                constexpr float kGazeGain = 3.0f;          // DSL multiplier
-                                                            // is *3 → 9 px peak
+                constexpr float kGazeGain = 5.0f;          // DSL multiplier
+                                                            // is *3 → 15 px peak
                 bool follow_active = false;
                 if (td.isPressed() && !app::ui::active()) {
                     const float dx = static_cast<float>(td.x) - kCenter;
