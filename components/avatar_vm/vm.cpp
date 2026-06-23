@@ -34,17 +34,27 @@ inline float expression_to_f(avatar::Expression e) noexcept
 }
 
 // Compute the design→canvas uniform scale the original face.cpp used.
-// For circular displays, divide by an extra √2 so the 320×240 design
-// space fits in the inscribed square — otherwise effect marks designed
-// for the corners end up outside the visible circle on a 466×466 AMOLED.
+// For circular displays we fit the 320×240 design rect by its DIAGONAL
+// to the panel diameter, with a small margin so corner-anchored effect
+// marks (heart / sweat / spark on the 320×240 design's top-right) don't
+// graze the visible circle's edge. The earlier 1/√2 inset matched a
+// SQUARE design (320×320) and so under-scaled the actual 4:3 rect by
+// ~10% on 466×466 — using the proper rectangle diagonal recovers that.
 inline float canvas_scale(const avatar::Canvas& c) noexcept
 {
     constexpr float kBaseW = 320.0f;
     constexpr float kBaseH = 240.0f;
-    constexpr float kCircleInset = 0.70710678f; // 1/sqrt(2)
-    const float scale = std::min(static_cast<float>(c.width()) / kBaseW,
-                                 static_cast<float>(c.height()) / kBaseH);
-    return c.is_circular() ? scale * kCircleInset : scale;
+    if (c.is_circular()) {
+        // Round AMOLEDs report width == height == diameter, so either dim
+        // gives the diameter. Slight margin (0.97) keeps the very corner
+        // pixels just inside the visible edge.
+        constexpr float kCornerMargin = 0.97f;
+        constexpr float kBaseDiag = 400.0f;  // sqrt(320² + 240²)
+        const float diameter = static_cast<float>(std::min(c.width(), c.height()));
+        return diameter / kBaseDiag * kCornerMargin;
+    }
+    return std::min(static_cast<float>(c.width()) / kBaseW,
+                    static_cast<float>(c.height()) / kBaseH);
 }
 
 inline float read_var(Var v, const avatar::Canvas& canvas, const avatar::DrawContext& ctx,
