@@ -451,7 +451,9 @@ void draw_control()
     // − / + visual hints on the row edges so the user knows they can tap
     // there to nudge the value.
     g_cv->setTextDatum(lgfx::textdatum_t::middle_center);
-    g_cv->drawString("−", rx + rw / 6, ry + rh / 2);
+    // ASCII '-' / '+' so the default lgfx font renders both correctly
+    // (the Unicode minus U+2212 doesn't have a glyph in this build).
+    g_cv->drawString("-", rx + rw / 6, ry + rh / 2);
     g_cv->drawString("+", rx + (5 * rw) / 6, ry + rh / 2);
     // Value in the middle, big enough to read at a glance.
     char buf[16];
