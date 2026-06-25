@@ -28,6 +28,11 @@ public:
         // reading is the kana fed to jtts (no kanji dictionary).
         std::string warn_display = "のこり1分です";
         std::string warn_reading = "のこり いっぷん です";
+        // Exact-deadline announcement (fires once when remaining_ms first
+        // crosses 0). Empty → fall back to over_* so older saved configs
+        // hear the same thing they always did.
+        std::string just_display;
+        std::string just_reading;
         std::string over_display = "時間です!";
         std::string over_reading = "おじかん です";
     };
@@ -54,6 +59,7 @@ private:
     Config cfg_;
     bool running_ = false;
     bool warned_ = false;
+    bool just_fired_ = false;
     std::uint32_t deadline_ms_ = 0;
     std::uint32_t next_over_ms_ = 0;
 };

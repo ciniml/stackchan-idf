@@ -56,6 +56,7 @@ void LtTimer::configure(const std::string& json, SharedState* state)
         if (cJSON_IsString(r) && r->valuestring != nullptr) reading = r->valuestring;
     };
     load_phrase("warn", cfg_.warn_display, cfg_.warn_reading);
+    load_phrase("just", cfg_.just_display, cfg_.just_reading);
     load_phrase("over", cfg_.over_display, cfg_.over_reading);
     cJSON_Delete(root);
     ESP_LOGI(kTag, "config: warn_s=%u repeat_s=%u", static_cast<unsigned>(cfg_.warn_s),
@@ -80,6 +81,7 @@ void LtTimer::tick(SharedState& state, Speech& speech, std::uint32_t now_ms)
         deadline_ms_ = now_ms + total_s * 1000U;
         running_ = true;
         warned_ = false;
+        just_fired_ = false;
         next_over_ms_ = 0;
         state.lt_active.store(true, std::memory_order_relaxed);
         state.lt_remaining_s.store(static_cast<std::int32_t>(total_s), std::memory_order_relaxed);
@@ -113,13 +115,32 @@ void LtTimer::tick(SharedState& state, Speech& speech, std::uint32_t now_ms)
         announce(state, speech, cfg_.warn_display, cfg_.warn_reading);
     }
 
-    if (remaining_ms <= 0 && now_ms >= next_over_ms_) {
-        announce(state, speech, cfg_.over_display, cfg_.over_reading);
-        if (cfg_.repeat_s == 0) {
-            // Announce once, then just keep counting overtime silently.
-            next_over_ms_ = UINT32_MAX;
-        } else {
-            next_over_ms_ = now_ms + cfg_.repeat_s * 1000U;
+    if (remaining_ms <= 0) {
+        if (!just_fired_) {
+            // First hit at the deadline — use the dedicated `just` phrase
+            // when set, otherwise fall back to `over` so legacy configs
+            // (no "just" key) sound the same as before.
+            just_fired_ = true;
+            const bool has_just =
+                !cfg_.just_display.empty() || !cfg_.just_reading.empty();
+            announce(state, speech,
+                     has_just ? cfg_.just_display : cfg_.over_display,
+                     has_just ? cfg_.just_reading : cfg_.over_reading);
+            if (cfg_.repeat_s == 0) {
+                next_over_ms_ = UINT32_MAX;
+            } else {
+                next_over_ms_ = now_ms + cfg_.repeat_s * 1000U;
+            }
+        } else if (now_ms >= next_over_ms_) {
+            // Subsequent overtime nudges always use `over` regardless of
+            // whether `just` was distinct (the deadline message has
+            // already played; we want the running "you're over" reminder).
+            announce(state, speech, cfg_.over_display, cfg_.over_reading);
+            if (cfg_.repeat_s == 0) {
+                next_over_ms_ = UINT32_MAX;
+            } else {
+                next_over_ms_ = now_ms + cfg_.repeat_s * 1000U;
+            }
         }
     }
 }

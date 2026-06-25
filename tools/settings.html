@@ -831,6 +831,10 @@
       <input id="lt-warn-text" placeholder="のこり1分です">
       <label for="lt-warn-reading">残り通知 読み (ひらがな)</label>
       <input id="lt-warn-reading" placeholder="のこり いっぷん です">
+      <label for="lt-just-text">時間ちょうど 表示テキスト</label>
+      <input id="lt-just-text" placeholder="（空欄なら超過と同じ）">
+      <label for="lt-just-reading">時間ちょうど 読み (ひらがな)</label>
+      <input id="lt-just-reading" placeholder="（空欄なら超過と同じ）">
       <label for="lt-over-text">超過 表示テキスト</label>
       <input id="lt-over-text" placeholder="時間です!">
       <label for="lt-over-reading">超過 読み (ひらがな)</label>
@@ -2783,6 +2787,8 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
             if (o.repeat_s != null) document.getElementById('lt-repeat').value = o.repeat_s;
             if (o.warn) { if (o.warn.text) document.getElementById('lt-warn-text').value = o.warn.text;
                           if (o.warn.reading) document.getElementById('lt-warn-reading').value = o.warn.reading; }
+            if (o.just) { if (o.just.text) document.getElementById('lt-just-text').value = o.just.text;
+                          if (o.just.reading) document.getElementById('lt-just-reading').value = o.just.reading; }
             if (o.over) { if (o.over.text) document.getElementById('lt-over-text').value = o.over.text;
                           if (o.over.reading) document.getElementById('lt-over-reading').value = o.over.reading; }
           } catch (_) { /* malformed stored JSON — leave placeholders */ }
@@ -3147,6 +3153,8 @@ document.getElementById('btn-apply').addEventListener('click', async () => {
       const lt_rep   = num('lt-repeat'); if (lt_rep    != null && lt_rep    >= 0) o.repeat_s = lt_rep;
       const lt_wt = str('lt-warn-text'), lt_wr = str('lt-warn-reading');
       if (lt_wt || lt_wr) { o.warn = {}; if (lt_wt) o.warn.text = lt_wt; if (lt_wr) o.warn.reading = lt_wr; }
+      const lt_jt = str('lt-just-text'), lt_jr = str('lt-just-reading');
+      if (lt_jt || lt_jr) { o.just = {}; if (lt_jt) o.just.text = lt_jt; if (lt_jr) o.just.reading = lt_jr; }
       const lt_ot = str('lt-over-text'), lt_or = str('lt-over-reading');
       if (lt_ot || lt_or) { o.over = {}; if (lt_ot) o.over.text = lt_ot; if (lt_or) o.over.reading = lt_or; }
       if (Object.keys(o).length) {

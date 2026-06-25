@@ -609,6 +609,10 @@
       <input id="lt-warn-text" placeholder="のこり1分です">
       <label for="lt-warn-reading">残り通知 読み (ひらがな)</label>
       <input id="lt-warn-reading" placeholder="のこり いっぷん です">
+      <label for="lt-just-text">時間ちょうど 表示テキスト</label>
+      <input id="lt-just-text" placeholder="（空欄なら超過と同じ）">
+      <label for="lt-just-reading">時間ちょうど 読み (ひらがな)</label>
+      <input id="lt-just-reading" placeholder="（空欄なら超過と同じ）">
       <label for="lt-over-text">超過 表示テキスト</label>
       <input id="lt-over-text" placeholder="時間です!">
       <label for="lt-over-reading">超過 読み (ひらがな)</label>
@@ -1057,6 +1061,8 @@ function buildLtConfig() {
   const rep   = num('lt-repeat');  if (rep    != null && rep    >= 0) o.repeat_s = rep;
   const wt = str('lt-warn-text'), wr = str('lt-warn-reading');
   if (wt || wr) { o.warn = {}; if (wt) o.warn.text = wt; if (wr) o.warn.reading = wr; }
+  const jt = str('lt-just-text'), jr = str('lt-just-reading');
+  if (jt || jr) { o.just = {}; if (jt) o.just.text = jt; if (jr) o.just.reading = jr; }
   const ot = str('lt-over-text'), or_ = str('lt-over-reading');
   if (ot || or_) { o.over = {}; if (ot) o.over.text = ot; if (or_) o.over.reading = or_; }
   return Object.keys(o).length ? JSON.stringify(o) : null;
@@ -1071,6 +1077,8 @@ function applyLtConfigToForm(json) {
   if (o.repeat_s != null) $('lt-repeat').value = o.repeat_s;
   if (o.warn) { if (o.warn.text) $('lt-warn-text').value = o.warn.text;
                 if (o.warn.reading) $('lt-warn-reading').value = o.warn.reading; }
+  if (o.just) { if (o.just.text) $('lt-just-text').value = o.just.text;
+                if (o.just.reading) $('lt-just-reading').value = o.just.reading; }
   if (o.over) { if (o.over.text) $('lt-over-text').value = o.over.text;
                 if (o.over.reading) $('lt-over-reading').value = o.over.reading; }
 }
