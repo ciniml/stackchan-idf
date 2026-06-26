@@ -42,6 +42,12 @@ void LtTimer::configure(const std::string& json, SharedState* state)
         cJSON_IsNumber(v) && v->valueint > 0) {
         cfg_.warn_s = static_cast<std::uint32_t>(v->valueint);
     }
+    if (const cJSON* v = cJSON_GetObjectItemCaseSensitive(root, "soon_s");
+        cJSON_IsNumber(v) && v->valueint >= 0) {
+        // 0 disables the short-warning entirely (the legacy 2-phrase
+        // configs that don't have this key keep their default 15).
+        cfg_.soon_s = static_cast<std::uint32_t>(v->valueint);
+    }
     if (const cJSON* v = cJSON_GetObjectItemCaseSensitive(root, "repeat_s");
         cJSON_IsNumber(v) && v->valueint >= 0) {
         // 0 = announce overtime once, never repeat.
@@ -56,6 +62,7 @@ void LtTimer::configure(const std::string& json, SharedState* state)
         if (cJSON_IsString(r) && r->valuestring != nullptr) reading = r->valuestring;
     };
     load_phrase("warn", cfg_.warn_display, cfg_.warn_reading);
+    load_phrase("soon", cfg_.soon_display, cfg_.soon_reading);
     load_phrase("just", cfg_.just_display, cfg_.just_reading);
     load_phrase("over", cfg_.over_display, cfg_.over_reading);
     cJSON_Delete(root);
@@ -81,6 +88,7 @@ void LtTimer::tick(SharedState& state, Speech& speech, std::uint32_t now_ms)
         deadline_ms_ = now_ms + total_s * 1000U;
         running_ = true;
         warned_ = false;
+        soon_fired_ = false;
         just_fired_ = false;
         next_over_ms_ = 0;
         state.lt_active.store(true, std::memory_order_relaxed);
@@ -113,6 +121,16 @@ void LtTimer::tick(SharedState& state, Speech& speech, std::uint32_t now_ms)
     if (!warned_ && remaining_ms <= static_cast<std::int64_t>(cfg_.warn_s) * 1000) {
         warned_ = true;
         announce(state, speech, cfg_.warn_display, cfg_.warn_reading);
+    }
+
+    // Short-warning ("almost there"). Fires once when remaining ≤ soon_s.
+    // Silent if soon_s == 0 OR both phrase fields are blank.
+    if (!soon_fired_ && cfg_.soon_s > 0 && remaining_ms > 0 &&
+        remaining_ms <= static_cast<std::int64_t>(cfg_.soon_s) * 1000) {
+        soon_fired_ = true;
+        if (!cfg_.soon_display.empty() || !cfg_.soon_reading.empty()) {
+            announce(state, speech, cfg_.soon_display, cfg_.soon_reading);
+        }
     }
 
     if (remaining_ms <= 0) {

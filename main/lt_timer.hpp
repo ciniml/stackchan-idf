@@ -23,11 +23,18 @@ class LtTimer {
 public:
     struct Config {
         std::uint32_t warn_s = 60;    // "remaining" announcement threshold
+        std::uint32_t soon_s = 15;    // shorter "almost there" threshold
         std::uint32_t repeat_s = 30;  // overtime re-announcement period
         // Announcement texts: display goes to the balloon (free-form UTF-8),
         // reading is the kana fed to jtts (no kanji dictionary).
         std::string warn_display = "のこり1分です";
         std::string warn_reading = "のこり いっぷん です";
+        // Short-warning at soon_s before the deadline. Empty → silent
+        // (no announcement at this threshold, only warn and just/over
+        // remain). Default text is set non-empty so a fresh install gets
+        // the 15-second nudge out of the box.
+        std::string soon_display = "のこり15秒です";
+        std::string soon_reading = "のこり じゅうごびょう です";
         // Exact-deadline announcement (fires once when remaining_ms first
         // crosses 0). Empty → fall back to over_* so older saved configs
         // hear the same thing they always did.
@@ -59,6 +66,7 @@ private:
     Config cfg_;
     bool running_ = false;
     bool warned_ = false;
+    bool soon_fired_ = false;
     bool just_fired_ = false;
     std::uint32_t deadline_ms_ = 0;
     std::uint32_t next_over_ms_ = 0;
