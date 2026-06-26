@@ -1015,14 +1015,36 @@ extern "C" void app_main()
     //   Internal     → internal even if codec_present
     //   ModuleAudio  → module if codec_present, else warn and use internal
     const bool codec_present = stackchan::board::es8388::probe();
-    const bool effective_audio_module =
+    // M5Base servo UART (UART1) is wired to GPIO6 / GPIO7 — the same pads
+    // Module Audio uses for I2S WS / MCLK. The two are mutually exclusive:
+    // re-routing the speaker I2S onto G6/G7 silently breaks the servo bus
+    // (ping / read_present_position all fail, range-setting mode reports
+    // "position not acquired" and torque-enable can't reach the servos
+    // either, so the head stays limp on exit). Auto-resolve by forcing
+    // Internal output on M5Base+codec setups; the user can still pick
+    // ModuleAudio explicitly if they're running without servos.
+    const bool servo_audio_pin_conflict =
+        (board.kind() == stackchan::board::BoardKind::M5Base) && codec_present;
+    bool effective_audio_module =
         codec_present && (cfg.audio_output == stackchan::config::AudioOutput::Auto ||
                           cfg.audio_output == stackchan::config::AudioOutput::ModuleAudio);
+    if (servo_audio_pin_conflict &&
+        cfg.audio_output == stackchan::config::AudioOutput::Auto) {
+        ESP_LOGW(kTag, "Module Audio detected on M5Base — disabling I2S pin override "
+                       "to keep servo UART on G6/G7 alive (use audio_output=ModuleAudio "
+                       "to override and accept servo bus loss)");
+        effective_audio_module = false;
+    }
     if (cfg.audio_output == stackchan::config::AudioOutput::ModuleAudio && !codec_present) {
         ESP_LOGW(kTag, "audio_output=ModuleAudio but ES8388 absent — falling back to internal");
     }
     if (codec_present && cfg.audio_output == stackchan::config::AudioOutput::Internal) {
         ESP_LOGI(kTag, "Module Audio (ES8388) detected but audio_output=Internal — internal speaker");
+    }
+    if (servo_audio_pin_conflict &&
+        cfg.audio_output == stackchan::config::AudioOutput::ModuleAudio) {
+        ESP_LOGW(kTag, "audio_output=ModuleAudio on M5Base — servo bus on G6/G7 will be "
+                       "unusable while this output is selected");
     }
     if (effective_audio_module) {
         if (auto r = stackchan::board::es8388::init(); r) {
