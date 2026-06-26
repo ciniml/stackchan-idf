@@ -1455,9 +1455,22 @@ extern "C" void app_main()
     // M5 base wiring) — used to gate servo-power bring-up, servo task
     // start-up, and barge-in touch hit-tests that assume a head with
     // servos.
+    //
+    // Module Audio (M144) is also lumped in here: M5Base's SCS bus uses
+    // UART1 on G6 (TX) / G7 (RX), and the Module Audio I2S output we
+    // configure overrides those same pads (G6 = WS, G7 = MCLK). The
+    // ESP32-S3 GPIO matrix is 1-signal-per-pad, so once M5.Speaker.begin
+    // claims the pins (boot arpeggio, then every jtts / conv / MCP say)
+    // the servo bus stops responding — ping / read_present_position /
+    // torque-enable all fail, range mode never publishes positions and
+    // can't re-engage torque on exit. Hard-gate everything servo-related
+    // off when the Module Audio path is active so the user is left in a
+    // predictable "silent head" state rather than partially-broken
+    // servos. The user can pick audio_output=Internal to recover servo.
     const bool no_servo_bus =
         is_atom_nyan ||
-        board.kind() == stackchan::board::BoardKind::StopWatch;
+        board.kind() == stackchan::board::BoardKind::StopWatch ||
+        effective_audio_module;
 
     // Servo bring-up is only meaningful on boards that actually have a servo
     // bus (CoreS3 + M5/Takao). Atom-nyan has no servos in Phase 1 scope; skip
