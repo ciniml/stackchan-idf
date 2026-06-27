@@ -20,4 +20,10 @@ bool active();
 // returns true when it actually painted this frame.
 bool draw(M5GFX& display);
 
+// Touch handling. Returns true when AP screen owns the tap (= AP is up).
+// Inside, taps on the on-screen "終了" button disable AP mode; taps that
+// missed the button are still swallowed so they don't leak through to the
+// device_ui underneath.
+bool handle_tap(int x, int y);
+
 } // namespace stackchan::app::ap_screen

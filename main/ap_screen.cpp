@@ -22,6 +22,15 @@ char g_last_pw[33]   = {0};
 char g_last_ip[16]   = {0};
 bool g_painted = false;
 
+// Exit-button rect in panel coords (set by the most recent draw call).
+// handle_tap hit-tests against these. Boards without LCD touch (AtomS3R /
+// AtomS3 — the "tiny" branch) leave btn_w = 0; handle_tap then never matches
+// and still consumes the tap to keep the touchless gesture path clean.
+int g_btn_x = 0;
+int g_btn_y = 0;
+int g_btn_w = 0;
+int g_btn_h = 0;
+
 // Build the standard Wi-Fi QR payload. Format documented by the Wi-Fi
 // Alliance and supported natively by iOS Camera / Android scanners:
 //   WIFI:T:<auth>;S:<SSID>;P:<password>;H:<hidden>;;
@@ -83,27 +92,57 @@ bool draw(M5GFX& display)
     const std::int32_t W = display.width();
     const std::int32_t H = display.height();
 
-    // Layout breakpoints. Small atom panels (128×128) only have room for the
-    // QR + a single line of text; mid panels (CoreS3 320×240) fit QR + SSID
-    // + PW + URL stacked; large round panels (StopWatch 466×466) use a 240
-    // px QR inscribed inside the visible circle with text in the corners
-    // pulled in by the 70% safe inset (sqrt(2)/2).
+    // Layout breakpoints:
+    //   - tiny (≤160 px): 128×128 atom panels — no touch, so no exit button;
+    //                     atom_status's 5 s long-press gesture dismisses AP.
+    //   - mid:           CoreS3 320×240 — QR centred with title above, three
+    //                    text lines below, exit-button band at the bottom.
+    //   - round (≥400):  StopWatch 466×466 AMOLED — content kept inside the
+    //                    inscribed square (~0.707 R) horizontally but allowed
+    //                    closer to the panel edge along the vertical centre
+    //                    axis (where the visible circle reaches almost full
+    //                    height).
     const bool tiny  = W <= 160;
     const bool round_ = W >= 400;
 
-    // Pull the safe-area inset on round displays so text doesn't fall off
-    // the visible circle. Square panels use a small uniform margin.
     const int inset = round_
         ? static_cast<int>(W * (1.0f - 0.70710678f) * 0.5f) + 4
         : 4;
 
-    const int qr_w = tiny ? (W - 18)
-                   : round_ ? (W * 240 / 466)
-                   : 160;
+    // Bottom exit-button band. Height ~ 1/6 of panel height on touch boards.
+    // On round panels the band can extend slightly below the inscribed
+    // square because the button is centred horizontally — the visible
+    // circle is widest along the vertical axis, narrowest at the corners.
+    const int btn_h = tiny ? 0
+                    : round_ ? 40
+                    : 30;
+    const int btn_band_y = tiny ? H : (H - btn_h - (round_ ? 18 : 4));
+    const int btn_w = tiny ? 0
+                    : round_ ? 200
+                    : (W - 24);
+    const int btn_x = (W - btn_w) / 2;
+
+    // QR + caption block fills the area above the button band. Pick a QR
+    // size that leaves room for the title (top) and 3 caption lines plus
+    // the button band (bottom).
+    const int caption_lines = tiny ? 1 : 3;
+    const int caption_line_h = round_ ? 22 : 14;
+    const int caption_h = caption_lines * caption_line_h + 4;
+    const int title_h = tiny ? 0 : (round_ ? 32 : 20);
+    const int top_margin = tiny ? 8 : (round_ ? inset : 4);
+
+    const int avail_y_for_qr = btn_band_y - top_margin - title_h - caption_h;
+    const int qr_max_by_w = tiny ? (W - 18)
+                          : round_ ? (W * 220 / 466)
+                          : 150;
+    const int qr_w = (avail_y_for_qr < qr_max_by_w) ? avail_y_for_qr : qr_max_by_w;
     const int qr_x = (W - qr_w) / 2;
-    const int qr_y = tiny ? 8
-                   : round_ ? (H / 2 - qr_w / 2)
-                   : (inset + 26); // leave room for the title line on CoreS3
+    const int qr_y = top_margin + title_h;
+
+    g_btn_x = btn_x;
+    g_btn_y = btn_band_y;
+    g_btn_w = btn_w;
+    g_btn_h = btn_h;
 
     char qr_payload[160];
     build_wifi_qr_payload(ssid, pw, qr_payload, sizeof(qr_payload));
@@ -117,34 +156,27 @@ bool draw(M5GFX& display)
                                 : &fonts::lgfxJapanGothic_16);
         display.setTextColor(TFT_BLACK, TFT_WHITE);
         display.setTextDatum(lgfx::textdatum_t::top_center);
-        const int title_y = round_ ? (qr_y - 32) : inset;
-        display.drawString("Wi-Fi 設定モード", W / 2, title_y);
+        display.drawString("Wi-Fi 設定モード", W / 2, top_margin);
     }
 
-    // QR. Version 0 = auto-pick by payload length; margin=true adds the
-    // standard quiet zone the M5GFX implementation expects for reliable
-    // decoding. The payload is ≤ 80 chars in practice, well within the
-    // capacity of an auto-sized QR at the default ECC level.
+    // QR. Version 0 = auto-pick by payload length. The payload is ≤ 80
+    // chars in practice, well within an auto-sized QR at the default ECC.
     display.qrcode(qr_payload, qr_x, qr_y, qr_w, 0);
 
-    // Caption block below the QR — SSID / PW / URL. Use a smaller font on
-    // the tiny panel; otherwise share the title font scale.
+    // Caption block between the QR and the exit button.
     if (!tiny) {
         display.setFont(round_ ? &fonts::lgfxJapanGothic_20
                                 : &fonts::lgfxJapanGothic_12);
+        display.setTextColor(TFT_BLACK, TFT_WHITE);
         display.setTextDatum(lgfx::textdatum_t::top_center);
-        const int line_h = round_ ? 28 : 16;
-        int ty = qr_y + qr_w + (round_ ? 12 : 6);
+        int ty = qr_y + qr_w + 4;
         char buf[64];
-
         std::snprintf(buf, sizeof(buf), "SSID: %s", ssid);
         display.drawString(buf, W / 2, ty);
-        ty += line_h;
-
+        ty += caption_line_h;
         std::snprintf(buf, sizeof(buf), "PW:   %s", pw);
         display.drawString(buf, W / 2, ty);
-        ty += line_h;
-
+        ty += caption_line_h;
         std::snprintf(buf, sizeof(buf), "http://%s/", ip);
         display.drawString(buf, W / 2, ty);
     } else {
@@ -156,9 +188,43 @@ bool draw(M5GFX& display)
         display.setTextDatum(lgfx::textdatum_t::top_center);
         display.drawString(ssid, W / 2, qr_y + qr_w + 2);
     }
+
+    // Exit button (touch boards only). Red so it reads as "stop/cancel"
+    // rather than a neutral CTA — same colour treatment as device_ui's
+    // "AP モード（停止）" button when AP is up.
+    if (btn_w > 0 && btn_h > 0) {
+        const std::uint16_t red = display.color565(200, 90, 60);
+        display.fillRoundRect(btn_x, btn_band_y, btn_w, btn_h, 6, red);
+        display.setFont(round_ ? &fonts::lgfxJapanGothic_20
+                                : &fonts::lgfxJapanGothic_16);
+        display.setTextColor(TFT_WHITE, red);
+        display.setTextDatum(lgfx::textdatum_t::middle_center);
+        display.drawString("終了 (AP モード停止)",
+                           btn_x + btn_w / 2, btn_band_y + btn_h / 2);
+    }
     display.endWrite();
 
     g_painted = true;
+    return true;
+}
+
+bool handle_tap(int x, int y)
+{
+    if (!wifi_ap_active()) return false;
+    // While AP is up we own the touch input — swallow every tap even if it
+    // missed the exit button. Otherwise the tap would propagate to the
+    // hidden device_ui underneath (whose top-right corner opens the 5-tab
+    // settings UI), which would surprise the user when AP is later
+    // dismissed and the UI reappears already open.
+    if (g_btn_w > 0 && g_btn_h > 0 &&
+        x >= g_btn_x && x < g_btn_x + g_btn_w &&
+        y >= g_btn_y && y < g_btn_y + g_btn_h) {
+        wifi_disable_ap_mode();
+        // Mark the cached snapshot stale so the next render task tick that
+        // sees ap_screen::active() == false → repaints the avatar; nothing
+        // else to do here.
+        g_painted = false;
+    }
     return true;
 }
 

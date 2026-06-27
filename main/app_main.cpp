@@ -22,6 +22,7 @@
 #include <esp_ota_ops.h>
 #include <esp_heap_caps.h>
 
+#include "ap_screen.hpp"
 #include "atom_status.hpp"
 #if CONFIG_STACKCHAN_AUDIO_STREAM_ENABLED
 #include "audio_stream_sink.hpp"
@@ -611,6 +612,14 @@ void demo_loop(const std::string& jtts_config_json, bool has_battery, bool is_at
         } else {
             const auto td = M5.Touch.getDetail();
             if (td.wasPressed()) {
+                // AP provisioning screen owns the touch while it's up —
+                // the on-screen "終了" button is how the user dismisses
+                // AP mode on touch boards (CoreS3 / StopWatch). A return
+                // of true swallows the tap so it doesn't leak through to
+                // the device_ui hit-test underneath.
+                if (app::ap_screen::handle_tap(td.x, td.y)) {
+                    continue;
+                }
                 const bool ui_before = app::ui::active();
                 app::ui::handle_tap(td.x, td.y);
                 // A tap that didn't open/use the on-device UI, while the

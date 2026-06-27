@@ -191,6 +191,32 @@ void derive_ap_credentials()
 
 } // namespace
 
+// Worker task body — runs the parts of AP bring-up that may take O(seconds)
+// (HTTP server start + handle polling) off the caller's task so a tap
+// handler in demo_loop returns quickly and the QR screen appears within
+// one render frame.
+void ap_post_start_worker(void*)
+{
+    if (g_boot_cfg != nullptr) {
+        // wifi_config::start is idempotent — returns AlreadyStarted if the
+        // server is already up from a previous STA_GOT_IP. The server
+        // binds to INADDR_ANY so it serves both AP and STA interfaces.
+        (void)wifi_config::start(*g_boot_cfg);
+    }
+    wifi_config::set_provisioning_mode(true);
+    captive_portal::start_dns();
+    // Poll up to ~2 s for the init task to publish its server handle.
+    // Done off the caller so demo_loop isn't blocked.
+    for (int i = 0; i < 40; ++i) {
+        if (auto h = wifi_config::handle(); h != nullptr) {
+            captive_portal::register_http_catchall(h);
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    vTaskDelete(nullptr);
+}
+
 void wifi_enable_ap_mode()
 {
     if (g_ap_active.load(std::memory_order_acquire)) return;
@@ -203,7 +229,17 @@ void wifi_enable_ap_mode()
     // APSTA keeps the STA side of the driver running so reconnect attempts
     // continue in background; the user can fix credentials and watch them
     // take effect without rebooting.
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    //
+    // Use error-returns instead of ESP_ERROR_CHECK throughout: set_mode can
+    // legitimately fail when STA is mid-reconnect-storm (wrong password
+    // configured → tight WIFI_EVENT_STA_DISCONNECTED → esp_wifi_connect()
+    // loop) and aborting the entire firmware on a transient set_mode error
+    // looks to the user like "tap did nothing" (the device just reboots).
+    if (esp_err_t err = esp_wifi_set_mode(WIFI_MODE_APSTA); err != ESP_OK) {
+        ESP_LOGE(kTag, "set_mode(APSTA) failed: %s — AP not enabled",
+                 esp_err_to_name(err));
+        return;
+    }
 
     wifi_config_t ap_cfg{};
     std::strncpy(reinterpret_cast<char*>(ap_cfg.ap.ssid), g_ap_ssid,
@@ -215,7 +251,12 @@ void wifi_enable_ap_mode()
     ap_cfg.ap.authmode       = WIFI_AUTH_WPA2_PSK;
     ap_cfg.ap.max_connection = 4;
     ap_cfg.ap.pmf_cfg.required = false;
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
+    if (esp_err_t err = esp_wifi_set_config(WIFI_IF_AP, &ap_cfg); err != ESP_OK) {
+        ESP_LOGE(kTag, "set_config(AP) failed: %s — reverting to STA",
+                 esp_err_to_name(err));
+        (void)esp_wifi_set_mode(WIFI_MODE_STA);
+        return;
+    }
 
     // esp_wifi_start() is idempotent; calling it after set_mode picks up the
     // new AP interface even when STA was already running.
@@ -237,33 +278,12 @@ void wifi_enable_ap_mode()
     ESP_LOGI(kTag, "AP up: SSID=\"%s\" PW=\"%s\" IP=%s",
              g_ap_ssid, g_ap_pw, g_ap_ip);
 
-    // Bring up the HTTP settings service if STA never connected (no home
-    // Wi-Fi configured) — start() is idempotent over re-entry, so calling
-    // it after STA has already brought it up is harmless. The server binds
-    // to INADDR_ANY so it serves both the AP and STA interfaces.
-    if (g_boot_cfg != nullptr) {
-        (void)wifi_config::start(*g_boot_cfg);
-    }
-    // Flag the service so /api/status carries provisioning_mode and
-    // require_auth is bypassed for the duration. The flag can be set
-    // before the http server has finished initialising — http_handlers
-    // guards on its own mutex.
-    wifi_config::set_provisioning_mode(true);
-
-    // Captive portal: DNS hijack so iOS/Android probes (apple/connecttest)
-    // resolve to us, plus a 404 catch-all on the http server that
-    // redirects every unknown URL to the settings page. Poll briefly for
-    // the http server handle since wifi_config::start runs init in a
-    // task; in practice it's up within a few ms when we're invoked from
-    // a tap handler well after boot.
-    captive_portal::start_dns();
-    for (int i = 0; i < 40; ++i) {
-        if (auto h = wifi_config::handle(); h != nullptr) {
-            captive_portal::register_http_catchall(h);
-            break;
-        }
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
+    // Hand off the rest (HTTP server / mDNS / captive portal) to a worker
+    // task. demo_loop returns immediately so the next render-task tick
+    // sees ap_active() = true and ap_screen paints. Stack 3 KiB internal
+    // RAM — flash-safe (no OTA / NVS writes happen here).
+    xTaskCreate(&ap_post_start_worker, "ap-post-start", 3 * 1024, nullptr,
+                tskIDLE_PRIORITY + 2, nullptr);
 }
 
 void wifi_disable_ap_mode()
@@ -277,7 +297,13 @@ void wifi_disable_ap_mode()
         captive_portal::unregister_http_catchall(h);
     }
     wifi_config::set_provisioning_mode(false);
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    // Non-aborting: a failed set_mode here just leaves the AP up, which is
+    // recoverable (user can tap again). An ESP_ERROR_CHECK abort would
+    // mid-reboot the device with no warning.
+    if (esp_err_t err = esp_wifi_set_mode(WIFI_MODE_STA); err != ESP_OK) {
+        ESP_LOGW(kTag, "set_mode(STA) on AP-disable failed: %s",
+                 esp_err_to_name(err));
+    }
     g_ap_active.store(false, std::memory_order_release);
     ESP_LOGI(kTag, "AP down");
 }
