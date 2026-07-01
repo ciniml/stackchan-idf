@@ -8,10 +8,13 @@
 #include <cstring>
 #include <memory>
 
+
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/semphr.h>
 #include <freertos/task.h>
 
 #include <config_service/ota.hpp>
@@ -246,6 +249,112 @@ void request_abort()
     if (g_active.load(std::memory_order_acquire)) {
         g_abort.store(true, std::memory_order_release);
     }
+}
+
+namespace {
+
+// Serve a single versions.json fetch from a dedicated worker task, waiting
+// on a binary semaphore from the caller. mbedTLS handshake (~10 KiB peak)
+// won't fit on the 6 KiB httpd stack, and running the fetch in-thread
+// would blow it. Cache is 32 KiB max — versions.json is currently ~1 KiB
+// and grows linearly with release count; cap keeps a malicious/misrouted
+// response from eating our heap.
+constexpr int kVersionsMaxBytes  = 32 * 1024;
+constexpr int kVersionsTimeoutMs = 15000;
+
+struct VersionsFetch {
+    std::string       body;
+    bool              ok;
+    SemaphoreHandle_t done;
+};
+
+void versions_fetch_task(void* arg)
+{
+    auto* v = static_cast<VersionsFetch*>(arg);
+    v->ok = false;
+
+    esp_http_client_config_t cfg{};
+    cfg.url = "https://ciniml.github.io/stackchan-idf/versions.json";
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    cfg.timeout_ms = kVersionsTimeoutMs;
+    cfg.keep_alive_enable = false;
+    cfg.disable_auto_redirect = false;
+    cfg.max_redirection_count = 4;
+
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (client == nullptr) {
+        ESP_LOGE(kTag, "versions: client_init failed");
+        xSemaphoreGive(v->done);
+        vTaskDelete(nullptr);
+    }
+
+    do {
+        if (esp_err_t e = esp_http_client_open(client, 0); e != ESP_OK) {
+            ESP_LOGE(kTag, "versions: open: %s", esp_err_to_name(e));
+            break;
+        }
+        const int64_t cl = esp_http_client_fetch_headers(client);
+        const int status = esp_http_client_get_status_code(client);
+        if (status != 200) {
+            ESP_LOGE(kTag, "versions: HTTP %d", status);
+            break;
+        }
+        if (cl <= 0 || cl > kVersionsMaxBytes) {
+            ESP_LOGE(kTag, "versions: bad content length %lld", static_cast<long long>(cl));
+            break;
+        }
+        v->body.resize(static_cast<std::size_t>(cl));
+        int total = 0;
+        while (total < cl) {
+            const int n = esp_http_client_read(client,
+                                               v->body.data() + total,
+                                               cl - total);
+            if (n <= 0) {
+                ESP_LOGE(kTag, "versions: read %d at %d/%lld",
+                         n, total, static_cast<long long>(cl));
+                total = -1;
+                break;
+            }
+            total += n;
+        }
+        if (total == cl) v->ok = true;
+    } while (false);
+
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    xSemaphoreGive(v->done);
+    vTaskDelete(nullptr);
+}
+
+} // namespace
+
+bool fetch_versions_json(std::string& out)
+{
+    VersionsFetch v;
+    v.ok = false;
+    v.done = xSemaphoreCreateBinary();
+    if (v.done == nullptr) return false;
+
+    // 12 KiB internal-RAM stack — matches the release OTA worker's
+    // headroom, since both do the same mbedTLS handshake + a small read
+    // loop. No flash writes here, so a PSRAM stack would technically be
+    // OK, but we keep it in internal RAM for consistency.
+    BaseType_t ok = xTaskCreate(&versions_fetch_task, "vfetch", 12 * 1024, &v,
+                                tskIDLE_PRIORITY + 3, nullptr);
+    if (ok != pdPASS) {
+        vSemaphoreDelete(v.done);
+        return false;
+    }
+    // Wait long enough for the worker's own 15 s HTTP timeout + a bit of
+    // handshake slack. If we return false while the worker is still going
+    // we'd leak v — so we always wait.
+    xSemaphoreTake(v.done, pdMS_TO_TICKS(kVersionsTimeoutMs + 5000));
+    vSemaphoreDelete(v.done);
+    if (v.ok) {
+        out = std::move(v.body);
+        return true;
+    }
+    return false;
 }
 
 } // namespace stackchan::wifi_config::release_ota

@@ -42,4 +42,12 @@ void request_abort();
 // Returns nullptr for unknown values.
 const char* board_slug(std::uint8_t board_kind);
 
+// Fetch the Pages-hosted versions.json (list of published tags + per-board
+// asset filenames) via HTTPS. Writes the raw response body into `out` on
+// success. Returns false on any failure (STA down, HTTPS handshake,
+// non-200, oversized body). Blocks the caller for up to ~15 s; spawns a
+// worker task internally so the handler stack (6 KiB) doesn't have to
+// hold the mbedTLS handshake state.
+bool fetch_versions_json(std::string& out);
+
 } // namespace stackchan::wifi_config::release_ota

@@ -344,6 +344,23 @@
   <h1>🤖 Stack-chan 設定 (Wi-Fi)</h1>
   <p class="subtitle">HTTP 経由で Wi-Fi と API キーを設定します</p>
 
+  <div id="ap-banner" hidden style="
+       background:#fff3cd;
+       border:1px solid #f0c674;
+       color:#664d03;
+       padding:0.6rem 0.8rem;
+       margin:0 0 0.75rem 0;
+       border-radius:6px;
+       font-size:0.9rem;
+       line-height:1.4;">
+    <strong>⚠ SoftAP プロビジョニング モード</strong> — Wi-Fi <strong>STA が未接続</strong>です。
+    このページは device 自身の AP <code>http://192.168.4.1/</code> 経由で表示されており、
+    <em>認証パスワードは一時的に無効化</em> されています (物理ボタンで AP を有効化
+    した ≒ 本体アクセス済み)。まず「接続」タブで家庭 Wi-Fi の SSID / パスワードを
+    設定 → 保存 &amp; 再起動、または STA が繋がるのを待って「メンテ」タブから release
+    fetch OTA を実行してください。
+  </div>
+
   <div class="page-header">
     <div class="status-bar" style="flex:1 1 auto;margin:0">
       <span class="dot" id="http-dot"></span>
@@ -824,13 +841,18 @@
         ダウンの場合はエラーになるので、上の「ローカル ファイル」を使ってください。
       </p>
       <div class="ota-row">
+        <select id="ota-release-select"
+                style="flex:1; padding:0.4rem; font-family:monospace; font-size:0.9rem">
+          <option value="">— tag 一覧を読込中 —</option>
+        </select>
         <input type="text" id="ota-release-tag" placeholder="v0.7.3"
-               style="flex:1; padding:0.4rem; font-family:monospace; font-size:0.9rem">
+               style="flex:0 0 8rem; padding:0.4rem; font-family:monospace; font-size:0.9rem">
         <button id="btn-ota-release" type="button" disabled>release を適用</button>
       </div>
       <p class="hint" style="margin:0.25rem 0 0 0; font-size:0.8rem">
-        ボード判定 (cores3 / atoms3r / atoms3 / stopwatch) は device 側で自動。
-        進捗は下の status バーに反映されます。
+        ドロップダウンで選ぶと右のテキスト欄に反映されます。手入力も可 (未来の
+        tag / 特殊 build)。ボード判定 (cores3 / atoms3r / atoms3 / stopwatch) は
+        device 側で自動。進捗は下の status バーに反映されます。
       </p>
 
       <div class="ota-status" id="ota-status">
@@ -1209,6 +1231,12 @@ async function refresh() {
   try {
     const s = await fetchJSON('/api/status');
     $('dis-fw').textContent = s.firmware || '—';
+    // SoftAP provisioning banner. When the device flips itself into AP
+    // mode the /api/status field goes true, and we want the user to see
+    // an obvious "you are on the AP, not on home Wi-Fi" cue plus a hint
+    // that auth is bypassed.
+    const banner = document.getElementById('ap-banner');
+    if (banner) banner.hidden = !s.provisioning_mode;
     // Pre-fill the release-tag input with the running firmware version so
     // the most common interaction (reapply / re-flash same tag) is just
     // "click 適用". Tags that don't yet exist will surface as the device
@@ -1304,6 +1332,12 @@ async function refresh() {
     $('http-label').textContent = 'HTTP 接続中';
     $('btn-ota').disabled = false;
     $('btn-ota-release').disabled = false;
+    // Kick off a versions.json fetch in the background. The endpoint
+    // proxies GitHub Pages through the device's STA link, so it works
+    // from AP-mode iOS where the browser can't reach github directly.
+    // Failure (STA down) leaves the dropdown showing its "取得失敗"
+    // placeholder — manual tag entry still works.
+    loadReleaseVersions();
     log('状態取得 OK', 'ok');
   } catch (e) {
     setDot('http-dot', 'http-error');
@@ -1469,6 +1503,42 @@ async function startOta() {
     $('btn-ota').disabled = false;
     $('btn-refresh').disabled = false;
     $('btn-apply').disabled = false;
+  }
+}
+
+// Populate the release-tag dropdown from /api/release/versions. The
+// device-side proxy fetches versions.json from GitHub Pages via its own
+// STA link (works in AP mode too since the browser doesn't touch github
+// directly). Only runs on demand — silent if STA is down.
+let releaseVersionsLoaded = false;
+async function loadReleaseVersions() {
+  if (releaseVersionsLoaded) return;
+  const sel = $('ota-release-select');
+  if (!sel) return;
+  try {
+    const r = await fetch('/api/release/versions', { cache: 'no-store' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const arr = await r.json();
+    if (!Array.isArray(arr) || arr.length === 0) throw new Error('empty');
+    // Replace placeholder options.
+    sel.innerHTML = '';
+    const runningFw = $('dis-fw').textContent;
+    arr.forEach((v, idx) => {
+      const opt = document.createElement('option');
+      opt.value = v.tag;
+      // Suffix the currently-running tag so the user can spot it.
+      opt.textContent = (v.tag === runningFw) ? `${v.tag}  (現在)` : v.tag;
+      // Default to the newest tag that isn't the one we're already on.
+      if (idx === 0 && v.tag !== runningFw) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    // Push the selected tag into the text input so 適用 works with one click.
+    if (sel.value) $('ota-release-tag').value = sel.value;
+    releaseVersionsLoaded = true;
+    log(`release tag ${arr.length} 件取得`, 'ok');
+  } catch (e) {
+    sel.innerHTML = '<option value="">— tag 取得失敗 (STA down?) —</option>';
+    // Non-fatal — user can still manually type a tag.
   }
 }
 
@@ -1714,6 +1784,10 @@ $('btn-refresh').addEventListener('click', refresh);
 $('btn-apply').addEventListener('click', apply);
 $('btn-ota').addEventListener('click', startOta);
 $('btn-ota-release').addEventListener('click', startReleaseOta);
+// Dropdown → text input sync so 手入力 and dropdown selection stay coherent.
+$('ota-release-select').addEventListener('change', (e) => {
+  if (e.target.value) $('ota-release-tag').value = e.target.value;
+});
 
 refresh();
 

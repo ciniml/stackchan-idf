@@ -812,6 +812,30 @@ esp_err_t handle_ota_data_post(httpd_req_t* req)
     return send_json(req, config::ota::handle_data_chunk({body.data(), body.size()}));
 }
 
+// GET /api/release/versions
+//
+// Device-side proxy for GitHub Pages `versions.json`. Same JSON the desktop
+// web-flasher UI consumes, forwarded via the device's own STA link so the
+// on-device settings page can populate a version dropdown even when the
+// browser side has no direct internet access (AP-mode iPhone — DNS hijack
+// blocks the iPhone from resolving github.com, but the device's STA does
+// not go through the hijacked DNS).
+//
+// Requires STA to be up. When STA is down this returns 502 Bad Gateway;
+// the UI should fall back to a manual tag input.
+esp_err_t handle_release_versions_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (!release_ota::fetch_versions_json(body)) {
+        return send_error(req, "502 Bad Gateway",
+                          "versions.json fetch failed (STA down?)");
+    }
+    // Body is already JSON — passthrough as-is with the JSON content-type
+    // header that send_json sets.
+    return send_json(req, body);
+}
+
 // POST /api/ota/release  — body: {"tag":"vX.Y.Z"}
 //
 // Kicks off a worker that fetches the per-board stackchan_idf.bin staged
@@ -1296,6 +1320,7 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/ota/control",     HTTP_POST, handle_ota_control_post);
     add(server, "/api/ota/data",        HTTP_POST, handle_ota_data_post);
     add(server, "/api/ota/release",     HTTP_POST, handle_ota_release_post);
+    add(server, "/api/release/versions", HTTP_GET, handle_release_versions_get);
     add(server, "/api/avatar-dsl",       HTTP_POST, handle_avatar_dsl_post);
     add(server, "/api/avatar-dsl/reset", HTTP_POST, handle_avatar_dsl_reset_post);
     add(server, "/api/metrics/audio",    HTTP_GET,  handle_audio_metrics_get);
