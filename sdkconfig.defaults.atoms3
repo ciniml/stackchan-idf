@@ -50,8 +50,22 @@ CONFIG_LWIP_TCP_SND_BUF_DEFAULT=5760
 CONFIG_LWIP_TCP_WND_DEFAULT=5760
 
 # --- TLS / mbedTLS -------------------------------------------------------
-# With conversation disabled we never open a TLS-uplink, but esp_https_ota
-# (OTA-over-Wi-Fi from the settings page) still needs mbedtls. Use the
-# smaller default frame size to keep static TLS buffers manageable.
-CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096
+# With conversation disabled we never open a TLS uplink, but the settings
+# page's OTA paths still need mbedtls — and device-side release-fetch OTA
+# (release_ota.cpp) downloads the .bin from www.fugafuga.org (GitHub Pages
+# custom domain → Fastly CDN). Fastly emits full 16 KiB TLS records for bulk
+# bodies; a 4 KiB inbound buffer makes the first esp_http_client_read fail
+# with -0x7100 (MBEDTLS_ERR_SSL_BAD_INPUT_DATA — "requesting more data than
+# fits" in mbedtls_ssl_fetch_input; the TLS record length is NOT clamped to
+# IN_CONTENT_LEN in ssl_parse_record_header). 16384 (the TLS spec max) is the
+# only value that guarantees a conformant record fits.
+#
+# Internal-RAM cost: AtomS3 has no PSRAM (SPIRAM=n above), so unlike the
+# PSRAM boards these TLS record buffers live in internal SRAM. With
+# MBEDTLS_DYNAMIC_BUFFER=y (inherited from sdkconfig.defaults) the 16 KiB RX
+# buffer is only held while an OTA HTTPS connection is live and freed on
+# close, and this profile opens at most one TLS conn at a time (no
+# conversation / audio uplink). So the +12 KiB (16384 vs 4096) is a
+# transient OTA-only peak, not a steady-state cost.
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
 CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096

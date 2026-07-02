@@ -161,18 +161,40 @@ CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
 # from defaults doesn't trip the #error.
 CONFIG_ESP_WIFI_RX_BA_WIN=6
 
-# TLS handshake internal-RAM peak reduction. The reconnect path was still
-# failing with "esp-aes: Failed to allocate memory": the recover-wait gate
-# saw 24 KiB largest-free, but the handshake itself cratered internal RAM
-# to ~5.6 KiB and the first post-handshake AES write failed. Root cause is
-# the esp-aes hardware path bouncing the (PSRAM-resident) TLS record into a
-# DMA-capable *internal* buffer sized to the record. With
-# SSL_IN_CONTENT_LEN=16384 that bounce is up to 16 KiB.
-#   - Halve the inbound record to 8 KiB. Google / OpenAI cert chains are
-#     ~3-4 KiB so they still fit; the AES bounce peak drops ~8 KiB.
-#   - Free private-key / DHM data mid-handshake (no client cert here so
-#     it's mostly the DHM scratch, but every KiB helps the peak).
-CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=8192
+# Full 16 KiB TLS inbound record. Must equal the TLS spec max (2^14) because
+# a peer may legally send a record whose plaintext is up to 16384 B, and
+# mbedtls has no way to negotiate a smaller inbound limit unless the server
+# honours max_fragment_length (Fastly / GitHub-Pages-CDN do NOT).
+#
+# Symptom this fixes: device-side release-fetch OTA (release_ota.cpp) pulls
+# the ~3 MB .bin from www.fugafuga.org (GitHub Pages custom domain → Fastly).
+# fetch_headers succeeded but the FIRST esp_http_client_read failed with
+#     esp-tls-mbedtls: read error :-0x7100
+# -0x7100 is MBEDTLS_ERR_SSL_BAD_INPUT_DATA, returned by
+# mbedtls_ssl_fetch_input() (ssl_msg.c ~L2163: "requesting more data than
+# fits") — NOT the -0x7200 INVALID_RECORD path. For bulk bodies Fastly emits
+# full 16 KiB TLS records; ssl_parse_record_header() does NOT clamp the TLS
+# (non-DTLS) record length against IN_CONTENT_LEN, so ssl_get_next_record()
+# calls fetch_input(rec.buf_len) with buf_len > MBEDTLS_SSL_IN_BUFFER_LEN
+# (derived from IN_CONTENT_LEN=8192) and the "fits" check trips. 16384 is the
+# only value that guarantees any conformant record fits.
+#
+# Internal-RAM cost of the bump is ~zero on this (PSRAM) profile:
+#   - MBEDTLS_EXTERNAL_MEM_ALLOC=y (above) puts the in/out record buffers in
+#     PSRAM, so the +8 KiB in-buffer growth is PSRAM, not internal SRAM.
+#   - MBEDTLS_DYNAMIC_BUFFER=y only allocates the RX buffer while a TLS conn
+#     is live (freed at handshake end / close), and the WSS conversation +
+#     OTA fetch are the only two TLS conns; even both live = +16 KiB PSRAM.
+#   - The esp-aes hardware path does NOT bounce the whole record into
+#     internal RAM. On ESP32-S3 esp_aes_process_dma_ext_ram() chunks a
+#     PSRAM-resident record into internal RAM AES_MAX_CHUNK_WRITE_SIZE=1600 B
+#     at a time (mbedtls/port/aes/dma/esp_aes_dma_core.c), so the internal
+#     bounce peak is fixed at ~1.6 KiB regardless of IN_CONTENT_LEN. (The old
+#     "8 KiB halves the 16 KiB bounce" comment here predated that chunking
+#     and no longer holds for 5.5.4.)
+# ASYMMETRIC_CONTENT_LEN=y (IDF default) keeps OUT_CONTENT_LEN at 4096, so
+# raising IN does not inflate the (client→server) out buffer.
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
 CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
 
 # SRAM-shortage diagnostics: enable uxTaskGetSystemState() so main/diag.cpp
