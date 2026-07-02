@@ -248,10 +248,28 @@ void wifi_enable_ap_mode()
     // configured → tight WIFI_EVENT_STA_DISCONNECTED → esp_wifi_connect()
     // loop) and aborting the entire firmware on a transient set_mode error
     // looks to the user like "tap did nothing" (the device just reboots).
-    if (esp_err_t err = esp_wifi_set_mode(WIFI_MODE_APSTA); err != ESP_OK) {
-        ESP_LOGE(kTag, "set_mode(APSTA) failed: %s — AP not enabled",
-                 esp_err_to_name(err));
-        return;
+    // set_mode(APSTA) can transiently fail while STA is mid-reconnect-storm
+    // (wrong password → tight esp_wifi_connect() loop). Retry a few times
+    // before giving up so a single "AP モード" tap reliably brings the AP up.
+    // Same retry budget / task-blocking rationale as wifi_disable_ap_mode.
+    {
+        constexpr int kMaxRetries = 5;
+        esp_err_t err = ESP_OK;
+        for (int i = 0; i < kMaxRetries; ++i) {
+            err = esp_wifi_set_mode(WIFI_MODE_APSTA);
+            if (err == ESP_OK) break;
+            ESP_LOGW(kTag, "set_mode(APSTA) failed (try %d/%d): %s",
+                     i + 1, kMaxRetries, esp_err_to_name(err));
+            if (i + 1 < kMaxRetries) vTaskDelay(pdMS_TO_TICKS(100));
+        }
+        if (err != ESP_OK) {
+            // Nothing enabled yet: leave the driver as-is (STA) and bail so a
+            // later tap can retry. g_ap_active stays false — consistent.
+            ESP_LOGE(kTag, "set_mode(APSTA) failed after %d tries: %s"
+                           " — AP not enabled",
+                     kMaxRetries, esp_err_to_name(err));
+            return;
+        }
     }
 
     wifi_config_t ap_cfg{};
@@ -300,21 +318,46 @@ void wifi_enable_ap_mode()
 void wifi_disable_ap_mode()
 {
     if (!g_ap_active.load(std::memory_order_acquire)) return;
-    // Tear down captive portal first so STA-mode clients don't see the
-    // 404-to-root redirect anymore (the catch-all is harmless over STA,
-    // but it'd hijack legitimate 404s from poorly-written clients).
+
+    // Drop back to STA-only *first*, and only tear down the portal / clear the
+    // provisioning + ap_active flags once that actually succeeds. Otherwise a
+    // failed set_mode leaves the AP radio up while the UI reports it closed —
+    // the "画面は閉じたが AP は生きている" inconsistency. set_mode(STA) can
+    // transiently fail mid-reconnect-storm (the typical provisioning state:
+    // wrong password → tight esp_wifi_connect() retry loop), so retry a few
+    // times before giving up.
+    //
+    // Called from the app_main touch loop (ap_screen::handle_tap /
+    // device_ui). Rendering lives on a separate pinned task, so a short block
+    // here only stalls touch polling / M5.update(). The common path succeeds
+    // on the first try (no delay); the 5×100 ms = 500 ms worst case only hits
+    // on total failure, which is rare and preferable to a stuck AP.
+    constexpr int kMaxRetries = 5;
+    esp_err_t err = ESP_OK;
+    for (int i = 0; i < kMaxRetries; ++i) {
+        err = esp_wifi_set_mode(WIFI_MODE_STA);
+        if (err == ESP_OK) break;
+        ESP_LOGW(kTag, "set_mode(STA) on AP-disable failed (try %d/%d): %s",
+                 i + 1, kMaxRetries, esp_err_to_name(err));
+        if (i + 1 < kMaxRetries) vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    if (err != ESP_OK) {
+        // Keep the AP fully alive so the next "終了" tap can retry. Nothing
+        // has been torn down yet, so there's no state to restore.
+        ESP_LOGE(kTag, "set_mode(STA) on AP-disable failed after %d tries: %s"
+                       " — leaving AP up so it can be retried",
+                 kMaxRetries, esp_err_to_name(err));
+        return;
+    }
+
+    // STA-only confirmed. Now tear down the captive portal so STA-mode clients
+    // don't see the 404-to-root redirect anymore (the catch-all is harmless
+    // over STA, but it'd hijack legitimate 404s from poorly-written clients).
     captive_portal::stop_dns();
     if (auto h = wifi_config::handle(); h != nullptr) {
         captive_portal::unregister_http_catchall(h);
     }
     wifi_config::set_provisioning_mode(false);
-    // Non-aborting: a failed set_mode here just leaves the AP up, which is
-    // recoverable (user can tap again). An ESP_ERROR_CHECK abort would
-    // mid-reboot the device with no warning.
-    if (esp_err_t err = esp_wifi_set_mode(WIFI_MODE_STA); err != ESP_OK) {
-        ESP_LOGW(kTag, "set_mode(STA) on AP-disable failed: %s",
-                 esp_err_to_name(err));
-    }
     g_ap_active.store(false, std::memory_order_release);
     ESP_LOGI(kTag, "AP down");
 }
