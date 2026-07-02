@@ -3,7 +3,7 @@
 # stackchan-idf
 
 Firmware for Stack-chan running on M5Stack CoreS3 / AtomS3R / AtomS3 / StopWatch (C152),
-written against ESP-IDF 5.4 / C++20. Supports AI voice conversation (OpenAI / Gemini /
+written against ESP-IDF 5.5 / C++20. Supports AI voice conversation (OpenAI / Gemini /
 XiaoZhi), three configuration paths (BLE / Wi-Fi STA / SoftAP), and device-side OTA.
 
 ## Web Flasher / Settings page
@@ -104,7 +104,7 @@ appropriately.
 
 ## Setup
 
-With ESP-IDF 5.4 installed (tested against 5.4.2):
+With ESP-IDF 5.5 installed (tested against 5.5.4; 5.4.2 still builds):
 
 ```sh
 git clone <this repo>

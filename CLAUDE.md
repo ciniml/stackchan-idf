@@ -1,6 +1,6 @@
 # stackchan-idf
 
-M5Stack CoreS3 向けスタックチャン ファームウェア (ESP-IDF 5.4 / C++20)。
+M5Stack CoreS3 向けスタックチャン ファームウェア (ESP-IDF 5.5 / C++20)。
 
 ## ライセンス
 

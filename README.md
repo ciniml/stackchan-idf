@@ -3,7 +3,7 @@
 # stackchan-idf
 
 M5Stack の CoreS3 / AtomS3R / AtomS3 / StopWatch (C152) で動く Stack-chan ファームウェア。
-ESP-IDF 5.4 / C++20。AI 音声対話 (OpenAI / Gemini / XiaoZhi)、BLE / Wi-Fi / SoftAP の 3 経路
+ESP-IDF 5.5 / C++20。AI 音声対話 (OpenAI / Gemini / XiaoZhi)、BLE / Wi-Fi / SoftAP の 3 経路
 設定、デバイス側 OTA をサポートします。
 
 ## Web Flasher / 設定ページ
@@ -95,7 +95,7 @@ Pages サイトに反映されます。
 
 ## セットアップ
 
-ESP-IDF 5.4 (本リポジトリは 5.4.2 で検証) を導入済みの環境で:
+ESP-IDF 5.5 (本リポジトリは 5.5.4 で検証。5.4.2 でもビルド可) を導入済みの環境で:
 
 ```sh
 git clone <this repo>

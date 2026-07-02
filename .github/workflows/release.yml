@@ -47,11 +47,11 @@ jobs:
       matrix:
         board: [cores3, atoms3r, atoms3, stopwatch]
     container:
-      # Pinned to v5.4 to match local development. v6.0 dropped the built-in
+      # Pinned to v5.5 to match local development. v6.0 dropped the built-in
       # `json` (cJSON) component in favour of an IDF component-manager
       # dependency; our `conversation` component requires it directly and
       # we don't ship a manifest entry for it yet.
-      image: espressif/idf:release-v5.4
+      image: espressif/idf:release-v5.5
 
     steps:
       - name: Checkout repository
@@ -98,9 +98,9 @@ jobs:
         # most recent main-branch cache on cold start.
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: idf-v5.4-${{ matrix.board }}-${{ github.ref_name }}
+          key: idf-v5.5-${{ matrix.board }}-${{ github.ref_name }}
           restore-keys: |
-            idf-v5.4-${{ matrix.board }}-
+            idf-v5.5-${{ matrix.board }}-
           max-size: 500M
           variant: ccache
           # Tell ESP-IDF's cmake module to actually invoke ccache. Without
@@ -260,7 +260,7 @@ jobs:
                `stackchan_idf.bin` を選択 → 書き込み
 
             ## Build Information
-            - **ESP-IDF**: release-v5.4
+            - **ESP-IDF**: release-v5.5
             - **Target**: ESP32-S3
             - **Build Date**: ${{ steps.version.outputs.build_date }}
             - **Commit**: ${{ github.sha }}
