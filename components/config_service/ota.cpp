@@ -3,11 +3,16 @@
 
 #include <config_service/ota.hpp>
 
+#include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <optional>
 
 #include <cJSON.h>
 #include <esp_app_desc.h>
+#include <esp_app_format.h>
 #include <esp_log.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
@@ -20,6 +25,18 @@ namespace {
 
 constexpr const char* kTag = "cfg-ota";
 
+// The esp_app_desc_t lives immediately after the image header + first segment
+// header, i.e. at this byte offset from the start of the .bin.
+constexpr std::size_t kAppDescOffset =
+    sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t);
+// We only need to see up to the end of project_name to validate. Everything
+// past that (time / date / idf_ver / sha256 …) is irrelevant here, so cap the
+// header sniff at project_name's end to keep the staging buffer tiny.
+constexpr std::size_t kProjectNameOffset =
+    kAppDescOffset + offsetof(esp_app_desc_t, project_name);
+constexpr std::size_t kProjectNameSize = sizeof(esp_app_desc_t::project_name);
+constexpr std::size_t kHeaderSniffBytes = kProjectNameOffset + kProjectNameSize;
+
 enum class Phase : std::uint8_t { Idle, Receiving, Done, Failed };
 
 struct State {
@@ -29,6 +46,13 @@ struct State {
     std::size_t total = 0;
     std::size_t received = 0;
     std::string error;
+    // Header sniff: the leading bytes of the image are copied here as they
+    // arrive so project_name can be validated once we've seen enough, even if
+    // the transport splits the esp_app_desc_t across several small chunks (the
+    // BLE path can deliver ~500 B frames). Validation runs exactly once.
+    std::array<std::uint8_t, kHeaderSniffBytes> header{};
+    std::size_t header_len = 0;
+    bool app_desc_checked = false;
 };
 
 static State g_state;
@@ -73,6 +97,62 @@ std::string error_response(const char* msg)
     char buf[160];
     std::snprintf(buf, sizeof(buf), R"({"ok":false,"error":"%s"})", msg);
     return std::string(buf);
+}
+
+// Stage the leading bytes of the incoming image and, once we've buffered
+// through the end of esp_app_desc_t::project_name, verify it matches our own
+// project name. Rejects images built for a *different* project (e.g. a
+// wrong-firmware upload) before esp_ota_set_boot_partition can make them
+// bootable. Returns std::nullopt on OK / not-yet-enough-bytes, or an error
+// message to reject with.
+//
+// NOTE: all stackchan boards (CoreS3 / AtomS3 / StopWatch) share the same
+// CMake project name "stackchan_idf", so this check does NOT catch a
+// cross-board mismatch (e.g. a StopWatch image flashed onto a CoreS3). Its
+// job is only to reject a genuinely foreign project's firmware. Per-board
+// safety still relies on the release-fetch path picking the right board slug.
+std::optional<const char*> sniff_and_check_app_desc(std::span<const std::uint8_t> data)
+{
+    if (g_state.app_desc_checked) {
+        return std::nullopt;
+    }
+    // Copy as much of the still-missing header prefix as this chunk provides.
+    if (g_state.header_len < kHeaderSniffBytes) {
+        const std::size_t want = kHeaderSniffBytes - g_state.header_len;
+        const std::size_t take = std::min(want, data.size());
+        std::memcpy(g_state.header.data() + g_state.header_len, data.data(), take);
+        g_state.header_len += take;
+    }
+    if (g_state.header_len < kHeaderSniffBytes) {
+        return std::nullopt; // wait for more bytes
+    }
+
+    // Reject an image whose magic byte isn't a valid ESP32 app image up front —
+    // esp_ota_write would catch this too, but failing here keeps the error
+    // path uniform with the project_name reject below.
+    if (g_state.header[0] != ESP_IMAGE_HEADER_MAGIC) {
+        g_state.app_desc_checked = true;
+        return "not an esp32 image";
+    }
+
+    const char* incoming = reinterpret_cast<const char*>(g_state.header.data() + kProjectNameOffset);
+    // project_name is a fixed 32-byte field; treat it as NUL-terminated but
+    // bound the compare so a non-terminated field can't run off the buffer.
+    const esp_app_desc_t* self = esp_app_get_description();
+    g_state.app_desc_checked = true;
+    if (self == nullptr) {
+        return std::nullopt; // can't compare — don't block the update
+    }
+    if (std::strncmp(incoming, self->project_name, kProjectNameSize) != 0) {
+        char name[kProjectNameSize + 1] = {};
+        std::memcpy(name, incoming, kProjectNameSize);
+        ESP_LOGE(kTag, "project_name mismatch: image='%s' expected='%s'",
+                 name, self->project_name);
+        return "project name mismatch";
+    }
+    ESP_LOGI(kTag, "app_desc project_name '%s' matches — accepting image",
+             self->project_name);
+    return std::nullopt;
 }
 
 void reboot_cb(void* /*arg*/)
@@ -206,6 +286,14 @@ std::string handle_data_chunk(std::span<const std::uint8_t> data)
     if (g_state.received + data.size() > g_state.total) {
         mark_failed("overrun");
         return error_response("overrun");
+    }
+    // Validate the embedded esp_app_desc_t::project_name against our own before
+    // committing bytes to flash. Runs across the BLE / HTTP-upload / release
+    // fetch paths since all three funnel through here. On mismatch we abort so
+    // esp_ota_end / esp_ota_set_boot_partition are never reached.
+    if (std::optional<const char*> reject = sniff_and_check_app_desc(data); reject) {
+        mark_failed(*reject);
+        return error_response(*reject);
     }
     esp_err_t err = esp_ota_write(g_state.handle, data.data(), data.size());
     if (err != ESP_OK) {

@@ -929,12 +929,12 @@ extern "C" void app_main()
     // number attached — register before anything else can fail.
     stackchan::app::diag_register_alloc_fail_hook();
 
-    // Confirm the running image so the bootloader doesn't roll back on the
-    // next reboot. CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y leaves freshly-OTA'd
-    // images in PENDING_VERIFY until this call promotes them to VALID. We do
-    // it unconditionally — for boot from the original factory partition it's
-    // a no-op, for boot after an OTA it locks in the new firmware.
-    esp_ota_mark_app_valid_cancel_rollback();
+    // NOTE: with CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y a freshly-OTA'd image
+    // boots in ESP_OTA_IMG_PENDING_VERIFY and must be promoted to VALID or the
+    // bootloader rolls it back on the next reset. We deliberately do NOT mark
+    // it here — that would defeat the rollback by validating before we know the
+    // core came up. The promotion happens after core init completes; see the
+    // ESP_OTA_IMG_PENDING_VERIFY self-test at the "ready" point below.
 
     xTaskCreatePinnedToCore(heap_monitor_task, "heap_mon", 3072, nullptr, 1, nullptr, 1);
 
@@ -1663,6 +1663,34 @@ extern "C" void app_main()
         tskIDLE_PRIORITY + 1, nullptr, 0);
 
     ESP_LOGI(kTag, "ready");
+
+    // OTA rollback self-test. If we're running a freshly-OTA'd image the
+    // bootloader left it in ESP_OTA_IMG_PENDING_VERIFY; reaching here means
+    // core init (Board::begin / NVS / config load / render + servo + LED tasks)
+    // completed without a boot-loop crash, so promote the image to VALID and
+    // cancel the pending rollback. Runs on the app_main task, whose stack is in
+    // internal RAM — required because esp_ota_* touches flash / NVS with the
+    // instruction cache disabled and a PSRAM stack would be unreadable there.
+    // We wait a short beat first so the tasks we just spawned get a chance to
+    // run (and crash, if the image is bad) before we commit. Only images in
+    // PENDING_VERIFY are promoted; a normal boot from a VALID / factory image
+    // is a no-op.
+    {
+        const esp_partition_t* running = esp_ota_get_running_partition();
+        esp_ota_img_states_t ota_state = ESP_OTA_IMG_UNDEFINED;
+        if (running != nullptr &&
+            esp_ota_get_state_partition(running, &ota_state) == ESP_OK &&
+            ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            esp_err_t verr = esp_ota_mark_app_valid_cancel_rollback();
+            if (verr == ESP_OK) {
+                ESP_LOGI(kTag, "OTA self-test passed — image marked VALID (rollback cancelled)");
+            } else {
+                ESP_LOGE(kTag, "esp_ota_mark_app_valid_cancel_rollback failed: %s",
+                         esp_err_to_name(verr));
+            }
+        }
+    }
 
 #if CONFIG_STACKCHAN_QR_TEST_AT_BOOT
     // Phase 1+2 bring-up trigger: spawn a one-shot waiter that defers the
