@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cJSON.h>
 #include <cstdint>
 #include <cstdio>
@@ -72,7 +73,17 @@ struct StagingBuffer {
 
 config::DeviceConfig g_active;
 StagingBuffer g_staging;
-bool g_wifi_connected = false;
+// STA-connected flag. Deliberately std::atomic and NOT guarded by g_mutex:
+// notify_wifi_connected(true) fires from the IP_EVENT_STA_GOT_IP handler,
+// which lands during a ~4 s window BEFORE the cfg-wifi-init task has run
+// register_handlers() / created g_mutex (measured: got-IP @12.7 s,
+// HTTP-server-up @16.5 s). The old mutex-guarded setter dropped that
+// notification on the floor (`if (g_mutex == nullptr) return;`) and GOT_IP
+// never re-fires, so the flag stayed false forever. An atomic lets
+// set_wifi_connected() record the state regardless of init ordering; the
+// cfg-wifi-init task also seeds it from esp_netif once handlers register
+// (belt-and-braces), so a future reorder of the boot sequence self-heals.
+std::atomic<bool> g_wifi_connected{false};
 // True while SoftAP provisioning is active — bypasses require_auth (physical
 // AP button = implicit trust; iOS captive portals don't reliably carry the
 // Basic auth prompt). Set/cleared from wifi_config::set_provisioning_mode.
@@ -324,9 +335,9 @@ std::string escape_json(const std::string& in)
 esp_err_t handle_status_get(httpd_req_t* req)
 {
     if (!require_auth(req)) return ESP_OK;
+    const bool wifi_ok = g_wifi_connected.load();
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     const auto cfg = g_active;
-    const bool wifi_ok = g_wifi_connected;
     const bool prov_mode = g_provisioning_mode;
     const int bat_mv = g_battery_mv;
     const int bat_ma = g_battery_ma;
@@ -877,6 +888,17 @@ esp_err_t handle_release_versions_get(httpd_req_t* req)
 esp_err_t handle_ota_release_post(httpd_req_t* req)
 {
     if (!require_auth(req)) return ESP_OK;
+
+    // Release-fetch pulls the firmware over the device's STA uplink. In AP
+    // (provisioning) mode STA is not associated, so the download can never
+    // succeed — reject up front instead of spawning a worker that only fails
+    // later on http_client_open. Same source of truth as /api/status.
+    const bool sta_connected = g_wifi_connected.load();
+    if (!sta_connected) {
+        httpd_resp_set_status(req, "409 Conflict");
+        return send_json(req, R"({"ok":false,"error":"sta not connected"})");
+    }
+
     std::string body;
     // Tags are short (≤ 32 chars per release_ota::tag_looks_safe), so a
     // 256 B body cap is generous.
@@ -1069,8 +1091,8 @@ esp_err_t handle_mcp_state_get(httpd_req_t* req)
     // /api/status returns the full settings + runtime state for the web UI;
     // /mcp/state is a Channel-oriented subset (no secrets, no chatbot
     // provider fields). Mirrors the keys Claude is most likely to query.
+    const bool wifi_ok = g_wifi_connected.load();
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    const bool wifi_ok = g_wifi_connected;
     const int bat_mv = g_battery_mv;
     const int bat_pct = g_battery_pct;
     const std::uint8_t board = g_board_kind;
@@ -1369,10 +1391,12 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
 
 void set_wifi_connected(bool connected)
 {
-    if (g_mutex == nullptr) return;
-    xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_wifi_connected = connected;
-    xSemaphoreGive(g_mutex);
+    // No mutex: g_wifi_connected is atomic precisely so this can run before
+    // g_mutex exists. IP_EVENT_STA_GOT_IP fires ~4 s ahead of the
+    // cfg-wifi-init task's register_handlers() (which creates g_mutex), and
+    // GOT_IP does not re-fire — the old null-mutex early-return silently
+    // dropped the only notification, pinning the flag to false forever.
+    g_wifi_connected.store(connected);
 }
 
 void set_provisioning_mode(bool active)

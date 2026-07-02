@@ -12,6 +12,7 @@
 #include <esp_http_server.h>
 #include <esp_log.h>
 #include <esp_mac.h>
+#include <esp_netif.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -188,6 +189,22 @@ void init_task(void* arg)
     }
     g_server = *server;
     http::register_handlers(g_server, *current);
+
+    // Belt-and-braces seed of the STA-connected flag. notify_wifi_connected()
+    // (from IP_EVENT_STA_GOT_IP) can fire ~4 s before we reach this point;
+    // g_wifi_connected being atomic means that early notification is no longer
+    // dropped, but if the boot sequence is ever reordered so the notification
+    // predates the flag's existence entirely — or is missed for any other
+    // reason — GOT_IP does NOT re-fire, so we would stay stuck at false. Read
+    // the current STA IP directly from esp_netif here and seed the flag if we
+    // already have a lease; this makes the flag self-healing regardless of the
+    // notify/init ordering.
+    if (esp_netif_t* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF")) {
+        esp_netif_ip_info_t ip{};
+        if (esp_netif_get_ip_info(sta, &ip) == ESP_OK && ip.ip.addr != 0) {
+            http::set_wifi_connected(true);
+        }
+    }
 
     vTaskDelete(nullptr);
 }
