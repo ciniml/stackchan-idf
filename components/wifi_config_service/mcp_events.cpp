@@ -212,11 +212,13 @@ void start(ConvStatusGetter getter)
         return;
     }
     if (getter != nullptr) {
-        // 3 KiB. The monitor task itself only does atomic reads + a tiny
-        // snprintf + xQueueSend, but the publish path drops into the
-        // logging subsystem (and any future telemetry) which eats stack
-        // unpredictably. 2 KiB tipped mcp_boot into overflow at boot.
-        xTaskCreatePinnedToCore(monitor_task_entry, "mcp-evt-mon", 3072, nullptr,
+        // 4 KiB. The task body is tiny (atomic load + snprintf + publish),
+        // but the publish path uses a 264 B Frame on stack + snprintf's
+        // vfprintf (~500 B newlib). 3 KiB blew up during GC0308 camera init
+        // (~38 s) when an I2C-driven ISR landed on top of a state-change
+        // publish — the IRQ frame + interrupted vfprintf together breached
+        // the canary. 2 KiB had already been ruled out at boot.
+        xTaskCreatePinnedToCore(monitor_task_entry, "mcp-evt-mon", 4096, nullptr,
                                 tskIDLE_PRIORITY + 1, nullptr, 0);
     }
 }
