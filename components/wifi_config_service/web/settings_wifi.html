@@ -740,6 +740,22 @@
       </select>
     </div>
 
+    <div id="camera-section" style="display:none">
+      <h2 class="section-title">カメラ (テスト撮影)</h2>
+      <p class="hint" style="margin-bottom:0.5rem">
+        本体前面の GC0308 カメラで 1 枚撮影して表示します (320×240 グレースケール)。
+        センサー起動と露出安定化のため撮影に 1 秒ほどかかります。QR スキャン実行中は使えません。
+      </p>
+      <div class="ota-row">
+        <button id="btn-camera-capture" type="button" disabled>撮影</button>
+        <button id="btn-camera-save" type="button" disabled>PNG 保存</button>
+      </div>
+      <canvas id="camera-canvas" width="320" height="240"
+              style="width:100%; max-width:320px; background:#222; border-radius:6px;
+                     margin-top:0.5rem; display:block"></canvas>
+      <p class="hint" id="camera-msg" style="margin-top:0.25rem"></p>
+    </div>
+
     <div id="servo-section">
       <h2 class="section-title">サーボ原点・可動範囲 (Takao base 等の自作版向け)</h2>
       <p class="hint" style="margin-bottom:0.5rem">
@@ -1275,6 +1291,13 @@ async function refresh() {
     $('dis-idf').textContent = s.idf || '—';
     $('dis-ip').textContent = s.ip || '—';
     applyBoardGating(typeof s.board === 'number' ? s.board : null);
+    // Camera section: driven by capability (has_camera = capture sink
+    // registered on the device) rather than board-kind guessing, so a
+    // camera-less CoreS3 variant naturally hides it.
+    const camSec = document.getElementById('camera-section');
+    if (camSec) camSec.style.display = s.has_camera ? '' : 'none';
+    const camBtn = document.getElementById('btn-camera-capture');
+    if (camBtn) camBtn.disabled = !s.has_camera;
     // Mirror FW + board into the compact page header. Board label is filled
     // by applyBoardGating into #dis-board; copy whichever value is now there.
     const hdrFw = document.getElementById('hdr-fw');
@@ -1821,6 +1844,62 @@ $('btn-refresh').addEventListener('click', refresh);
 $('btn-apply').addEventListener('click', apply);
 $('btn-ota').addEventListener('click', startOta);
 $('btn-ota-release').addEventListener('click', startReleaseOta);
+
+// --- Camera test capture ---------------------------------------------------
+// GET /api/camera/capture returns raw 8-bit grayscale with the dimensions in
+// X-Frame-Width/Height headers. Rendering client-side via putImageData keeps
+// the device free of a JPEG encoder; 77 KB over LAN is fast enough.
+
+async function cameraCapture() {
+  const btn = $('btn-camera-capture');
+  const msg = $('camera-msg');
+  btn.disabled = true;
+  msg.textContent = '撮影中… (センサー起動 ~1 秒)';
+  try {
+    const r = await fetch('/api/camera/capture', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + await r.text());
+    const w = parseInt(r.headers.get('X-Frame-Width') || '320', 10);
+    const h = parseInt(r.headers.get('X-Frame-Height') || '240', 10);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    if (buf.length < w * h) throw new Error(`short frame (${buf.length} < ${w * h})`);
+    const canvas = $('camera-canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(w, h);
+    for (let i = 0; i < w * h; i++) {
+      const v = buf[i];
+      img.data[4 * i] = v;
+      img.data[4 * i + 1] = v;
+      img.data[4 * i + 2] = v;
+      img.data[4 * i + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    $('btn-camera-save').disabled = false;
+    msg.textContent = `${w}×${h} — ${new Date().toLocaleTimeString()}`;
+    log('カメラ撮影 OK', 'ok');
+  } catch (e) {
+    msg.textContent = '失敗: ' + e.message;
+    log('カメラ撮影失敗: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function cameraSavePng() {
+  $('camera-canvas').toBlob((blob) => {
+    if (!blob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    a.download = `stackchan-camera-${ts}.png`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }, 'image/png');
+}
+
+$('btn-camera-capture').addEventListener('click', cameraCapture);
+$('btn-camera-save').addEventListener('click', cameraSavePng);
 // Dropdown → text input sync so 手入力 and dropdown selection stay coherent.
 $('ota-release-select').addEventListener('change', (e) => {
   if (e.target.value) $('ota-release-tag').value = e.target.value;

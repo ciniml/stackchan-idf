@@ -109,6 +109,7 @@ config::SpeakerVolumeGetter g_speaker_volume_getter = nullptr;
 config::SpeakerVolumeSink g_speaker_volume_sink = nullptr;
 config::JttsSayKanaSink g_jtts_say_sink = nullptr;
 AvatarBytecodeSink g_avatar_bytecode_sink = nullptr;
+CameraCaptureSink g_camera_capture_sink = nullptr;
 McpSayKanaSink g_mcp_say_sink = nullptr;
 LtConfigSink g_lt_config_sink = nullptr;
 McpExpressionSink g_mcp_expression_sink = nullptr;
@@ -343,6 +344,7 @@ esp_err_t handle_status_get(httpd_req_t* req)
     const int bat_ma = g_battery_ma;
     const int bat_pct = g_battery_pct;
     const bool range_mode = g_servo_range_mode;
+    const bool has_camera = static_cast<bool>(g_camera_capture_sink);
     config::ServoPositionsGetter pos_getter = g_servo_positions_getter;
     xSemaphoreGive(g_mutex);
 
@@ -360,6 +362,7 @@ esp_err_t handle_status_get(httpd_req_t* req)
     body += "\"ip\":\"" + escape_json(ip) + "\",";
     body += "\"wifi_connected\":" + std::string(wifi_ok ? "true" : "false") + ",";
     body += "\"provisioning_mode\":" + std::string(prov_mode ? "true" : "false") + ",";
+    body += "\"has_camera\":" + std::string(has_camera ? "true" : "false") + ",";
     body += "\"ssid\":\"" + escape_json(cfg.wifi_ssid) + "\",";
     body += "\"has_password\":" + std::string(cfg.wifi_password.empty() ? "false" : "true") + ",";
     body += "\"has_openai_key\":" + std::string(cfg.openai_api_key.empty() ? "false" : "true") + ",";
@@ -935,6 +938,50 @@ esp_err_t handle_ota_release_post(httpd_req_t* req)
                      R"({"ok":true,"queued":true})");
 }
 
+// GET /api/camera/capture — one-shot photo for the settings page.
+//
+// Response on success: raw 8-bit grayscale, row-major, with the dimensions
+// in X-Frame-Width / X-Frame-Height response headers (QVGA 320×240 =
+// 76 800 B today, but the client reads the headers rather than assuming).
+// Raw-over-HTTP avoids a JPEG encoder on the device: 77 KB over LAN Wi-Fi
+// is ~100 ms, and the page renders it via canvas putImageData.
+//
+// 404 = no camera on this board (sink never registered); 503 = camera
+// currently unavailable (QR scan holds the driver, low memory, sensor
+// fault). The sink itself blocks a few hundred ms for AGC settle.
+esp_err_t handle_camera_capture_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    CameraCaptureSink sink = g_camera_capture_sink;
+    xSemaphoreGive(g_mutex);
+    if (!sink) {
+        return send_error(req, "404 Not Found", "no camera on this board");
+    }
+
+    std::vector<std::uint8_t> frame;
+    std::size_t w = 0, h = 0;
+    if (!sink(frame, w, h) || frame.empty()) {
+        return send_error(req, "503 Service Unavailable",
+                          "capture failed (camera busy or sensor error)");
+    }
+
+    char wbuf[12], hbuf[12];
+    std::snprintf(wbuf, sizeof(wbuf), "%u", static_cast<unsigned>(w));
+    std::snprintf(hbuf, sizeof(hbuf), "%u", static_cast<unsigned>(h));
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "X-Frame-Width", wbuf);
+    httpd_resp_set_hdr(req, "X-Frame-Height", hbuf);
+    // Expose the custom headers to fetch() — without this the browser hides
+    // them from cross-check reads even same-origin in some UA versions.
+    httpd_resp_set_hdr(req, "Access-Control-Expose-Headers",
+                       "X-Frame-Width, X-Frame-Height");
+    httpd_resp_send(req, reinterpret_cast<const char*>(frame.data()),
+                    static_cast<ssize_t>(frame.size()));
+    return ESP_OK;
+}
+
 // POST /api/avatar-dsl — body is a single complete `.avbc` (no chunking; HTTP
 // can carry the whole bytecode in one request). Validates, persists to NVS,
 // and applies live via the registered sink. Returns a JSON status. NVS write
@@ -1367,6 +1414,7 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/ota/control",     HTTP_POST, handle_ota_control_post);
     add(server, "/api/ota/data",        HTTP_POST, handle_ota_data_post);
     add(server, "/api/ota/release",     HTTP_POST, handle_ota_release_post);
+    add(server, "/api/camera/capture",  HTTP_GET,  handle_camera_capture_get);
     add(server, "/api/release/versions", HTTP_GET, handle_release_versions_get);
     add(server, "/api/avatar-dsl",       HTTP_POST, handle_avatar_dsl_post);
     add(server, "/api/avatar-dsl/reset", HTTP_POST, handle_avatar_dsl_reset_post);
@@ -1529,6 +1577,13 @@ void set_avatar_bytecode_sink(AvatarBytecodeSink sink)
     xSemaphoreGive(g_mutex);
 }
 
+void set_camera_capture_sink(CameraCaptureSink sink)
+{
+    if (g_mutex == nullptr) { g_camera_capture_sink = std::move(sink); return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_camera_capture_sink = std::move(sink);
+    xSemaphoreGive(g_mutex);
+}
 void set_mcp_say_kana_sink(McpSayKanaSink sink)
 {
     if (g_mutex == nullptr) { g_mcp_say_sink = std::move(sink); return; }

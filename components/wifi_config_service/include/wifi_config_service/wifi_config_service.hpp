@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 #include <config_service/config_service.hpp>
 #include <esp_http_server.h>
@@ -98,6 +99,20 @@ void set_board_kind(std::uint8_t kind);
 // Returns true on success (bytecode applied), false on failure.
 using AvatarBytecodeSink = std::function<bool(const std::uint8_t* data, std::size_t len)>;
 void set_avatar_bytecode_sink(AvatarBytecodeSink sink);
+
+// One-shot camera capture for `GET /api/camera/capture`. The sink fills
+// `out` with a raw grayscale frame (one byte per pixel, row-major) and
+// reports its dimensions; returns false when the camera is unavailable
+// (wrong board, QR scan holding the driver, low memory, sensor error).
+// Registering a sink is also what makes /api/status report
+// `"has_camera":true` — boards without a camera simply never register.
+//
+// The sink runs on the HTTP server task (6 KiB internal-RAM stack) and may
+// block for a few hundred ms (sensor init + AGC settle) — acceptable for a
+// user-initiated photo button, but do not call anything heavier from it.
+using CameraCaptureSink =
+    std::function<bool(std::vector<std::uint8_t>& out, std::size_t& width, std::size_t& height)>;
+void set_camera_capture_sink(CameraCaptureSink sink);
 
 // --- Channel API sinks (POST /mcp/* endpoints) -------------------------
 //

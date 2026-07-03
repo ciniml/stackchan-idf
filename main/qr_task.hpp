@@ -28,4 +28,10 @@ bool start_qr_scan(board::Board& board);
 // power via AW9523, and self-delete. Safe to call when no scan is active.
 void stop_qr_scan();
 
+// True while the QR worker task is alive. The camera driver has a single
+// framebuffer (fb_count=1), so anything else that wants the camera — e.g.
+// the settings page's one-shot capture — must check this and back off
+// instead of double-initialising esp_camera.
+bool qr_scan_active();
+
 } // namespace stackchan::app

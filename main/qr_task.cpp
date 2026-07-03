@@ -253,6 +253,11 @@ bool start_qr_scan(board::Board& board)
 #endif
 }
 
+bool qr_scan_active()
+{
+    return g_task_handle.load(std::memory_order_acquire) != nullptr;
+}
+
 void stop_qr_scan()
 {
     if (g_task_handle.load(std::memory_order_acquire) == nullptr) {

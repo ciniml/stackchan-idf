@@ -316,6 +316,11 @@ void set_avatar_bytecode_sink(AvatarBytecodeSink sink)
     http::set_avatar_bytecode_sink(std::move(sink));
 }
 
+void set_camera_capture_sink(CameraCaptureSink sink)
+{
+    http::set_camera_capture_sink(std::move(sink));
+}
+
 void set_mcp_say_kana_sink(McpSayKanaSink sink)
 {
     http::set_mcp_say_kana_sink(std::move(sink));

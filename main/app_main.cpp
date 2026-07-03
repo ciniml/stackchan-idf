@@ -43,6 +43,9 @@
 #include "device_ui.hpp"
 #include "diag.hpp"
 #include "i2c_dump.hpp"
+#if CONFIG_STACKCHAN_CAMERA_ENABLED
+#include "board/camera_gc0308.hpp"
+#endif
 #include "led_task.hpp"
 #include "lt_timer.hpp"
 #include "mic_lip_sync_task.hpp"
@@ -1399,6 +1402,53 @@ extern "C" void app_main()
     // setter, and converts implicitly to std::function for the HTTP one.
     stackchan::config::set_avatar_bytecode_sink(&apply_avatar_bytecode);
     stackchan::wifi_config::set_avatar_bytecode_sink(&apply_avatar_bytecode);
+
+#if CONFIG_STACKCHAN_CAMERA_ENABLED
+    // One-shot camera capture for the settings page (GET /api/camera/capture).
+    // Only registered when the board actually wires the GC0308 (M5 CoreS3
+    // base) — /api/status's has_camera flag derives from this registration,
+    // which is how the web UI decides to show the 撮影 section.
+    if (board.kind() == stackchan::board::BoardKind::M5Base) {
+        stackchan::wifi_config::set_camera_capture_sink(
+            [](std::vector<std::uint8_t>& out, std::size_t& w, std::size_t& h) -> bool {
+                // The QR worker owns the camera while scanning (fb_count=1,
+                // single esp_camera instance) — don't double-init under it.
+                if (stackchan::app::qr_scan_active()) {
+                    ESP_LOGW(kTag, "camera capture rejected: QR scan active");
+                    return false;
+                }
+                stackchan::board::CameraGc0308 camera;
+                if (auto r = camera.begin(); !r) {
+                    ESP_LOGE(kTag, "camera capture: begin failed: %d",
+                             static_cast<int>(r.error()));
+                    return false;
+                }
+                // Discard the first frames: the sensor's AGC/AWB starts from
+                // reset defaults and the first ~4 frames are badly under- or
+                // over-exposed. ~5 frames ≈ 300 ms at the GC0308's QVGA rate.
+                for (int i = 0; i < 5; ++i) {
+                    (void)camera.capture();
+                }
+                bool ok = false;
+                {
+                    // Scoped so ~CameraFrame returns the fb to the driver
+                    // BEFORE camera.end() tears the driver down.
+                    auto frame = camera.capture();
+                    if (frame) {
+                        out.assign(frame->data(), frame->data() + frame->size());
+                        w = frame->width();
+                        h = frame->height();
+                        ok = true;
+                    } else {
+                        ESP_LOGE(kTag, "camera capture failed: %d",
+                                 static_cast<int>(frame.error()));
+                    }
+                }
+                (void)camera.end();
+                return ok;
+            });
+    }
+#endif
 
     // Channel adapter (/mcp/*) sinks. Expression / balloon ride the existing
     // SharedState pipelines (render_task picks them up next frame). `say`
