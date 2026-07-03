@@ -84,10 +84,10 @@ CameraGc0308::~CameraGc0308()
 
 #if CONFIG_STACKCHAN_CAMERA_ENABLED
 
-tl::expected<void, CameraError> CameraGc0308::begin()
+tl::expected<void, CameraError> CameraGc0308::begin(CameraPixelFormat format)
 {
     if (initialised_) {
-        return {}; // idempotent
+        return {}; // idempotent (keeps the original format)
     }
 
     // Guard against the steady-state internal-RAM shortage. esp_camera_init
@@ -142,13 +142,16 @@ tl::expected<void, CameraError> CameraGc0308::begin()
 
     cfg.sccb_i2c_port = -1; // let esp32-camera manage its own i2c_master port
 
-    // QVGA grayscale (one byte per pixel) is all the QR decoder needs; the
-    // smaller payload keeps the per-frame PSRAM cost at ~75 KiB and reduces
-    // quirc's flood-fill work.
-    cfg.pixel_format = PIXFORMAT_GRAYSCALE;
+    // QVGA at the caller's format. Grayscale (1 B/px, ~75 KiB/frame) is all
+    // the QR decoder needs; RGB565 (2 B/px, ~150 KiB/frame, big-endian on
+    // the DVP path) serves the settings-page colour photo. Both live in
+    // PSRAM so the doubling doesn't touch internal RAM.
+    cfg.pixel_format = (format == CameraPixelFormat::Rgb565)
+                           ? PIXFORMAT_RGB565
+                           : PIXFORMAT_GRAYSCALE;
     cfg.frame_size   = FRAMESIZE_QVGA;
 
-    cfg.jpeg_quality = 0;            // unused at GRAYSCALE
+    cfg.jpeg_quality = 0;            // unused at GRAYSCALE / RGB565
     cfg.fb_count     = 1;            // one PSRAM-resident frame — see grab_mode
     cfg.fb_location  = CAMERA_FB_IN_PSRAM;
     // GRAB_LATEST throws away in-flight frames if the consumer falls behind,
@@ -163,7 +166,9 @@ tl::expected<void, CameraError> CameraGc0308::begin()
     }
 
     initialised_ = true;
-    ESP_LOGI(kTag, "GC0308 init OK (QVGA grayscale, pin_xclk=-1, internal-largest=%u)",
+    format_ = format;
+    ESP_LOGI(kTag, "GC0308 init OK (QVGA %s, pin_xclk=-1, internal-largest=%u)",
+             format == CameraPixelFormat::Rgb565 ? "RGB565" : "grayscale",
              static_cast<unsigned>(internal_largest));
     return {};
 }
@@ -194,7 +199,10 @@ tl::expected<CameraFrame, CameraError> CameraGc0308::capture()
     if (fb == nullptr) {
         return tl::unexpected{CameraError::CaptureFailed};
     }
-    if (fb->format != PIXFORMAT_GRAYSCALE ||
+    const pixformat_t expected = (format_ == CameraPixelFormat::Rgb565)
+                                     ? PIXFORMAT_RGB565
+                                     : PIXFORMAT_GRAYSCALE;
+    if (fb->format != expected ||
         fb->width != kFrameWidth || fb->height != kFrameHeight) {
         esp_camera_fb_return(fb);
         return tl::unexpected{CameraError::WrongPixelFormat};
@@ -215,7 +223,7 @@ tl::expected<CameraFrame, CameraError> CameraGc0308::capture()
 // link / spin up the QR task; whoever called begin() handles the
 // NotSupported error and skips spawning the worker.
 
-tl::expected<void, CameraError> CameraGc0308::begin()
+tl::expected<void, CameraError> CameraGc0308::begin(CameraPixelFormat /*format*/)
 {
     ESP_LOGW(kTag, "begin: camera support not compiled in (CONFIG_STACKCHAN_CAMERA_ENABLED=n)");
     return tl::unexpected{CameraError::NotSupported};

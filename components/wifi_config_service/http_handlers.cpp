@@ -940,11 +940,12 @@ esp_err_t handle_ota_release_post(httpd_req_t* req)
 
 // GET /api/camera/capture — one-shot photo for the settings page.
 //
-// Response on success: raw 8-bit grayscale, row-major, with the dimensions
-// in X-Frame-Width / X-Frame-Height response headers (QVGA 320×240 =
-// 76 800 B today, but the client reads the headers rather than assuming).
-// Raw-over-HTTP avoids a JPEG encoder on the device: 77 KB over LAN Wi-Fi
-// is ~100 ms, and the page renders it via canvas putImageData.
+// Response on success: a raw row-major frame with the dimensions in
+// X-Frame-Width / X-Frame-Height and the pixel encoding in X-Frame-Format
+// ("gray8" = 1 B/px, "rgb565be" = 2 B/px big-endian — QVGA colour is
+// 153 600 B). Raw-over-HTTP avoids a JPEG encoder on the device: ~150 KB
+// over LAN Wi-Fi is ~200 ms, and the page renders it via canvas
+// putImageData.
 //
 // 404 = no camera on this board (sink never registered); 503 = camera
 // currently unavailable (QR scan holds the driver, low memory, sensor
@@ -962,7 +963,8 @@ esp_err_t handle_camera_capture_get(httpd_req_t* req)
 
     std::vector<std::uint8_t> frame;
     std::size_t w = 0, h = 0;
-    if (!sink(frame, w, h) || frame.empty()) {
+    std::string format = "gray8";
+    if (!sink(frame, w, h, format) || frame.empty()) {
         return send_error(req, "503 Service Unavailable",
                           "capture failed (camera busy or sensor error)");
     }
@@ -973,10 +975,11 @@ esp_err_t handle_camera_capture_get(httpd_req_t* req)
     httpd_resp_set_type(req, "application/octet-stream");
     httpd_resp_set_hdr(req, "X-Frame-Width", wbuf);
     httpd_resp_set_hdr(req, "X-Frame-Height", hbuf);
+    httpd_resp_set_hdr(req, "X-Frame-Format", format.c_str());
     // Expose the custom headers to fetch() — without this the browser hides
     // them from cross-check reads even same-origin in some UA versions.
     httpd_resp_set_hdr(req, "Access-Control-Expose-Headers",
-                       "X-Frame-Width, X-Frame-Height");
+                       "X-Frame-Width, X-Frame-Height, X-Frame-Format");
     httpd_resp_send(req, reinterpret_cast<const char*>(frame.data()),
                     static_cast<ssize_t>(frame.size()));
     return ESP_OK;

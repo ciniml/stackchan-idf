@@ -123,6 +123,17 @@ void render_task_entry(void* arg)
     for (;;) {
         const std::uint32_t now_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
 
+        // Camera session: the sprite compose + panel push is the dominant
+        // PSRAM bandwidth consumer, and the camera's EDMA writes its frame
+        // into a PSRAM fb — running both concurrently tears the captured
+        // image (bands of corrupt pixels; confirmed on hardware at RGB565's
+        // 2 B/px rate). Freeze the face for the ~1.5 s session.
+        if (state->i2c_quiesce.load(std::memory_order_acquire)) {
+            ui_was_active = true; // full repaint when the session ends
+            vTaskDelay(kPeriodTicks);
+            continue;
+        }
+
         // SoftAP provisioning screen takes precedence over everything else:
         // it draws straight to the panel (no canvas) because it needs
         // M5GFX::qrcode(), which the Canvas abstraction doesn't expose. Once

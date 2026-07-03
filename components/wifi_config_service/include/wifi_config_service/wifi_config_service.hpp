@@ -101,17 +101,22 @@ using AvatarBytecodeSink = std::function<bool(const std::uint8_t* data, std::siz
 void set_avatar_bytecode_sink(AvatarBytecodeSink sink);
 
 // One-shot camera capture for `GET /api/camera/capture`. The sink fills
-// `out` with a raw grayscale frame (one byte per pixel, row-major) and
-// reports its dimensions; returns false when the camera is unavailable
-// (wrong board, QR scan holding the driver, low memory, sensor error).
-// Registering a sink is also what makes /api/status report
-// `"has_camera":true` — boards without a camera simply never register.
+// `out` with a raw row-major frame, reports its dimensions, and names the
+// pixel encoding in `format` — served verbatim as the X-Frame-Format
+// response header. Current encodings:
+//   "gray8"    — 1 B/px grayscale
+//   "rgb565be" — 2 B/px RGB565, big-endian (high byte first)
+// Returns false when the camera is unavailable (wrong board, QR scan
+// holding the driver, low memory, sensor error). Registering a sink is
+// also what makes /api/status report `"has_camera":true` — boards without
+// a camera simply never register.
 //
 // The sink runs on the HTTP server task (6 KiB internal-RAM stack) and may
 // block for a few hundred ms (sensor init + AGC settle) — acceptable for a
 // user-initiated photo button, but do not call anything heavier from it.
 using CameraCaptureSink =
-    std::function<bool(std::vector<std::uint8_t>& out, std::size_t& width, std::size_t& height)>;
+    std::function<bool(std::vector<std::uint8_t>& out, std::size_t& width, std::size_t& height,
+                       std::string& format)>;
 void set_camera_capture_sink(CameraCaptureSink sink);
 
 // --- Channel API sinks (POST /mcp/* endpoints) -------------------------

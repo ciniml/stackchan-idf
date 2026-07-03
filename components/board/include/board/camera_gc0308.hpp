@@ -47,7 +47,16 @@ enum class CameraError {
     DriverDeinit,      // esp_camera_deinit returned non-OK (logged but rarely actionable)
     NotInitialised,    // capture() / deinit() called before begin()
     CaptureFailed,     // esp_camera_fb_get returned nullptr (driver timeout / no frame)
-    WrongPixelFormat,  // returned frame is not GRAYSCALE QVGA (defensive — shouldn't happen)
+    WrongPixelFormat,  // returned frame doesn't match the begin() format (defensive)
+};
+
+// Capture pixel format, selected at begin().
+//   Grayscale — 1 B/px. What quirc consumes; the QR scanner uses this.
+//   Rgb565    — 2 B/px big-endian (high byte first, as esp32-camera delivers
+//               DVP RGB565). The settings-page photo capture uses this.
+enum class CameraPixelFormat : std::uint8_t {
+    Grayscale,
+    Rgb565,
 };
 
 // One captured frame, owned by the esp32-camera driver. RAII: the destructor
@@ -63,9 +72,10 @@ public:
     CameraFrame& operator=(CameraFrame&& other) noexcept;
     ~CameraFrame();
 
-    // Grayscale pixel buffer (one byte per pixel). Lives in PSRAM (the
-    // fb_location config) — fine to read from any task, but DMA-into-flash
-    // operations need a copy because PSRAM is not DMA-capable.
+    // Pixel buffer (1 B/px grayscale or 2 B/px RGB565 big-endian, per the
+    // begin() format). Lives in PSRAM (the fb_location config) — fine to
+    // read from any task, but DMA-into-flash operations need a copy because
+    // PSRAM is not DMA-capable.
     const std::uint8_t* data() const noexcept { return data_; }
     std::size_t size() const noexcept { return size_; }
     std::size_t width() const noexcept { return width_; }
@@ -97,14 +107,16 @@ public:
 
     bool initialised() const noexcept { return initialised_; }
 
-    // Release m5::In_I2C, then call esp_camera_init. Idempotent: a second call
-    // while already initialised is a no-op success.
+    // Release m5::In_I2C, then call esp_camera_init with the given pixel
+    // format. Idempotent: a second call while already initialised is a no-op
+    // success (the original format stays — end() first to switch formats).
     //
     // Rejects with LowMemory when the internal-RAM largest contiguous block is
     // below the floor the esp32-camera driver / DMA descriptors need. Quirc's
     // image buffer also lives in PSRAM, so this is purely about the driver
     // setup itself.
-    tl::expected<void, CameraError> begin();
+    tl::expected<void, CameraError>
+    begin(CameraPixelFormat format = CameraPixelFormat::Grayscale);
 
     // Tear down esp_camera. Camera power is always-on on the CoreS3 mainboard,
     // so no I/O expander action is taken. m5::In_I2C will auto-reinit on its
@@ -119,6 +131,7 @@ public:
 
 private:
     bool initialised_ = false;
+    CameraPixelFormat format_ = CameraPixelFormat::Grayscale;
 };
 
 } // namespace stackchan::board

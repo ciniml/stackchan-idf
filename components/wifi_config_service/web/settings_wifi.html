@@ -1860,19 +1860,39 @@ async function cameraCapture() {
     if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + await r.text());
     const w = parseInt(r.headers.get('X-Frame-Width') || '320', 10);
     const h = parseInt(r.headers.get('X-Frame-Height') || '240', 10);
+    const fmt = r.headers.get('X-Frame-Format') || 'gray8';
+    const bpp = fmt === 'rgb565be' ? 2 : 1;
     const buf = new Uint8Array(await r.arrayBuffer());
-    if (buf.length < w * h) throw new Error(`short frame (${buf.length} < ${w * h})`);
+    if (buf.length < w * h * bpp) {
+      throw new Error(`short frame (${buf.length} < ${w * h * bpp}, fmt=${fmt})`);
+    }
     const canvas = $('camera-canvas');
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d');
     const img = ctx.createImageData(w, h);
-    for (let i = 0; i < w * h; i++) {
-      const v = buf[i];
-      img.data[4 * i] = v;
-      img.data[4 * i + 1] = v;
-      img.data[4 * i + 2] = v;
-      img.data[4 * i + 3] = 255;
+    if (fmt === 'rgb565be') {
+      // RGB565 big-endian: RRRRRGGG GGGBBBBB. Expand 5/6-bit channels to
+      // 8 bit with the standard replicate-high-bits scaling so full white
+      // maps to 255 (not 248).
+      for (let i = 0; i < w * h; i++) {
+        const v = (buf[2 * i] << 8) | buf[2 * i + 1];
+        const r5 = (v >> 11) & 0x1f;
+        const g6 = (v >> 5) & 0x3f;
+        const b5 = v & 0x1f;
+        img.data[4 * i]     = (r5 << 3) | (r5 >> 2);
+        img.data[4 * i + 1] = (g6 << 2) | (g6 >> 4);
+        img.data[4 * i + 2] = (b5 << 3) | (b5 >> 2);
+        img.data[4 * i + 3] = 255;
+      }
+    } else {
+      for (let i = 0; i < w * h; i++) {
+        const v = buf[i];
+        img.data[4 * i] = v;
+        img.data[4 * i + 1] = v;
+        img.data[4 * i + 2] = v;
+        img.data[4 * i + 3] = 255;
+      }
     }
     ctx.putImageData(img, 0, 0);
     $('btn-camera-save').disabled = false;

@@ -71,17 +71,27 @@ public:
     // Seeded from NVS at boot (DeviceConfig::battery_gauge_enabled).
     std::atomic<bool> battery_gauge_enabled{true};
 
-    // Cooperative internal-I2C quiesce for camera sessions. The GC0308's
-    // SCCB shares the physical bus (G11/G12) AND the I2C controller with
-    // m5::In_I2C, but through a different software stack (IDF i2c_master vs
-    // lgfx's register-level driver). Any In_I2C access while esp_camera is
-    // initialised re-inits the controller under the SCCB driver's feet →
-    // SCCB_Write fails ESP_ERR_INVALID_STATE (the historical "camera vs
-    // touch/led race"). The camera-capture sink raises this flag for the
-    // duration of its session; the periodic In_I2C users (demo_loop's
-    // M5.update / battery / nadenade / IMU poll, led_task's strip refresh)
-    // skip their I2C work while it's set. Sessions are one-shot and ~1.5 s,
-    // so the pause is invisible in normal use.
+    // Cooperative quiesce for camera sessions. Two independent hazards:
+    //
+    // 1) I2C: the GC0308's SCCB shares the physical bus (G11/G12) AND the
+    //    I2C controller with m5::In_I2C, but through a different software
+    //    stack (IDF i2c_master vs lgfx's register-level driver). Any In_I2C
+    //    access while esp_camera is initialised re-inits the controller
+    //    under the SCCB driver's feet → SCCB_Write fails
+    //    ESP_ERR_INVALID_STATE (the historical "camera vs touch/led race").
+    //
+    // 2) PSRAM bandwidth: the camera EDMA writes frames into a PSRAM fb.
+    //    At RGB565 (2 B/px) the write rate collides with the render task's
+    //    full-screen PSRAM sprite traffic (compose + push at 30 fps) and
+    //    frames arrive torn — confirmed on hardware as bands of corrupt
+    //    pixels interleaved with good rows.
+    //
+    // The camera-capture sink raises this flag for the duration of its
+    // session; the periodic In_I2C users (demo_loop's M5.update / battery /
+    // nadenade / IMU poll, led_task's strip refresh) AND the render task
+    // skip their work while it's set. Sessions are one-shot and ~1.5 s, so
+    // the pause (frozen face, LEDs holding state) is invisible in normal
+    // use.
     std::atomic<bool> i2c_quiesce{false};
 
     // Cooperative I2S handoff for BLE audio streaming. CoreS3 shares the

@@ -93,6 +93,26 @@ stackchan::board::Si12tTouch* g_touch = nullptr;
 // StopWatch). Set once after Board::begin() before any task starts.
 stackchan::board::Board* g_board = nullptr;
 
+#if CONFIG_STACKCHAN_CAMERA_ENABLED
+// Resident camera (M5Base only). Initialised ONCE at boot, never deinited:
+//   - per-capture esp_camera_init needs a contiguous internal-RAM DMA
+//     bounce block (7.7 KiB at RGB565/QVGA) that no longer exists once the
+//     conversation task's TLS session is up (largest sinks to ~8 KiB) —
+//     the second capture of a session failed the floor check for exactly
+//     this reason. Boot-time init lands while largest ≈ 130 KiB.
+//   - init before ANY other task runs also removes the SCCB-vs-In_I2C
+//     race window entirely: the sensor's register upload happens in
+//     single-threaded context. After init the sensor free-runs (AGC/AWB
+//     on-chip) and SCCB is never touched again, so later In_I2C re-inits
+//     of the controller are harmless.
+// Cost: ~7.7 KiB internal + 150 KiB PSRAM fb + the cam task, held for the
+// process lifetime, and the sensor streams continuously (~2 MB/s bounce
+// memcpy into PSRAM). The QR task still creates its own CameraGc0308 —
+// double-init would fail — so STACKCHAN_QR_TEST_AT_BOOT must stay off
+// until qr_task is taught to reuse this instance.
+stackchan::board::CameraGc0308 g_camera;
+#endif
+
 // Per-board factory speaker volume (the "100 %" reference for the user
 // gain). Captured once at boot; the live-apply sink multiplies by the
 // user's percent and clamps to 255. Default 128 = M5Unified's CoreS3
@@ -1008,6 +1028,22 @@ extern "C" void app_main()
     // state we created ourselves.
     stackchan::app::dump_internal_i2c_registers();
 
+#if CONFIG_STACKCHAN_CAMERA_ENABLED
+    // Resident camera init — see g_camera above for the full rationale.
+    // Must run after the i2c dump (which uses In_I2C) and before any task
+    // that touches In_I2C starts. begin() releases In_I2C for the SCCB
+    // register upload; the subsequent In_I2C users below (battery, es8388
+    // probe, …) re-init the controller afterwards, which is harmless once
+    // the sensor free-runs. Failure is non-fatal: has_camera just stays
+    // false (the sink checks initialised()).
+    if (board.kind() == stackchan::board::BoardKind::M5Base) {
+        if (auto r = g_camera.begin(stackchan::board::CameraPixelFormat::Rgb565); !r) {
+            ESP_LOGW(kTag, "resident camera init failed: %d — photo capture disabled",
+                     static_cast<int>(r.error()));
+        }
+    }
+#endif
+
     // CoreS3 Speaker and Mic share I2S_NUM_1 (BCK=GPIO34, WS=GPIO33),
     // so the side that's done has to release the bus before the other
     // side can install its own driver.
@@ -1415,32 +1451,33 @@ extern "C" void app_main()
 
 #if CONFIG_STACKCHAN_CAMERA_ENABLED
     // One-shot camera capture for the settings page (GET /api/camera/capture).
-    // Only registered when the board actually wires the GC0308 (M5 CoreS3
-    // base) — /api/status's has_camera flag derives from this registration,
-    // which is how the web UI decides to show the 撮影 section.
-    if (board.kind() == stackchan::board::BoardKind::M5Base) {
+    // Registered only when the resident camera actually came up at boot —
+    // /api/status's has_camera flag derives from this registration, which is
+    // how the web UI decides to show the 撮影 section. (initialised() also
+    // implies BoardKind::M5Base: boot only begins g_camera on that board.)
+    if (g_camera.initialised()) {
         stackchan::wifi_config::set_camera_capture_sink(
-            [](std::vector<std::uint8_t>& out, std::size_t& w, std::size_t& h) -> bool {
-                // The QR worker owns the camera while scanning (fb_count=1,
-                // single esp_camera instance) — don't double-init under it.
-                if (stackchan::app::qr_scan_active()) {
-                    ESP_LOGW(kTag, "camera capture rejected: QR scan active");
+            [](std::vector<std::uint8_t>& out, std::size_t& w, std::size_t& h,
+               std::string& format) -> bool {
+                // Resident camera (g_camera, initialised at boot). Boot-time
+                // init failure leaves it uninitialised — report unavailable.
+                if (!g_camera.initialised()) {
                     return false;
                 }
-                // Quiesce every periodic In_I2C user for the whole session.
-                // Confirmed on hardware (2026-07-03): without this, an
-                // In_I2C access (touch poll etc.) between esp_camera_init's
-                // sensor probe and its register upload re-inits the I2C
-                // controller under the SCCB driver → SCCB_Write fails with
-                // ESP_ERR_INVALID_STATE and the whole init aborts.
+                // Quiesce the PSRAM-heavy tasks (render sprite traffic) and
+                // the In_I2C pollers for the duration of the grab. The
+                // sensor streams continuously, so frames completed BEFORE
+                // the bus went quiet may be torn by concurrent PSRAM
+                // traffic — confirmed on hardware as bands of corrupt
+                // pixels. Discard two frames after the drain so the one we
+                // keep was composed entirely under quiesce.
                 struct QuiesceGuard {
                     QuiesceGuard()
                     {
                         g_state->i2c_quiesce.store(true, std::memory_order_release);
-                        // Let in-flight iterations drain: demo_loop polls
-                        // every ~50 ms, led_task every 100 ms — 150 ms
-                        // guarantees both observed the flag before SCCB
-                        // starts driving the bus.
+                        // demo_loop polls every ~50 ms, led_task every
+                        // 100 ms, render every 33 ms — 150 ms guarantees
+                        // all of them observed the flag.
                         vTaskDelay(pdMS_TO_TICKS(150));
                     }
                     ~QuiesceGuard()
@@ -1448,35 +1485,20 @@ extern "C" void app_main()
                         g_state->i2c_quiesce.store(false, std::memory_order_release);
                     }
                 } quiesce;
-                stackchan::board::CameraGc0308 camera;
-                if (auto r = camera.begin(); !r) {
-                    ESP_LOGE(kTag, "camera capture: begin failed: %d",
-                             static_cast<int>(r.error()));
+                format = "rgb565be";
+                for (int i = 0; i < 2; ++i) {
+                    (void)g_camera.capture();
+                }
+                auto frame = g_camera.capture();
+                if (!frame) {
+                    ESP_LOGE(kTag, "camera capture failed: %d",
+                             static_cast<int>(frame.error()));
                     return false;
                 }
-                // Discard the first frames: the sensor's AGC/AWB starts from
-                // reset defaults and the first ~4 frames are badly under- or
-                // over-exposed. ~5 frames ≈ 300 ms at the GC0308's QVGA rate.
-                for (int i = 0; i < 5; ++i) {
-                    (void)camera.capture();
-                }
-                bool ok = false;
-                {
-                    // Scoped so ~CameraFrame returns the fb to the driver
-                    // BEFORE camera.end() tears the driver down.
-                    auto frame = camera.capture();
-                    if (frame) {
-                        out.assign(frame->data(), frame->data() + frame->size());
-                        w = frame->width();
-                        h = frame->height();
-                        ok = true;
-                    } else {
-                        ESP_LOGE(kTag, "camera capture failed: %d",
-                                 static_cast<int>(frame.error()));
-                    }
-                }
-                (void)camera.end();
-                return ok;
+                out.assign(frame->data(), frame->data() + frame->size());
+                w = frame->width();
+                h = frame->height();
+                return true;
             });
     }
 #endif

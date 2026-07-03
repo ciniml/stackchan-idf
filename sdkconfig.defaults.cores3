@@ -30,12 +30,26 @@ CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 # STACKCHAN_QR_TEST_AT_BOOT stays OFF — do not flip it back on without
 # revisiting the race.
 CONFIG_STACKCHAN_CAMERA_ENABLED=y
-# Put the per-frame DMA bounce in PSRAM so the QVGA grayscale buffer
-# (≈75 KiB) doesn't fight the steady ~10 KiB internal-RAM headroom that
-# TLS / esp-aes / NimBLE already lean on. ESP32-S3 specific knob in
-# esp32-camera — safe to set unconditionally here because the cores3 profile
-# is the only one that flips STACKCHAN_CAMERA_ENABLED to y.
-CONFIG_CAMERA_PSRAM_DMA=y
+# DMA path selection (ESP32-S3 knob in esp32-camera).
+#   y: EDMA writes each line straight into the PSRAM framebuffer.
+#   n: DMA lands in small internal-RAM bounce buffers; the cam task memcpys
+#      into the PSRAM fb.
+# Direct-to-PSRAM (y) worked for the 1 B/px grayscale QR path, but at
+# RGB565's 2 B/px the EDMA writes lose the PSRAM bus to concurrent traffic
+# (Quad PSRAM @80 MHz is ~40 MB/s total; NimBLE pools + heap live there
+# too) and captured frames arrive with bands of torn pixels — confirmed on
+# hardware 2026-07-03, even with the render task quiesced. Bounce mode (n)
+# absorbs bus-arbitration stalls in internal RAM at the cost of a few KiB
+# of DMA buffers; the 12 KiB internal-RAM floor check in
+# CameraGc0308::begin() still gates the init.
+CONFIG_CAMERA_PSRAM_DMA=n
+# Bounce-buffer sizing. The esp32-camera default (32768) makes cam_dma_config
+# ask for a 30 720 B contiguous internal block — the live system's largest
+# free block is ~14 KiB, so init failed outright. 8192 shrinks the request to
+# 2 × 3 840 B halves (7 680 B total, one 6-line node per half), which fits
+# the steady-state heap with margin. Cost: an interrupt per 6 lines instead
+# of per 24 — negligible against the one-shot capture duty cycle.
+CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX=8192
 
 # --- esp32-camera sensor selection ---
 # Disable every sensor driver except GC0308 (the only sensor on the CoreS3
