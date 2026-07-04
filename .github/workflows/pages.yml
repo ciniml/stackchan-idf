@@ -91,6 +91,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p _site/firmware
+          # Retention floor: only mirror releases >= this tag onto Pages.
+          # The site artifact bundles every mirrored release's ZIPs plus the
+          # extracted per-board stackchan_idf.bin (~25 MB per release) and
+          # was closing in on the 1 GB Pages limit (805 MB at v0.8.4).
+          # Older releases stay fully downloadable from the GitHub Releases
+          # page — raising this floor only prunes the Pages mirror (and the
+          # versions.json entries the Web Flasher / release-fetch OTA offer).
+          RETAIN_FLOOR="v0.7.0"
           tags_json=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
                         --json tagName,isDraft,isPrerelease)
           mapfile -t tags < <(echo "$tags_json" | jq -r '.[] | select(.isDraft|not) | .tagName')
@@ -104,6 +112,14 @@ jobs:
           #   firmware-vX.Y.Z.zip           → boards.cores3 (legacy single-zip releases)
           : > /tmp/per_tag.ndjson
           for tag in "${tags[@]}"; do
+            # Version-sort against the retention floor: skip anything older.
+            # `sort -V | head -1` yields the smaller of the two; if that's
+            # $tag (and it isn't the floor itself), it's below the floor.
+            if [ "$tag" != "$RETAIN_FLOOR" ] && \
+               [ "$(printf '%s\n' "$tag" "$RETAIN_FLOOR" | sort -V | head -1)" = "$tag" ]; then
+              echo "[skip] $tag: below retention floor $RETAIN_FLOOR"
+              continue
+            fi
             assets=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
                      --jq '.assets[] | select(.name|test("^firmware-.*\\.zip$")) | .name')
             if [ -z "$assets" ]; then
