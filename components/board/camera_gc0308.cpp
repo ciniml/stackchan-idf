@@ -23,11 +23,14 @@ constexpr const char* kTag = "camera";
 #if CONFIG_STACKCHAN_CAMERA_ENABLED
 
 // Internal-RAM contiguous-block floor before we'll even try esp_camera_init.
-// The driver allocates a handful of DMA descriptors + LCD_CAM peripheral
-// state in internal RAM; coming in below this floor either fails the init
-// outright or fragments what's left so the next TLS handshake can't allocate
-// its AES bounce. 12 KiB matches the project-wide policy in CLAUDE.md.
-constexpr std::size_t kMinInternalLargestBytes = 12 * 1024;
+// The driver allocates the DVP DMA bounce + descriptors + peripheral state
+// in internal RAM. Measured on HW (boot log "cam_hal: buffer_size"): VGA
+// RGB565 needs a 7680 B bounce, VGA grayscale/Bayer 3840 B. The floor must
+// sit BELOW 7680: the RAW-capture swap (end() → begin(BayerRaw) → end() →
+// begin(Rgb565)) runs at steady state where the largest free block is
+// exactly the 7680 B the resident driver just released — a 12 KiB floor
+// deadlocked the swap (and the RGB565 restore) on hardware.
+constexpr std::size_t kMinInternalLargestBytes = 6 * 1024;
 
 // GC0308 XCLK is wired directly on the CoreS3 mainboard — no GPIO needed.
 // The sensor generates its pixel clock internally; pin_xclk = -1 tells
@@ -161,7 +164,14 @@ tl::expected<void, CameraError> CameraGc0308::begin(CameraPixelFormat format, Ca
     cfg.frame_size   = (size == CameraFrameSize::Vga) ? FRAMESIZE_VGA : FRAMESIZE_QVGA;
 
     cfg.jpeg_quality = 0;            // unused at GRAYSCALE / RGB565
-    cfg.fb_count     = 1;            // one PSRAM-resident frame — see grab_mode
+    // One PSRAM-resident frame. The resident camera streams with no
+    // consumer, so the driver's event queue chronically overflows either
+    // way (fb_count=2 was tried and didn't stop it — it only added a stall
+    // window where fb_get timed out after idle streaming, plus 600 KiB of
+    // PSRAM). fb_count=1 + GRAB_LATEST is the HW-proven configuration; the
+    // overflow itself is harmless (we don't want those frames) and its
+    // throttled cam_hal warning is silenced below.
+    cfg.fb_count     = 1;
     cfg.fb_location  = CAMERA_FB_IN_PSRAM;
     // GRAB_LATEST throws away in-flight frames if the consumer falls behind,
     // which keeps quirc reading freshly-aimed-at frames instead of a stale
@@ -171,6 +181,26 @@ tl::expected<void, CameraError> CameraGc0308::begin(CameraPixelFormat format, Ca
     const esp_err_t err = esp_camera_init(&cfg);
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "esp_camera_init failed: 0x%x", static_cast<unsigned>(err));
+        return tl::unexpected{CameraError::DriverInit};
+    }
+
+    // Note: the resident stream has no consumer, so cam_hal emits a
+    // throttled "EV-EOF-OVF" line every ~15 s. That's raw ets_printf output
+    // (level-independent), so esp_log_level_set can't silence it — and a
+    // build that tried (tag forced to ERROR) also coincided with the
+    // post-RAW-swap restore stalling on HW. Leave the tag alone; the noise
+    // is one line per throttle window and doubles as a liveness heartbeat.
+
+    // esp32-camera's cam_config() does NOT check the xTaskCreate result for
+    // its "cam_task" frame consumer (4 KiB internal-RAM stack). At swap time
+    // (RAW capture re-init) internal RAM is fragmented enough that the stack
+    // alloc can fail — init then reports OK but zero frames ever reach
+    // fb_get, which is exactly the silent-death mode observed on HW. Verify
+    // the task actually exists and fail loudly so the caller's retry loop
+    // gets a chance.
+    if (xTaskGetHandle("cam_task") == nullptr) {
+        ESP_LOGE(kTag, "cam_task missing after init (internal-RAM stack alloc failed?) — deinit");
+        (void)esp_camera_deinit();
         return tl::unexpected{CameraError::DriverInit};
     }
 

@@ -1532,12 +1532,29 @@ extern "C" void app_main()
                 // but a restore failure leaves the camera down until
                 // reboot, so both steps log loudly.
                 if (options.raw_bayer) {
+                    // Format switches contend with other tasks (conversation,
+                    // WebSocket) for fragmented internal RAM — begin() can
+                    // lose the allocation race (it detects this and fails
+                    // loudly), so every (re)init below retries a few times.
+                    auto begin_with_retry = [](CameraPixelFormat fmt, const char* what) -> bool {
+                        for (int attempt = 0; attempt < 5; ++attempt) {
+                            auto r = g_camera.begin(fmt, CameraFrameSize::Vga);
+                            if (r) {
+                                return true;
+                            }
+                            if (attempt == 4) {
+                                ESP_LOGE(kTag, "%s init failed: %d", what,
+                                         static_cast<int>(r.error()));
+                            } else {
+                                vTaskDelay(pdMS_TO_TICKS(200));
+                            }
+                        }
+                        return false;
+                    };
                     (void)g_camera.end();
-                    if (auto r = g_camera.begin(CameraPixelFormat::BayerRaw, CameraFrameSize::Vga);
-                        !r) {
-                        ESP_LOGE(kTag, "RAW re-init failed: %d — restoring RGB565",
-                                 static_cast<int>(r.error()));
-                        (void)g_camera.begin(CameraPixelFormat::Rgb565, CameraFrameSize::Vga);
+                    if (!begin_with_retry(CameraPixelFormat::BayerRaw, "RAW")) {
+                        ESP_LOGE(kTag, "restoring RGB565 after RAW init failure");
+                        (void)begin_with_retry(CameraPixelFormat::Rgb565, "RGB565 fallback");
                         return false;
                     }
                     bool ok = false;
@@ -1558,11 +1575,8 @@ extern "C" void app_main()
                         }
                     }
                     (void)g_camera.end();
-                    if (auto r = g_camera.begin(CameraPixelFormat::Rgb565, CameraFrameSize::Vga);
-                        !r) {
-                        ESP_LOGE(kTag,
-                                 "RGB565 restore failed: %d — camera down until reboot",
-                                 static_cast<int>(r.error()));
+                    if (!begin_with_retry(CameraPixelFormat::Rgb565, "RGB565 restore")) {
+                        ESP_LOGE(kTag, "camera down until reboot");
                     }
                     return ok;
                 }
@@ -1578,6 +1592,15 @@ extern "C" void app_main()
                     (void)g_camera.capture();
                 }
                 auto frame = g_camera.capture();
+                if (!frame) {
+                    // The first fb_get after a long idle-streaming stretch
+                    // can time out (the DVP stalls once the un-consumed
+                    // frame queue overflows; the failed fb_get itself kicks
+                    // the driver back into motion) — seen on HW after the
+                    // RAW swap. One more attempt recovers it.
+                    ESP_LOGW(kTag, "camera capture timed out — retrying once");
+                    frame = g_camera.capture();
+                }
                 if (options.colorbar) {
                     (void)g_camera.set_colorbar(false);
                 }
