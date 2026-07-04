@@ -15,6 +15,7 @@
 #include <cJSON.h>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <span>
@@ -110,6 +111,7 @@ config::SpeakerVolumeSink g_speaker_volume_sink = nullptr;
 config::JttsSayKanaSink g_jtts_say_sink = nullptr;
 AvatarBytecodeSink g_avatar_bytecode_sink = nullptr;
 CameraCaptureSink g_camera_capture_sink = nullptr;
+CameraRegSink g_camera_reg_sink = nullptr;
 McpSayKanaSink g_mcp_say_sink = nullptr;
 LtConfigSink g_lt_config_sink = nullptr;
 McpExpressionSink g_mcp_expression_sink = nullptr;
@@ -961,10 +963,28 @@ esp_err_t handle_camera_capture_get(httpd_req_t* req)
         return send_error(req, "404 Not Found", "no camera on this board");
     }
 
+    // ?fmt=raw → raw Bayer mosaic (ISP bypass); ?test=colorbar → sensor
+    // test pattern. Absent/other values fall through to the normal photo.
+    CameraCaptureOptions options{};
+    {
+        char query[64];
+        if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+            char val[16];
+            if (httpd_query_key_value(query, "fmt", val, sizeof(val)) == ESP_OK &&
+                std::strcmp(val, "raw") == 0) {
+                options.raw_bayer = true;
+            }
+            if (httpd_query_key_value(query, "test", val, sizeof(val)) == ESP_OK &&
+                std::strcmp(val, "colorbar") == 0) {
+                options.colorbar = true;
+            }
+        }
+    }
+
     std::vector<std::uint8_t> frame;
     std::size_t w = 0, h = 0;
     std::string format = "gray8";
-    if (!sink(frame, w, h, format) || frame.empty()) {
+    if (!sink(options, frame, w, h, format) || frame.empty()) {
         return send_error(req, "503 Service Unavailable",
                           "capture failed (camera busy or sensor error)");
     }
@@ -982,6 +1002,60 @@ esp_err_t handle_camera_capture_get(httpd_req_t* req)
                        "X-Frame-Width, X-Frame-Height, X-Frame-Format");
     httpd_resp_send(req, reinterpret_cast<const char*>(frame.data()),
                     static_cast<ssize_t>(frame.size()));
+    return ESP_OK;
+}
+
+// GET/POST /api/camera/reg — raw GC0308 register access for interactive
+// colour tuning against a test chart. Query-string only (no body — keeps
+// parsing trivial): page + reg select the register; POST additionally takes
+// value and writes it. Numbers accept 0x-prefixed hex or decimal. Response
+// is JSON {"page":P,"reg":R,"value":V} with the value read back (GET) or
+// as written (POST).
+esp_err_t handle_camera_reg(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    CameraRegSink sink = g_camera_reg_sink;
+    xSemaphoreGive(g_mutex);
+    if (!sink) {
+        return send_error(req, "404 Not Found", "no camera on this board");
+    }
+
+    char query[96];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
+        return send_error(req, "400 Bad Request", "missing query (page, reg[, value])");
+    }
+    // strtoul with base 0 handles both "0x24" and "36".
+    auto parse_u8 = [&](const char* key, std::uint8_t& out) -> bool {
+        char val[16];
+        if (httpd_query_key_value(query, key, val, sizeof(val)) != ESP_OK) return false;
+        char* endp = nullptr;
+        const unsigned long v = std::strtoul(val, &endp, 0);
+        if (endp == val || *endp != '\0' || v > 0xff) return false;
+        out = static_cast<std::uint8_t>(v);
+        return true;
+    };
+
+    std::uint8_t page = 0, reg = 0, value = 0;
+    if (!parse_u8("page", page) || !parse_u8("reg", reg)) {
+        return send_error(req, "400 Bad Request", "page/reg must be 0..255 (0x.. ok)");
+    }
+    const bool write = (req->method == HTTP_POST);
+    if (write && !parse_u8("value", value)) {
+        return send_error(req, "400 Bad Request", "POST needs value=0..255");
+    }
+    if (!sink(write, page, reg, value)) {
+        return send_error(req, "503 Service Unavailable",
+                          "register access failed (camera busy or bus error)");
+    }
+
+    char body[64];
+    std::snprintf(body, sizeof(body), "{\"page\":%u,\"reg\":%u,\"value\":%u}",
+                  static_cast<unsigned>(page), static_cast<unsigned>(reg),
+                  static_cast<unsigned>(value));
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
@@ -1418,6 +1492,8 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/ota/data",        HTTP_POST, handle_ota_data_post);
     add(server, "/api/ota/release",     HTTP_POST, handle_ota_release_post);
     add(server, "/api/camera/capture",  HTTP_GET,  handle_camera_capture_get);
+    add(server, "/api/camera/reg",      HTTP_GET,  handle_camera_reg);
+    add(server, "/api/camera/reg",      HTTP_POST, handle_camera_reg);
     add(server, "/api/release/versions", HTTP_GET, handle_release_versions_get);
     add(server, "/api/avatar-dsl",       HTTP_POST, handle_avatar_dsl_post);
     add(server, "/api/avatar-dsl/reset", HTTP_POST, handle_avatar_dsl_reset_post);
@@ -1585,6 +1661,13 @@ void set_camera_capture_sink(CameraCaptureSink sink)
     if (g_mutex == nullptr) { g_camera_capture_sink = std::move(sink); return; }
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     g_camera_capture_sink = std::move(sink);
+    xSemaphoreGive(g_mutex);
+}
+void set_camera_reg_sink(CameraRegSink sink)
+{
+    if (g_mutex == nullptr) { g_camera_reg_sink = std::move(sink); return; }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_camera_reg_sink = std::move(sink);
     xSemaphoreGive(g_mutex);
 }
 void set_mcp_say_kana_sink(McpSayKanaSink sink)

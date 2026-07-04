@@ -321,6 +321,11 @@ void set_camera_capture_sink(CameraCaptureSink sink)
     http::set_camera_capture_sink(std::move(sink));
 }
 
+void set_camera_reg_sink(CameraRegSink sink)
+{
+    http::set_camera_reg_sink(std::move(sink));
+}
+
 void set_mcp_say_kana_sink(McpSayKanaSink sink)
 {
     http::set_mcp_say_kana_sink(std::move(sink));

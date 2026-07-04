@@ -104,20 +104,40 @@ void set_avatar_bytecode_sink(AvatarBytecodeSink sink);
 // `out` with a raw row-major frame, reports its dimensions, and names the
 // pixel encoding in `format` — served verbatim as the X-Frame-Format
 // response header. Current encodings:
-//   "gray8"    — 1 B/px grayscale
-//   "rgb565be" — 2 B/px RGB565, big-endian (high byte first)
+//   "gray8"        — 1 B/px grayscale
+//   "rgb565be"     — 2 B/px RGB565, big-endian (high byte first)
+//   "bayer8-rggb"  — 1 B/px raw Bayer mosaic, RGGB phase (ISP bypassed)
 // Returns false when the camera is unavailable (wrong board, QR scan
 // holding the driver, low memory, sensor error). Registering a sink is
 // also what makes /api/status report `"has_camera":true` — boards without
 // a camera simply never register.
 //
+// Options (from the request's query string):
+//   raw_bayer — ?fmt=raw: capture the raw Bayer mosaic instead of the
+//               processed colour frame (colour-tuning diagnostics).
+//   colorbar  — ?test=colorbar: sensor-generated test pattern instead of
+//               the optical image (transfer-path validation).
 // The sink runs on the HTTP server task (6 KiB internal-RAM stack) and may
-// block for a few hundred ms (sensor init + AGC settle) — acceptable for a
-// user-initiated photo button, but do not call anything heavier from it.
+// block for a couple of seconds (frame settle; the raw path re-inits the
+// driver) — acceptable for a user-initiated photo button, but do not call
+// anything heavier from it.
+struct CameraCaptureOptions {
+    bool raw_bayer = false;
+    bool colorbar = false;
+};
 using CameraCaptureSink =
-    std::function<bool(std::vector<std::uint8_t>& out, std::size_t& width, std::size_t& height,
-                       std::string& format)>;
+    std::function<bool(const CameraCaptureOptions& options, std::vector<std::uint8_t>& out,
+                       std::size_t& width, std::size_t& height, std::string& format)>;
 void set_camera_capture_sink(CameraCaptureSink sink);
+
+// Raw sensor-register access for `GET/POST /api/camera/reg` — interactive
+// colour tuning (AWB gains / colour matrix / gamma) against a test chart.
+// `write` false: read register `reg` on `page` into `value`. `write` true:
+// write `value`. Returns false on bus error / camera unavailable. Same
+// HTTP-task constraints as the capture sink.
+using CameraRegSink =
+    std::function<bool(bool write, std::uint8_t page, std::uint8_t reg, std::uint8_t& value)>;
+void set_camera_reg_sink(CameraRegSink sink);
 
 // --- Channel API sinks (POST /mcp/* endpoints) -------------------------
 //

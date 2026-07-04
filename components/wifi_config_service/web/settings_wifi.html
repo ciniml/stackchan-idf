@@ -743,17 +743,33 @@
     <div id="camera-section" style="display:none">
       <h2 class="section-title">カメラ (テスト撮影)</h2>
       <p class="hint" style="margin-bottom:0.5rem">
-        本体前面の GC0308 カメラで 1 枚撮影して表示します (320×240 グレースケール)。
-        センサー起動と露出安定化のため撮影に 1 秒ほどかかります。QR スキャン実行中は使えません。
+        本体前面の GC0308 カメラで 1 枚撮影して表示します (640×480 カラー)。
+        露出安定化のため撮影に 1 秒ほどかかります。QR スキャン実行中は使えません。
+        「RAW 撮影」は ISP (AWB・色変換) をバイパスした Bayer モザイク (RGGB) を取得し、
+        「カラーバー」はセンサー内蔵テストパターンで転送経路を検証します。
       </p>
       <div class="ota-row">
         <button id="btn-camera-capture" type="button" disabled>撮影</button>
+        <button id="btn-camera-raw" type="button" disabled>RAW 撮影</button>
+        <button id="btn-camera-colorbar" type="button" disabled>カラーバー</button>
         <button id="btn-camera-save" type="button" disabled>PNG 保存</button>
+        <button id="btn-camera-save-raw" type="button" disabled>RAW 保存 (.pgm)</button>
       </div>
       <canvas id="camera-canvas" width="320" height="240"
-              style="width:100%; max-width:320px; background:#222; border-radius:6px;
+              style="width:100%; max-width:640px; background:#222; border-radius:6px;
                      margin-top:0.5rem; display:block"></canvas>
       <p class="hint" id="camera-msg" style="margin-top:0.25rem"></p>
+      <details style="margin-top:0.5rem">
+        <summary class="hint">センサー レジスタ (色調整用)</summary>
+        <div class="ota-row" style="margin-top:0.4rem">
+          <label>page <input id="camera-reg-page" type="text" value="0" size="4"></label>
+          <label>reg <input id="camera-reg-addr" type="text" value="0x24" size="6"></label>
+          <label>value <input id="camera-reg-value" type="text" value="" size="6"></label>
+          <button id="btn-camera-reg-read" type="button" disabled>読取</button>
+          <button id="btn-camera-reg-write" type="button" disabled>書込</button>
+        </div>
+        <p class="hint">0x プレフィクス可。書込はセンサー再起動まで有効 (NVS 保存なし)。</p>
+      </details>
     </div>
 
     <div id="servo-section">
@@ -1296,8 +1312,11 @@ async function refresh() {
     // camera-less CoreS3 variant naturally hides it.
     const camSec = document.getElementById('camera-section');
     if (camSec) camSec.style.display = s.has_camera ? '' : 'none';
-    const camBtn = document.getElementById('btn-camera-capture');
-    if (camBtn) camBtn.disabled = !s.has_camera;
+    for (const id of ['btn-camera-capture', 'btn-camera-raw', 'btn-camera-colorbar',
+                      'btn-camera-reg-read', 'btn-camera-reg-write']) {
+      const b = document.getElementById(id);
+      if (b) b.disabled = !s.has_camera;
+    }
     // Mirror FW + board into the compact page header. Board label is filled
     // by applyBoardGating into #dis-board; copy whichever value is now there.
     const hdrFw = document.getElementById('hdr-fw');
@@ -1850,13 +1869,15 @@ $('btn-ota-release').addEventListener('click', startReleaseOta);
 // X-Frame-Width/Height headers. Rendering client-side via putImageData keeps
 // the device free of a JPEG encoder; 77 KB over LAN is fast enough.
 
-async function cameraCapture() {
+let cameraLastRaw = null; // {buf, w, h} of the last RAW (Bayer) capture
+
+async function cameraCapture(query) {
   const btn = $('btn-camera-capture');
   const msg = $('camera-msg');
   btn.disabled = true;
-  msg.textContent = '撮影中… (センサー起動 ~1 秒)';
+  msg.textContent = '撮影中… (~1 秒)';
   try {
-    const r = await fetch('/api/camera/capture', { cache: 'no-store' });
+    const r = await fetch('/api/camera/capture' + (query || ''), { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + await r.text());
     const w = parseInt(r.headers.get('X-Frame-Width') || '320', 10);
     const h = parseInt(r.headers.get('X-Frame-Height') || '240', 10);
@@ -1885,6 +1906,36 @@ async function cameraCapture() {
         img.data[4 * i + 2] = (b5 << 3) | (b5 >> 2);
         img.data[4 * i + 3] = 255;
       }
+    } else if (fmt.startsWith('bayer8')) {
+      // Raw Bayer mosaic (RGGB) — simple bilinear-ish demosaic for an
+      // on-screen preview. Analysis should use the saved .pgm (untouched
+      // sensor bytes), not this preview.
+      const at = (x, y) => buf[Math.min(h - 1, Math.max(0, y)) * w +
+                               Math.min(w - 1, Math.max(0, x))];
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = y * w + x;
+          const rRow = (y & 1) === 0, rCol = (x & 1) === 0;
+          let rr, gg, bb;
+          if (rRow && rCol) {          // R site
+            rr = at(x, y);
+            gg = (at(x - 1, y) + at(x + 1, y) + at(x, y - 1) + at(x, y + 1)) / 4;
+            bb = (at(x - 1, y - 1) + at(x + 1, y - 1) + at(x - 1, y + 1) + at(x + 1, y + 1)) / 4;
+          } else if (!rRow && !rCol) { // B site
+            bb = at(x, y);
+            gg = (at(x - 1, y) + at(x + 1, y) + at(x, y - 1) + at(x, y + 1)) / 4;
+            rr = (at(x - 1, y - 1) + at(x + 1, y - 1) + at(x - 1, y + 1) + at(x + 1, y + 1)) / 4;
+          } else {                     // G site
+            gg = at(x, y);
+            if (rRow) { rr = (at(x - 1, y) + at(x + 1, y)) / 2; bb = (at(x, y - 1) + at(x, y + 1)) / 2; }
+            else      { bb = (at(x - 1, y) + at(x + 1, y)) / 2; rr = (at(x, y - 1) + at(x, y + 1)) / 2; }
+          }
+          img.data[4 * i] = rr;
+          img.data[4 * i + 1] = gg;
+          img.data[4 * i + 2] = bb;
+          img.data[4 * i + 3] = 255;
+        }
+      }
     } else {
       for (let i = 0; i < w * h; i++) {
         const v = buf[i];
@@ -1895,9 +1946,13 @@ async function cameraCapture() {
       }
     }
     ctx.putImageData(img, 0, 0);
+    if (fmt.startsWith('bayer8')) {
+      cameraLastRaw = { buf, w, h, fmt };
+      $('btn-camera-save-raw').disabled = false;
+    }
     $('btn-camera-save').disabled = false;
-    msg.textContent = `${w}×${h} — ${new Date().toLocaleTimeString()}`;
-    log('カメラ撮影 OK', 'ok');
+    msg.textContent = `${w}×${h} ${fmt} — ${new Date().toLocaleTimeString()}`;
+    log('カメラ撮影 OK (' + fmt + ')', 'ok');
   } catch (e) {
     msg.textContent = '失敗: ' + e.message;
     log('カメラ撮影失敗: ' + e.message, 'err');
@@ -1918,8 +1973,57 @@ function cameraSavePng() {
   }, 'image/png');
 }
 
-$('btn-camera-capture').addEventListener('click', cameraCapture);
+// Save the last RAW capture as binary PGM (P5) — the untouched sensor bytes
+// with a comment recording the Bayer phase, loadable by numpy / ImageMagick /
+// dcraw-style tooling for off-device colour analysis.
+function cameraSaveRawPgm() {
+  if (!cameraLastRaw) return;
+  const { buf, w, h, fmt } = cameraLastRaw;
+  const header = new TextEncoder().encode(`P5\n# ${fmt} (GC0308, ISP bypass)\n${w} ${h}\n255\n`);
+  const blob = new Blob([header, buf], { type: 'application/octet-stream' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  a.download = `stackchan-camera-${ts}-${fmt}.pgm`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// Sensor register access (colour tuning). page/reg/value accept 0x-hex or
+// decimal; results echo into the value box + the log.
+function cameraRegParse(id) {
+  const v = parseInt($(id).value.trim(), $(id).value.trim().startsWith('0x') ? 16 : 10);
+  if (!Number.isFinite(v) || v < 0 || v > 255) throw new Error($(id).value + ' は 0..255 で指定してください');
+  return v;
+}
+async function cameraRegAccess(write) {
+  try {
+    const page = cameraRegParse('camera-reg-page');
+    const reg = cameraRegParse('camera-reg-addr');
+    let url = `/api/camera/reg?page=${page}&reg=${reg}`;
+    let opts = {};
+    if (write) {
+      const value = cameraRegParse('camera-reg-value');
+      url += `&value=${value}`;
+      opts = { method: 'POST' };
+    }
+    const r = await fetch(url, opts);
+    if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + await r.text());
+    const j = await r.json();
+    $('camera-reg-value').value = '0x' + j.value.toString(16).padStart(2, '0');
+    log(`reg P${j.page}:0x${j.reg.toString(16).padStart(2, '0')} ${write ? '←' : '='} 0x${j.value.toString(16).padStart(2, '0')}`, 'ok');
+  } catch (e) {
+    log('レジスタ アクセス失敗: ' + e.message, 'err');
+  }
+}
+
+$('btn-camera-capture').addEventListener('click', () => cameraCapture(''));
+$('btn-camera-raw').addEventListener('click', () => cameraCapture('?fmt=raw'));
+$('btn-camera-colorbar').addEventListener('click', () => cameraCapture('?test=colorbar'));
 $('btn-camera-save').addEventListener('click', cameraSavePng);
+$('btn-camera-save-raw').addEventListener('click', cameraSaveRawPgm);
+$('btn-camera-reg-read').addEventListener('click', () => cameraRegAccess(false));
+$('btn-camera-reg-write').addEventListener('click', () => cameraRegAccess(true));
 // Dropdown → text input sync so 手入力 and dropdown selection stay coherent.
 $('ota-release-select').addEventListener('change', (e) => {
   if (e.target.value) $('ota-release-tag').value = e.target.value;

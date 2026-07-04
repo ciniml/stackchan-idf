@@ -62,6 +62,10 @@ void set_avatar_bytecode_sink(AvatarBytecodeSink sink);
 // See wifi_config_service.hpp for the contract.
 void set_camera_capture_sink(CameraCaptureSink sink);
 
+// Register the sensor register-access sink (GET/POST /api/camera/reg).
+// See wifi_config_service.hpp for the contract.
+void set_camera_reg_sink(CameraRegSink sink);
+
 // /mcp/* endpoint sinks. See wifi_config_service.hpp for the contract.
 void set_mcp_say_kana_sink(McpSayKanaSink sink);
 void set_lt_config_sink(LtConfigSink sink);

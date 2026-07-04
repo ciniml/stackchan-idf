@@ -84,10 +84,16 @@ CameraGc0308::~CameraGc0308()
 
 #if CONFIG_STACKCHAN_CAMERA_ENABLED
 
-tl::expected<void, CameraError> CameraGc0308::begin(CameraPixelFormat format)
+tl::expected<void, CameraError> CameraGc0308::begin(CameraPixelFormat format, CameraFrameSize size)
 {
     if (initialised_) {
-        return {}; // idempotent (keeps the original format)
+        return {}; // idempotent (keeps the original format/size)
+    }
+    // BayerRaw needs the full sensor array: the driver's on-sensor
+    // subsampling for smaller sizes averages/skips pixels and scrambles the
+    // Bayer mosaic beyond recovery.
+    if (format == CameraPixelFormat::BayerRaw && size != CameraFrameSize::Vga) {
+        return tl::unexpected{CameraError::BadArgument};
     }
 
     // Guard against the steady-state internal-RAM shortage. esp_camera_init
@@ -142,14 +148,17 @@ tl::expected<void, CameraError> CameraGc0308::begin(CameraPixelFormat format)
 
     cfg.sccb_i2c_port = -1; // let esp32-camera manage its own i2c_master port
 
-    // QVGA at the caller's format. Grayscale (1 B/px, ~75 KiB/frame) is all
-    // the QR decoder needs; RGB565 (2 B/px, ~150 KiB/frame, big-endian on
-    // the DVP path) serves the settings-page colour photo. Both live in
-    // PSRAM so the doubling doesn't touch internal RAM.
+    // Caller's format at the caller's size. Grayscale (1 B/px) is all the QR
+    // decoder needs; RGB565 (2 B/px, big-endian on the DVP path) serves the
+    // settings-page colour photo; BayerRaw inits the driver as GRAYSCALE
+    // (identical 1 B/px DVP timing — GC0308 gets the plain-memcpy Y8 path)
+    // and switches the sensor's output format to the raw mosaic below. The
+    // frame buffer lives in PSRAM (VGA RGB565 = 600 KiB) so none of this
+    // touches internal RAM beyond the driver's DMA bounce.
     cfg.pixel_format = (format == CameraPixelFormat::Rgb565)
                            ? PIXFORMAT_RGB565
                            : PIXFORMAT_GRAYSCALE;
-    cfg.frame_size   = FRAMESIZE_QVGA;
+    cfg.frame_size   = (size == CameraFrameSize::Vga) ? FRAMESIZE_VGA : FRAMESIZE_QVGA;
 
     cfg.jpeg_quality = 0;            // unused at GRAYSCALE / RGB565
     cfg.fb_count     = 1;            // one PSRAM-resident frame — see grab_mode
@@ -165,10 +174,34 @@ tl::expected<void, CameraError> CameraGc0308::begin(CameraPixelFormat format)
         return tl::unexpected{CameraError::DriverInit};
     }
 
+    if (format == CameraPixelFormat::BayerRaw) {
+        // Flip the sensor to raw Bayer output, bypassing the on-chip ISP
+        // (AWB / colour matrix / gamma / demosaic). P0:0x24[4:0] = 0x17
+        // outputs the mosaic with the pattern selected by P1:0x53[6:5];
+        // we pin that to 01 = RGGB so the host-side demosaic doesn't have
+        // to guess. AEC still runs (exposure is array-level, not ISP).
+        sensor_t* s = esp_camera_sensor_get();
+        int ret = (s == nullptr) ? -1 : 0;
+        if (ret == 0) ret = s->set_reg(s, 0xfe, 0xff, 0x01);
+        if (ret == 0) ret = s->set_reg(s, 0x53, 0x60, 0x20); // Bayer pattern = RGGB
+        if (ret == 0) ret = s->set_reg(s, 0xfe, 0xff, 0x00);
+        if (ret == 0) ret = s->set_reg(s, 0x24, 0x1f, 0x17); // output = raw Bayer
+        if (ret != 0) {
+            ESP_LOGE(kTag, "BayerRaw sensor switch failed (%d)", ret);
+            (void)esp_camera_deinit();
+            return tl::unexpected{CameraError::SensorAccess};
+        }
+    }
+
     initialised_ = true;
     format_ = format;
-    ESP_LOGI(kTag, "GC0308 init OK (QVGA %s, pin_xclk=-1, internal-largest=%u)",
-             format == CameraPixelFormat::Rgb565 ? "RGB565" : "grayscale",
+    expected_w_ = (size == CameraFrameSize::Vga) ? 640 : kFrameWidth;
+    expected_h_ = (size == CameraFrameSize::Vga) ? 480 : kFrameHeight;
+    ESP_LOGI(kTag, "GC0308 init OK (%ux%u %s, pin_xclk=-1, internal-largest=%u)",
+             static_cast<unsigned>(expected_w_), static_cast<unsigned>(expected_h_),
+             format == CameraPixelFormat::Rgb565      ? "RGB565"
+             : format == CameraPixelFormat::BayerRaw  ? "Bayer RAW"
+                                                      : "grayscale",
              static_cast<unsigned>(internal_largest));
     return {};
 }
@@ -199,11 +232,13 @@ tl::expected<CameraFrame, CameraError> CameraGc0308::capture()
     if (fb == nullptr) {
         return tl::unexpected{CameraError::CaptureFailed};
     }
+    // BayerRaw rides the driver's GRAYSCALE path (see begin()); the driver
+    // reports the fb as grayscale even though the bytes are the raw mosaic.
     const pixformat_t expected = (format_ == CameraPixelFormat::Rgb565)
                                      ? PIXFORMAT_RGB565
                                      : PIXFORMAT_GRAYSCALE;
     if (fb->format != expected ||
-        fb->width != kFrameWidth || fb->height != kFrameHeight) {
+        fb->width != expected_w_ || fb->height != expected_h_) {
         esp_camera_fb_return(fb);
         return tl::unexpected{CameraError::WrongPixelFormat};
     }
@@ -216,6 +251,60 @@ tl::expected<CameraFrame, CameraError> CameraGc0308::capture()
     return frame;
 }
 
+tl::expected<void, CameraError> CameraGc0308::set_colorbar(bool enable)
+{
+    if (!initialised_) {
+        return tl::unexpected{CameraError::NotInitialised};
+    }
+    sensor_t* s = esp_camera_sensor_get();
+    if (s == nullptr || s->set_colorbar(s, enable ? 1 : 0) != 0) {
+        return tl::unexpected{CameraError::SensorAccess};
+    }
+    return {};
+}
+
+tl::expected<std::uint8_t, CameraError> CameraGc0308::read_reg(std::uint8_t page, std::uint8_t reg)
+{
+    if (!initialised_) {
+        return tl::unexpected{CameraError::NotInitialised};
+    }
+    sensor_t* s = esp_camera_sensor_get();
+    if (s == nullptr) {
+        return tl::unexpected{CameraError::SensorAccess};
+    }
+    // Page select (0xfe), read, restore page 0. get_reg returns the masked
+    // value or <0 on bus error — but 0 is also a valid register value, so
+    // only the page writes can be checked reliably.
+    if (s->set_reg(s, 0xfe, 0xff, page) != 0) {
+        return tl::unexpected{CameraError::SensorAccess};
+    }
+    const int v = s->get_reg(s, reg, 0xff);
+    (void)s->set_reg(s, 0xfe, 0xff, 0x00);
+    if (v < 0) {
+        return tl::unexpected{CameraError::SensorAccess};
+    }
+    return static_cast<std::uint8_t>(v);
+}
+
+tl::expected<void, CameraError> CameraGc0308::write_reg(std::uint8_t page, std::uint8_t reg,
+                                                        std::uint8_t value)
+{
+    if (!initialised_) {
+        return tl::unexpected{CameraError::NotInitialised};
+    }
+    sensor_t* s = esp_camera_sensor_get();
+    if (s == nullptr) {
+        return tl::unexpected{CameraError::SensorAccess};
+    }
+    int ret = s->set_reg(s, 0xfe, 0xff, page);
+    if (ret == 0) ret = s->set_reg(s, reg, 0xff, value);
+    (void)s->set_reg(s, 0xfe, 0xff, 0x00);
+    if (ret != 0) {
+        return tl::unexpected{CameraError::SensorAccess};
+    }
+    return {};
+}
+
 #else // !CONFIG_STACKCHAN_CAMERA_ENABLED
 
 // Stub implementation for board variants that don't compile esp32-camera
@@ -223,7 +312,8 @@ tl::expected<CameraFrame, CameraError> CameraGc0308::capture()
 // link / spin up the QR task; whoever called begin() handles the
 // NotSupported error and skips spawning the worker.
 
-tl::expected<void, CameraError> CameraGc0308::begin(CameraPixelFormat /*format*/)
+tl::expected<void, CameraError> CameraGc0308::begin(CameraPixelFormat /*format*/,
+                                                    CameraFrameSize /*size*/)
 {
     ESP_LOGW(kTag, "begin: camera support not compiled in (CONFIG_STACKCHAN_CAMERA_ENABLED=n)");
     return tl::unexpected{CameraError::NotSupported};
@@ -235,6 +325,23 @@ tl::expected<void, CameraError> CameraGc0308::end()
 }
 
 tl::expected<CameraFrame, CameraError> CameraGc0308::capture()
+{
+    return tl::unexpected{CameraError::NotSupported};
+}
+
+tl::expected<void, CameraError> CameraGc0308::set_colorbar(bool /*enable*/)
+{
+    return tl::unexpected{CameraError::NotSupported};
+}
+
+tl::expected<std::uint8_t, CameraError> CameraGc0308::read_reg(std::uint8_t /*page*/,
+                                                               std::uint8_t /*reg*/)
+{
+    return tl::unexpected{CameraError::NotSupported};
+}
+
+tl::expected<void, CameraError> CameraGc0308::write_reg(std::uint8_t /*page*/, std::uint8_t /*reg*/,
+                                                        std::uint8_t /*value*/)
 {
     return tl::unexpected{CameraError::NotSupported};
 }
