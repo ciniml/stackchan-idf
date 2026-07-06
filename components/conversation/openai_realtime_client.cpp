@@ -120,6 +120,8 @@ public:
         }
         config_ = config;
         output_is_ulaw_ = (config_.output_sample_rate_hz == kG711SampleRate);
+        tx_evicted_total_.store(0, std::memory_order_relaxed);
+        last_evict_log_ms_ = 0;
 
         const std::size_t rx_cap = static_cast<std::size_t>(CONFIG_STACKCHAN_CONV_WS_RX_BUFFER);
         rx_buffer_ = static_cast<char*>(heap_caps_malloc(rx_cap, MALLOC_CAP_SPIRAM));
@@ -253,7 +255,7 @@ public:
                 ESP_LOGW(kTag, "audio tx queue stuck; dropping chunk");
                 return tl::unexpected{ConversationError::SendFailed};
             }
-            ESP_LOGW(kTag, "audio tx queue full; evicted oldest chunk");
+            note_tx_eviction();
         }
         return {};
     }
@@ -320,8 +322,28 @@ public:
 
     ConversationState state() const { return state_.load(std::memory_order_relaxed); }
 
+    std::uint32_t tx_evicted_chunks() const { return tx_evicted_total_.load(std::memory_order_relaxed); }
+
 private:
     // ---- lifecycle ---------------------------------------------------------
+
+    // Count a mic-uplink eviction and emit at most one warning per
+    // kEvictLogIntervalMs — under sustained congestion push_audio evicts on
+    // every chunk, and a per-chunk ESP_LOGW floods the serial log. The
+    // cumulative total is published per turn via tx_evicted_chunks(). Runs
+    // only on the push_audio caller's task, so last_evict_log_ms_ needs no
+    // synchronisation; the total is atomic because it is read cross-task.
+    void note_tx_eviction()
+    {
+        static constexpr std::uint32_t kEvictLogIntervalMs = 5000;
+        const std::uint32_t total = tx_evicted_total_.fetch_add(1, std::memory_order_relaxed) + 1;
+        const std::uint32_t now_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
+        if (last_evict_log_ms_ == 0 || now_ms - last_evict_log_ms_ >= kEvictLogIntervalMs) {
+            ESP_LOGW(kTag, "audio tx queue full; evicting oldest chunks (%u evicted this session)",
+                     static_cast<unsigned>(total));
+            last_evict_log_ms_ = now_ms;
+        }
+    }
 
     void teardown()
     {
@@ -851,6 +873,10 @@ private:
     // Audio tx pipeline: push_audio() enqueues PSRAM-resident AudioChunks
     // here, sender_loop() drains them and feeds esp_websocket_client_send_text.
     QueueHandle_t audio_tx_queue_{nullptr};
+    // Session-cumulative eviction count, read cross-task by
+    // tx_evicted_chunks() → conv-task metrics.
+    std::atomic<std::uint32_t> tx_evicted_total_{0};
+    std::uint32_t last_evict_log_ms_{0}; // note_tx_eviction rate limiter; 0 = never logged
     TaskHandle_t sender_task_{nullptr};
     std::atomic<bool> sender_should_exit_{false};
 
@@ -868,6 +894,11 @@ OpenAiRealtimeClient::~OpenAiRealtimeClient() = default;
 void OpenAiRealtimeClient::set_event_callback(EventCallback cb)
 {
     impl_->set_event_callback(std::move(cb));
+}
+
+std::uint32_t OpenAiRealtimeClient::tx_evicted_chunks() const
+{
+    return impl_->tx_evicted_chunks();
 }
 
 tl::expected<void, ConversationError> OpenAiRealtimeClient::start(const ConversationConfig& config)

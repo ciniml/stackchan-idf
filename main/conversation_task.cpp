@@ -776,6 +776,9 @@ private:
         snap.pcm_lag_samples_avg = static_cast<float>(pcm_lag_samples_.mean());
         snap.pcm_lag_samples_max = pcm_lag_samples_.max();
         snap.played_sps = static_cast<float>(played_sps);
+        // Session-cumulative uplink congestion counter, maintained by the
+        // backend client (per-chunk eviction warnings are rate-limited there).
+        snap.tx_evicted_chunks = client_ != nullptr ? client_->tx_evicted_chunks() : 0;
         state_.update_audio_metrics(snap);
         recv_lag_us_.reset();
         recv_to_queued_ms_.reset();

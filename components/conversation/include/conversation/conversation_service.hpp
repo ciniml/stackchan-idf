@@ -152,6 +152,14 @@ public:
     virtual tl::expected<void, ConversationError> cancel_response() = 0;
 
     virtual ConversationState state() const = 0;
+
+    // Number of mic-uplink chunks evicted (oldest-dropped) from the client's
+    // audio TX queue because the WebSocket sender could not keep up,
+    // cumulative since the last start(). Polled by the application at
+    // end-of-turn so uplink congestion shows up in the audio-metrics snapshot
+    // instead of as per-chunk log spam. Backends without a client-side TX
+    // queue keep the default 0.
+    virtual std::uint32_t tx_evicted_chunks() const { return 0; }
 };
 
 } // namespace stackchan::conversation

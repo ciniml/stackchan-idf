@@ -415,6 +415,10 @@ public:
         // Effective sps inferred from seg_pos_ / elapsed; compare against
         // speaker_sample_rate to detect I2S clock drift.
         float played_sps = 0;
+        // Mic-uplink chunks evicted (oldest-dropped) from the backend
+        // client's TX queue, cumulative since session start. Non-zero means
+        // the WebSocket uplink couldn't keep up with mic capture.
+        std::uint32_t tx_evicted_chunks = 0;
     };
     void update_audio_metrics(const AudioMetrics& m) { audio_metrics_.set(m); }
     std::uint32_t audio_metrics_version() const noexcept { return audio_metrics_.version(); }

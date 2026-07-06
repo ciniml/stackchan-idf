@@ -121,6 +121,8 @@ public:
 
         setup_sent_ = false;
         audio_seq_ = 0;
+        tx_evicted_total_.store(0, std::memory_order_relaxed);
+        last_evict_log_ms_ = 0;
         set_state(ConversationState::Connecting);
 
         audio_tx_queue_ = xQueueCreate(kAudioTxQueueLen, sizeof(AudioChunk*));
@@ -199,7 +201,7 @@ public:
                 return tl::unexpected{ConversationError::SendFailed};
             }
             ++eviction_count_;
-            ESP_LOGW(kTag, "audio tx queue full; evicted oldest chunk");
+            note_tx_eviction(now_ms);
         }
         return {};
     }
@@ -260,10 +262,29 @@ public:
 
     ConversationState state() const { return state_.load(std::memory_order_relaxed); }
 
+    std::uint32_t tx_evicted_chunks() const { return tx_evicted_total_.load(std::memory_order_relaxed); }
+
     void set_event_callback(EventCallback cb) { event_callback_ = std::move(cb); }
 
 private:
     // ---- lifecycle ---------------------------------------------------------
+
+    // Count a mic-uplink eviction and emit at most one warning per
+    // kEvictLogIntervalMs — under sustained congestion push_audio evicts on
+    // every chunk (~10 Hz), and a per-chunk ESP_LOGW floods the serial log.
+    // The cumulative total is published per turn via tx_evicted_chunks().
+    // Runs only on the push_audio caller's task, so last_evict_log_ms_ needs
+    // no synchronisation; the total is atomic because it is read cross-task.
+    void note_tx_eviction(std::uint32_t now_ms)
+    {
+        static constexpr std::uint32_t kEvictLogIntervalMs = 5000;
+        const std::uint32_t total = tx_evicted_total_.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (last_evict_log_ms_ == 0 || now_ms - last_evict_log_ms_ >= kEvictLogIntervalMs) {
+            ESP_LOGW(kTag, "audio tx queue full; evicting oldest chunks (%u evicted this session)",
+                     static_cast<unsigned>(total));
+            last_evict_log_ms_ = now_ms;
+        }
+    }
 
     void teardown()
     {
@@ -961,6 +982,10 @@ private:
     std::size_t send_fail_count_{0};  // esp_websocket_client_send_text rc <= 0
     std::size_t silent_drop_count_{0};// send_one_chunk silently dropped (state != Listening etc.)
     std::uint32_t last_push_ms_{0};   // for push_interval_ms_ deltas; 0 = no prior
+    // Session-cumulative eviction count (vs the per-turn eviction_count_
+    // above). Read cross-task by tx_evicted_chunks() → conv-task metrics.
+    std::atomic<std::uint32_t> tx_evicted_total_{0};
+    std::uint32_t last_evict_log_ms_{0}; // note_tx_eviction rate limiter; 0 = never logged
 
     // Resumption handle from goAway / sessionResumptionUpdate. Empty means
     // no prior session.
@@ -1009,6 +1034,11 @@ GeminiLiveClient::~GeminiLiveClient() = default;
 void GeminiLiveClient::set_event_callback(EventCallback cb)
 {
     impl_->set_event_callback(std::move(cb));
+}
+
+std::uint32_t GeminiLiveClient::tx_evicted_chunks() const
+{
+    return impl_->tx_evicted_chunks();
 }
 
 tl::expected<void, ConversationError>

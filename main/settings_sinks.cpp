@@ -252,7 +252,8 @@ std::string audio_metrics_json()
         "\"recv_lag_us\":{\"avg\":%.0f,\"min\":%.0f,\"max\":%.0f},"
         "\"recv_to_queued_ms\":{\"avg\":%.1f,\"min\":%.1f,\"max\":%.1f},"
         "\"spk_queue\":{\"avg\":%.2f,\"min\":%.0f,\"max\":%.0f},"
-        "\"pcm_lag_samples\":{\"avg\":%.0f,\"max\":%.0f}"
+        "\"pcm_lag_samples\":{\"avg\":%.0f,\"max\":%.0f},"
+        "\"tx_evicted_chunks\":%u"
         "}",
         static_cast<unsigned>(m.turn_at_ms),
         static_cast<unsigned>(m.chunk_count),
@@ -268,7 +269,8 @@ std::string audio_metrics_json()
         static_cast<double>(m.spk_queue_min),
         static_cast<double>(m.spk_queue_max),
         static_cast<double>(m.pcm_lag_samples_avg),
-        static_cast<double>(m.pcm_lag_samples_max));
+        static_cast<double>(m.pcm_lag_samples_max),
+        static_cast<unsigned>(m.tx_evicted_chunks));
     return std::string{buf};
 }
 

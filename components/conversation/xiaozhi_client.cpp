@@ -105,6 +105,8 @@ public:
             return tl::unexpected{ConversationError::InvalidState};
         }
         config_ = config;
+        tx_evicted_total_.store(0, std::memory_order_relaxed);
+        last_evict_log_ms_ = 0;
         // Output rate the conversation task will replay at; downlink Opus is
         // resampled to this regardless of what the server announces.
         output_rate_ = config_.output_sample_rate_hz != 0 ? config_.output_sample_rate_hz : 24000;
@@ -216,7 +218,7 @@ public:
                 heap_caps_free(chunk);
                 return tl::unexpected{ConversationError::SendFailed};
             }
-            ESP_LOGW(kTag, "audio tx queue full; evicted oldest chunk");
+            note_tx_eviction();
         }
         return {};
     }
@@ -252,10 +254,30 @@ public:
 
     ConversationState state() const { return state_.load(std::memory_order_relaxed); }
 
+    std::uint32_t tx_evicted_chunks() const { return tx_evicted_total_.load(std::memory_order_relaxed); }
+
     void set_event_callback(EventCallback cb) { event_callback_ = std::move(cb); }
 
 private:
     // ---- lifecycle ---------------------------------------------------------
+
+    // Count a mic-uplink eviction and emit at most one warning per
+    // kEvictLogIntervalMs — under sustained congestion push_audio evicts on
+    // every chunk, and a per-chunk ESP_LOGW floods the serial log. The
+    // cumulative total is published per turn via tx_evicted_chunks(). Runs
+    // only on the push_audio caller's task, so last_evict_log_ms_ needs no
+    // synchronisation; the total is atomic because it is read cross-task.
+    void note_tx_eviction()
+    {
+        static constexpr std::uint32_t kEvictLogIntervalMs = 5000;
+        const std::uint32_t total = tx_evicted_total_.fetch_add(1, std::memory_order_relaxed) + 1;
+        const std::uint32_t now_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
+        if (last_evict_log_ms_ == 0 || now_ms - last_evict_log_ms_ >= kEvictLogIntervalMs) {
+            ESP_LOGW(kTag, "audio tx queue full; evicting oldest chunks (%u evicted this session)",
+                     static_cast<unsigned>(total));
+            last_evict_log_ms_ = now_ms;
+        }
+    }
 
     void teardown()
     {
@@ -821,6 +843,10 @@ private:
     std::uint8_t rx_op_code_{0};
 
     QueueHandle_t audio_tx_queue_{nullptr};
+    // Session-cumulative eviction count, read cross-task by
+    // tx_evicted_chunks() → conv-task metrics.
+    std::atomic<std::uint32_t> tx_evicted_total_{0};
+    std::uint32_t last_evict_log_ms_{0}; // note_tx_eviction rate limiter; 0 = never logged
     TaskHandle_t sender_task_{nullptr};
     std::atomic<bool> sender_should_exit_{false};
 };
@@ -837,6 +863,11 @@ XiaoZhiClient::~XiaoZhiClient() = default;
 void XiaoZhiClient::set_event_callback(EventCallback cb)
 {
     impl_->set_event_callback(std::move(cb));
+}
+
+std::uint32_t XiaoZhiClient::tx_evicted_chunks() const
+{
+    return impl_->tx_evicted_chunks();
 }
 
 tl::expected<void, ConversationError> XiaoZhiClient::start(const ConversationConfig& config)

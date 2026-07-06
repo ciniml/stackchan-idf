@@ -32,6 +32,7 @@ public:
                                                              std::string_view output_json) override;
     tl::expected<void, ConversationError> cancel_response() override;
     ConversationState state() const override;
+    std::uint32_t tx_evicted_chunks() const override;
 
 private:
     class Impl;
