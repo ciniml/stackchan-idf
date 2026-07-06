@@ -34,7 +34,9 @@ set(_main_srcs
     "atom_status.cpp"
     "audio_codec.cpp"
     "battery.cpp"
+    "camera_service.cpp"
     "captive_portal.cpp"
+    "demo_loop.cpp"
     "device_ui.cpp"
     "diag.cpp"
     "face_config.cpp"
@@ -46,6 +48,7 @@ set(_main_srcs
     "render_task.cpp"
     "servo_limits.cpp"
     "servo_task.cpp"
+    "settings_sinks.cpp"
     "speech.cpp"
     "wifi_sta.cpp"
 )

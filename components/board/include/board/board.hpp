@@ -38,6 +38,18 @@ enum class BoardKind {
                // No PY32 / no INA226 / no Si12T / no nekomimi LED 配線. Servo は背面 UART0 経由の Phase 3 オプション.
 };
 
+// WIRE-FORMAT CONTRACT: the numeric values above are externally visible —
+// BLE chr "BoardKind" serves static_cast<uint8_t>(kind) to paired web UIs,
+// and wifi_config_service's release-OTA maps the same byte to a firmware
+// slug (cores3/atoms3r/atoms3/stopwatch). Never reorder or renumber; append
+// new boards at the end only.
+static_assert(static_cast<int>(BoardKind::M5Base) == 0 &&
+              static_cast<int>(BoardKind::TakaoBase) == 1 &&
+              static_cast<int>(BoardKind::AtomNyan) == 2 &&
+              static_cast<int>(BoardKind::AtomS3) == 3 &&
+              static_cast<int>(BoardKind::StopWatch) == 4,
+              "BoardKind numbering is a BLE/OTA wire contract — append only");
+
 // SCS servo bus wiring for the detected board. Maps 1:1 onto scs_servo::ScsBus::Config.
 struct ServoBusConfig {
     uart_port_t uart;

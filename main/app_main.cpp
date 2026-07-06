@@ -22,14 +22,11 @@
 #include <esp_ota_ops.h>
 #include <esp_heap_caps.h>
 
-#include "ap_screen.hpp"
 #include "atom_status.hpp"
 #if CONFIG_STACKCHAN_AUDIO_STREAM_ENABLED
 #include "audio_stream_sink.hpp"
 #endif
-#include "avatar/expression.hpp"
 #include "avatar_vm/storage.hpp"
-#include "battery.hpp"
 #include "board/audio_module_es8388.hpp"
 #include "board/board.hpp"
 #include "board/si12t_touch.hpp"
@@ -40,22 +37,20 @@
 #if CONFIG_STACKCHAN_CONVERSATION_ENABLED
 #include "conversation_task.hpp"
 #endif
+#include "camera_service.hpp"
+#include "demo_loop.hpp"
 #include "device_ui.hpp"
 #include "diag.hpp"
 #include "i2c_dump.hpp"
-#if CONFIG_STACKCHAN_CAMERA_ENABLED
-#include "board/camera_gc0308.hpp"
-#endif
 #include "led_task.hpp"
-#include "lt_timer.hpp"
 #include "mic_lip_sync_task.hpp"
 #include "qr_task.hpp"
 #include "render_task.hpp"
 #include "servo_limits.hpp"
 #include "servo_task.hpp"
+#include "settings_sinks.hpp"
 #include "shared_state.hpp"
 #include "speech.hpp"
-#include "utf8.hpp"
 #if CONFIG_STACKCHAN_WIFI_AUDIO_ENABLED
 #include "wifi_audio.hpp"
 #endif
@@ -87,318 +82,9 @@ stackchan::app::ServoTaskArgs* g_servo_args = nullptr;
 stackchan::app::ConversationTaskArgs* g_conversation_args = nullptr;
 #endif
 stackchan::app::LedTaskArgs* g_led_args = nullptr;
-stackchan::board::Si12tTouch* g_touch = nullptr;
-// Global Board accessor — only used from demo_loop for things that don't
-// fit into the existing args (e.g. Board::vibrate() haptic pulses on
-// StopWatch). Set once after Board::begin() before any task starts.
-stackchan::board::Board* g_board = nullptr;
 
-#if CONFIG_STACKCHAN_CAMERA_ENABLED
-// Resident camera (M5Base only). Initialised ONCE at boot, never deinited:
-//   - per-capture esp_camera_init needs a contiguous internal-RAM DMA
-//     bounce block (7.7 KiB at RGB565/QVGA) that no longer exists once the
-//     conversation task's TLS session is up (largest sinks to ~8 KiB) —
-//     the second capture of a session failed the floor check for exactly
-//     this reason. Boot-time init lands while largest ≈ 130 KiB.
-//   - init before ANY other task runs also removes the SCCB-vs-In_I2C
-//     race window entirely: the sensor's register upload happens in
-//     single-threaded context. After init the sensor free-runs (AGC/AWB
-//     on-chip) and SCCB is never touched again, so later In_I2C re-inits
-//     of the controller are harmless.
-// Cost: DMA bounce internal RAM + 600 KiB PSRAM fb (VGA RGB565) + the cam
-// task, held for the process lifetime, and the sensor streams continuously
-// (~6 MB/s bounce memcpy into PSRAM at VGA). The QR task still creates its
-// own CameraGc0308 — double-init would fail — so STACKCHAN_QR_TEST_AT_BOOT
-// must stay off until qr_task is taught to reuse this instance.
-stackchan::board::CameraGc0308 g_camera;
-#endif
 
-// Per-board factory speaker volume (the "100 %" reference for the user
-// gain). Captured once at boot; the live-apply sink multiplies by the
-// user's percent and clamps to 255. Default 128 = M5Unified's CoreS3
-// half-scale until the boot path overwrites it.
-std::uint8_t g_speaker_base_volume = 128;
 
-// jtts::Options used by start_say_worker (and therefore by both the
-// /api/jtts-say settings test button and BLE chr 0x2d). Populated at
-// boot from cfg.jtts_config_json so the settings page's "話す" button
-// uses the user's chosen voice / pitch / mora / formant rather than the
-// hard-coded female-child preset. Same options the demo_loop babble
-// uses (both go through resolve_speech_options on the same JSON).
-stackchan::jtts::Options g_say_opts{};
-bool g_say_opts_ready = false;
-
-// Live-apply the user's speaker_volume_pct (0..200) to the M5.Speaker
-// master volume and mirror into SharedState. Called from boot and from
-// the BLE / HTTP / device-UI sinks so the effect is immediate. No NVS
-// write here — the caller handles persistence (save_speaker_volume).
-void apply_speaker_volume(std::uint16_t pct) noexcept
-{
-    if (pct > 200) pct = 200;
-    int v = static_cast<int>(g_speaker_base_volume) * static_cast<int>(pct) / 100;
-    if (v > 255) v = 255;
-    if (v < 0) v = 0;
-    // One-touch mute overrides the percent: master volume goes to 0 while
-    // the flag is set, and the user's pct survives untouched for unmute.
-    if (g_state != nullptr && g_state->speaker_muted.load(std::memory_order_relaxed)) {
-        v = 0;
-    }
-    M5.Speaker.setVolume(static_cast<std::uint8_t>(v));
-    if (g_state != nullptr) {
-        g_state->speaker_volume_pct.store(pct, std::memory_order_relaxed);
-    }
-}
-
-// Live face-config sink: invoked from the BLE host task on each FaceConfig
-// WRITE. Just stashes the raw JSON in SharedState (cheap, host-task-safe); the
-// render task parses + applies it. config_service guarantees g_state is set
-// before BLE comes online (see boot order in app_main).
-void on_face_config(std::string_view json)
-{
-    if (g_state != nullptr) {
-        g_state->set_face_config(json);
-    }
-}
-
-// Range-mode sink + live-positions getter shared by BLE and Wi-Fi services.
-// Sink mutates SharedState; the servo task picks up the flag on its next
-// iteration and disables/enables torque accordingly.
-void on_servo_range_mode(bool on)
-{
-    if (g_state != nullptr) {
-        g_state->servo_range_mode.store(on, std::memory_order_relaxed);
-    }
-}
-stackchan::config::ServoPositionsView servo_positions()
-{
-    if (g_state == nullptr) return {-1, -1};
-    return {g_state->servo_yaw_raw.load(std::memory_order_relaxed),
-            g_state->servo_pitch_raw.load(std::memory_order_relaxed)};
-}
-
-// LED state pulled live out of SharedState atomics. Used by both BLE chr 0x20
-// READ and HTTP `GET /api/led-state`.
-stackchan::config::LedState read_led_state()
-{
-    stackchan::config::LedState s{};
-    if (g_state == nullptr) return s;
-    const std::uint32_t color = g_state->led_color.load(std::memory_order_relaxed);
-    s.mode = g_state->led_mode.load(std::memory_order_relaxed);
-    s.r = static_cast<std::uint8_t>((color >> 16) & 0xFF);
-    s.g = static_cast<std::uint8_t>((color >>  8) & 0xFF);
-    s.b = static_cast<std::uint8_t>( color        & 0xFF);
-    s.brightness = g_state->led_brightness.load(std::memory_order_relaxed);
-    s.gradient_period_ds = g_state->led_gradient_period_ds.load(std::memory_order_relaxed);
-    return s;
-}
-
-// Apply a patch onto SharedState. led_color packs the three components into a
-// single u32 so the load above stays lock-free; we read-modify-write here
-// since at most one writer (BLE host task or HTTP worker) is touching it.
-void apply_led_patch(const stackchan::config::LedStatePatch& p)
-{
-    if (g_state == nullptr) return;
-    if (p.mode) {
-        const std::uint8_t m = *p.mode;
-        // Clamp invalid modes to "off" rather than ignoring — easier to debug
-        // a typo from a client than a silently-dropped value.
-        g_state->led_mode.store(m <= 3 ? m : 0, std::memory_order_relaxed);
-    }
-    if (p.r || p.g || p.b) {
-        std::uint32_t cur = g_state->led_color.load(std::memory_order_relaxed);
-        std::uint8_t cr = static_cast<std::uint8_t>((cur >> 16) & 0xFF);
-        std::uint8_t cg = static_cast<std::uint8_t>((cur >>  8) & 0xFF);
-        std::uint8_t cb = static_cast<std::uint8_t>( cur        & 0xFF);
-        if (p.r) cr = *p.r;
-        if (p.g) cg = *p.g;
-        if (p.b) cb = *p.b;
-        g_state->led_color.store((static_cast<std::uint32_t>(cr) << 16) |
-                                 (static_cast<std::uint32_t>(cg) <<  8) |
-                                 static_cast<std::uint32_t>(cb),
-                                 std::memory_order_relaxed);
-    }
-    if (p.brightness) {
-        g_state->led_brightness.store(*p.brightness, std::memory_order_relaxed);
-    }
-    if (p.gradient_period_ds) {
-        // Clamp 0 → 1 so the divisor in led_task never hits zero. The wire
-        // protocol accepts the full u8 range; we just refuse the one
-        // pathological value here rather than sprinkle clamps on every read.
-        const std::uint8_t v = *p.gradient_period_ds == 0 ? 1 : *p.gradient_period_ds;
-        g_state->led_gradient_period_ds.store(v, std::memory_order_relaxed);
-    }
-    // Persist immediately so a reboot replays the same look. The settings
-    // UI debounces writes ~150 ms so we don't write to NVS faster than the
-    // user can drag a slider; HTTP clients posting in a loop are on their
-    // own (no debounce here).
-    const std::uint8_t mode = g_state->led_mode.load(std::memory_order_relaxed);
-    const std::uint32_t color = g_state->led_color.load(std::memory_order_relaxed);
-    const std::uint8_t bright = g_state->led_brightness.load(std::memory_order_relaxed);
-    const std::uint8_t period_ds = g_state->led_gradient_period_ds.load(std::memory_order_relaxed);
-    (void)stackchan::config::store::save_led_state(mode, color, bright, period_ds);
-}
-
-// Mic lip-sync calibration — read live atomic values for BLE chr 0x23 / HTTP
-// GET /api/mic-lip-gain. Falls back to 100 (= 1.0x) on any 0 read so a stray
-// uninitialised slot can't drive the mic task into divide-by-zero.
-stackchan::config::MicLipGain read_mic_lip_gain()
-{
-    stackchan::config::MicLipGain g{100, 100};
-    if (g_state == nullptr) return g;
-    const std::uint16_t in_pct = g_state->mic_lip_input_gain_pct.load(std::memory_order_relaxed);
-    const std::uint16_t out_pct = g_state->mic_lip_output_gain_pct.load(std::memory_order_relaxed);
-    g.input_pct = in_pct ? in_pct : 100;
-    g.output_pct = out_pct ? out_pct : 100;
-    return g;
-}
-
-// Mic lip-sync calibration sink. Clamps to 10..1000 % to keep the math sane,
-// writes the atomics for live apply, then persists via single-writer
-// save_mic_lip_gain so the values survive reboot.
-void apply_mic_lip_gain(const stackchan::config::MicLipGain& g)
-{
-    if (g_state == nullptr) return;
-    auto clamp = [](std::uint16_t v) -> std::uint16_t {
-        if (v < 10) return 10;
-        if (v > 1000) return 1000;
-        return v;
-    };
-    const std::uint16_t in_pct  = clamp(g.input_pct);
-    const std::uint16_t out_pct = clamp(g.output_pct);
-    g_state->mic_lip_input_gain_pct.store(in_pct, std::memory_order_relaxed);
-    g_state->mic_lip_output_gain_pct.store(out_pct, std::memory_order_relaxed);
-    (void)stackchan::config::store::save_mic_lip_gain(in_pct, out_pct);
-}
-
-std::uint16_t read_speaker_volume_pct()
-{
-    if (g_state == nullptr) return 100;
-    return g_state->speaker_volume_pct.load(std::memory_order_relaxed);
-}
-
-void apply_speaker_volume_sink(std::uint16_t pct)
-{
-    if (pct > 200) pct = 200;
-    apply_speaker_volume(pct);  // sets M5.Speaker.setVolume + SharedState
-    (void)stackchan::config::store::save_speaker_volume(pct);
-}
-
-// Spawn a PSRAM-stack worker that synthesises `kana_utf8` via jtts and
-// pushes it through M5.Speaker.playRaw. Shared by /mcp/say (external MCP
-// gate) and the settings-page test-speak buttons (BLE chr + /api/jtts-say,
-// HTTP-auth gate). Returns immediately; the heap-owned string is freed
-// either by the worker or on task-create failure here.
-void start_say_worker(std::string_view kana_utf8)
-{
-    auto* owned = new std::string{kana_utf8};
-    // 12 KiB stack in PSRAM. See the long rationale on the original
-    // /mcp/say wiring (steady-state internal-RAM largest is ~10 KiB after
-    // conversation_task TLS, so an internal-RAM 12 KiB stack alloc would
-    // silently fail). The worker only touches PSRAM-friendly surfaces
-    // (jtts buffers, PCM vector, M5.Speaker.playRaw enqueue).
-    constexpr UBaseType_t kCaps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
-    const BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
-        +[](void* arg) {
-            std::unique_ptr<std::string> kana_text{static_cast<std::string*>(arg)};
-            std::u32string kana = stackchan::app::decode_utf8(*kana_text);
-            if (kana.empty()) {
-                ESP_LOGW(kTag, "say: empty / invalid utf8");
-                vTaskDeleteWithCaps(nullptr);
-                return;
-            }
-            // Use the user's jtts settings (voice / pitch / mora /
-            // formant / vibrato) cached at boot. Falls back to the
-            // default-options preset when no JSON has been saved yet
-            // (g_say_opts_ready stays false until app_main sets it).
-            stackchan::jtts::Options opt = g_say_opts_ready
-                ? g_say_opts
-                : stackchan::app::resolve_speech_options("", stackchan::app::Speech::kSampleRate);
-            const std::uint32_t rate = opt.sample_rate_hz;
-            std::vector<std::int16_t> pcm;
-            if (auto r = stackchan::jtts::synthesize(kana, pcm, opt); !r) {
-                ESP_LOGW(kTag, "say synth fail: %s",
-                         stackchan::jtts::to_string(r.error()));
-                vTaskDeleteWithCaps(nullptr);
-                return;
-            }
-            if (pcm.empty()) {
-                vTaskDeleteWithCaps(nullptr);
-                return;
-            }
-            while (M5.Speaker.isPlaying()) vTaskDelay(pdMS_TO_TICKS(20));
-            M5.Speaker.playRaw(pcm.data(), pcm.size(), rate, /*stereo=*/false);
-            while (M5.Speaker.isPlaying()) vTaskDelay(pdMS_TO_TICKS(20));
-            stackchan::wifi_config::mcp_events::publish_say_done();
-            vTaskDeleteWithCaps(nullptr);
-        },
-        // Pin to CPU 0 — CPU 1 hosts speaker/mic/render/servo and a
-        // 12 KiB stack alloc here starves render (observed 2026-06-07).
-        "say_worker", 12 * 1024, owned, tskIDLE_PRIORITY + 2, nullptr, 0, kCaps);
-    if (rc != pdPASS) {
-        ESP_LOGE(kTag, "say worker task create FAILED (PSRAM largest=%u)",
-                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
-        delete owned;
-    }
-}
-
-// Render the last-turn audio metrics as JSON for BLE chr 0x1f + HTTP
-// `GET /api/metrics/audio`. Same getter is wired to both transports so
-// clients see the same payload regardless of how they connect. Returns
-// "{}" before the first turn finishes.
-std::string audio_metrics_json()
-{
-    if (g_state == nullptr) return "{}";
-    const auto m = g_state->snapshot_audio_metrics();
-    if (m.turn_at_ms == 0) return "{}";
-    char buf[640];
-    std::snprintf(
-        buf, sizeof(buf),
-        "{"
-        "\"turn_at_ms\":%u,"
-        "\"chunks\":%u,"
-        "\"speaker_sample_rate\":%u,"
-        "\"played_sps\":%.1f,"
-        "\"recv_lag_us\":{\"avg\":%.0f,\"min\":%.0f,\"max\":%.0f},"
-        "\"recv_to_queued_ms\":{\"avg\":%.1f,\"min\":%.1f,\"max\":%.1f},"
-        "\"spk_queue\":{\"avg\":%.2f,\"min\":%.0f,\"max\":%.0f},"
-        "\"pcm_lag_samples\":{\"avg\":%.0f,\"max\":%.0f}"
-        "}",
-        static_cast<unsigned>(m.turn_at_ms),
-        static_cast<unsigned>(m.chunk_count),
-        static_cast<unsigned>(m.speaker_sample_rate),
-        static_cast<double>(m.played_sps),
-        static_cast<double>(m.recv_lag_us_avg),
-        static_cast<double>(m.recv_lag_us_min),
-        static_cast<double>(m.recv_lag_us_max),
-        static_cast<double>(m.recv_to_queued_ms_avg),
-        static_cast<double>(m.recv_to_queued_ms_min),
-        static_cast<double>(m.recv_to_queued_ms_max),
-        static_cast<double>(m.spk_queue_avg),
-        static_cast<double>(m.spk_queue_min),
-        static_cast<double>(m.spk_queue_max),
-        static_cast<double>(m.pcm_lag_samples_avg),
-        static_cast<double>(m.pcm_lag_samples_max));
-    return std::string{buf};
-}
-
-// Live-apply an avatar face bytecode upload that just landed via HTTP
-// (`POST /api/avatar-dsl`) or BLE chr 0x21 (commit op). Both transports
-// persist to NVS before calling this — we only update the SharedState slot
-// that the render task polls (data=nullptr / len=0 means "revert to the
-// firmware-embedded default"). Returns true unconditionally for now; the
-// SharedState slot can't fail. Captured as a function pointer so it can be
-// passed to both `config::set_avatar_bytecode_sink` (BLE) and
-// `wifi_config::set_avatar_bytecode_sink` (HTTP, accepts std::function).
-bool apply_avatar_bytecode(const std::uint8_t* data, std::size_t len)
-{
-    if (g_state == nullptr) return false;
-    if (data == nullptr || len == 0) {
-        g_state->clear_face_bytecode();
-    } else {
-        g_state->set_face_bytecode({data, len});
-    }
-    return true;
-}
 
 // CoreS3 mic + speaker share I2S_NUM_1, so we have to hand the bus around
 // explicitly. Records `seconds` of audio at 16 kHz then plays it straight
@@ -434,507 +120,6 @@ void record_and_playback(std::uint32_t seconds, const char* label)
         vTaskDelay(pdMS_TO_TICKS(20));
     }
     ESP_LOGI(kTag, "%s: done", label);
-}
-
-void demo_loop(const std::string& jtts_config_json, bool has_battery, bool is_atom_nyan, bool conversation_enabled, bool jtts_idle_enabled, const stackchan::app::ServoLimits& limits)
-{
-    using namespace stackchan;
-
-    constexpr avatar::Expression kCycle[] = {
-        avatar::Expression::Neutral, avatar::Expression::Happy, avatar::Expression::Doubt,
-        avatar::Expression::Sad,     avatar::Expression::Angry, avatar::Expression::Sleepy,
-    };
-
-    // Random head pose targets, redrawn every kPoseMinMs..kPoseMaxMs. The
-    // ranges come from the per-device ServoLimits so the demo respects the
-    // configured motion (servo_task also clamps defensively).
-    const float kYawMinDeg = static_cast<float>(limits.yaw_min_deg);
-    const float kYawMaxDeg = static_cast<float>(limits.yaw_max_deg);
-    const float kPitchMinDeg = static_cast<float>(limits.pitch_min_deg);
-    const float kPitchMaxDeg = static_cast<float>(limits.pitch_max_deg);
-    constexpr std::uint32_t kPoseMinMs = 10000;
-    constexpr std::uint32_t kPoseMaxMs = 20000;
-    constexpr std::uint32_t kExpressionPeriodMs = 5000;
-    constexpr std::uint32_t kSpeechMinMs = 6000;
-    constexpr std::uint32_t kSpeechMaxMs = 12000;
-
-    static app::Speech speech;
-    speech.configure(jtts_config_json);
-
-    // LT timekeeper — ticked every loop iteration; speaks through the same
-    // Speech instance (so the avatar's mouth moves) and publishes state for
-    // the on-device LT tab. configure() is fed later from NVS (Phase 4).
-    static app::LtTimer lt_timer;
-
-    auto rand_in = [](float low, float high) {
-        const float u = static_cast<float>(esp_random()) / static_cast<float>(UINT32_MAX);
-        return low + (high - low) * u;
-    };
-    auto rand_range_ms = [](std::uint32_t low, std::uint32_t high) {
-        return low + (esp_random() % (high - low + 1));
-    };
-
-    std::size_t expression_index = 0;
-    std::uint32_t next_expression_ms = 0;
-    std::uint32_t next_pose_ms = 0;
-    std::uint32_t next_speech_ms = 2000; // first babble shortly after boot
-
-    // Base-board battery monitor (INA226 on the internal I2C bus). Read here —
-    // the only task that touches m5::In_I2C — and published to SharedState +
-    // the BLE / Wi-Fi services. Only the M5 base has the INA226; on boards
-    // without it (Takao) skip entirely, leaving battery_* = -1 ("—" everywhere).
-    constexpr std::uint32_t kBatteryPeriodMs = 5000;
-    app::BatteryMonitor battery;
-    if (has_battery) {
-        battery.begin();
-    }
-    std::uint32_t next_battery_ms = 0;
-
-    // Nadenade (head-petting) detection on the top-mounted Si12T sensor.
-    //
-    // A static "is something touching?" test kept false-firing on 2.4 GHz
-    // EMI. Captured sensor traces show the real discriminator is the *onset
-    // order*: a real pet drags across the head, so each zone first reaches a
-    // firm contact (intensity 3) in spatial order — front→middle→back, or the
-    // reverse. (Untouched, the chip reads a clean 0 0 0; the zones overlap
-    // heavily mid-stroke — front=3,middle=3 ties etc. — so tracking a single
-    // "dominant" zone doesn't work; the first-hit timestamps do.)
-    //
-    // We trigger only when all three zones have hit intensity 3 within one
-    // gesture AND their first-hit times are monotonic across the head, with
-    // the two ends hit in *different* samples so a single uniform RFI spike
-    // (all three at once) can't qualify.
-    //   - kStrokePeakIntensity: a zone counts as "hit" at this intensity (3).
-    //   - kStrokeGapMs: an all-quiet stretch this long ends the gesture.
-    constexpr std::uint8_t kStrokePeakIntensity = 3;
-    constexpr std::uint32_t kStrokeGapMs = 600;
-    constexpr std::uint32_t kNadenadeCooldownMs = 4000;
-    std::array<std::uint32_t, 3> stroke_hit_ms{0, 0, 0}; // first-hit-3 time per zone (0 = not yet)
-    std::uint32_t stroke_active_ms = 0;   // last time any zone was non-zero
-    std::uint32_t next_nadenade_ms = 0;   // earliest time we'll trigger again
-
-    // Last-applied speaker volume percent. Watches the SharedState atom
-    // so the device-UI's −/+ nudge buttons re-apply via the same
-    // setVolume + NVS path the BLE / WiFi sinks use. Seeded from the
-    // current atom (set by boot's apply_speaker_volume_sink call).
-    std::uint16_t last_speaker_volume_pct =
-        g_state->speaker_volume_pct.load(std::memory_order_relaxed);
-    // One-touch mute edge detection (corner tap / BtnA hold). Applied via
-    // apply_speaker_volume (NOT the sink) — mute is session-only, no NVS.
-    bool last_speaker_muted = g_state->speaker_muted.load(std::memory_order_relaxed);
-
-    // Set true by the (render-task) completion callback so demo_loop knows
-    // the previous balloon finished. Atomics keep it thread-safe.
-    static std::atomic<bool> balloon_in_flight{false};
-
-    // Wi-Fi state edge detection: while disconnected we pin a persistent
-    // "Wi-Fi: 切断中" balloon and suppress babble; when it reconnects we
-    // clear the balloon so normal demo behaviour resumes.
-    bool wifi_warning_active = false;
-
-    // BMI270 shake → randomized expression. Cheap to poll (one I2C read);
-    // the cooldown keeps a single jerk from cascading into rapid-fire
-    // changes. Magnitude threshold is in g-units after subtracting 1 g of
-    // gravity, so it ignores normal handheld motion and only fires on
-    // deliberate flicks of the wrist. Available on any board M5Unified
-    // configured an IMU for (StopWatch's BMI270 in this scope; harmless
-    // no-op on CoreS3 where the IMU isn't initialised — getAccel returns
-    // false and we skip).
-    constexpr float kShakeThresholdG = 1.6f;       // |a| ≥ 1.6 g (≈ 0.6 g jerk)
-    constexpr std::uint32_t kShakeCooldownMs = 800;
-    std::uint32_t next_shake_ms = 0;
-
-    for (;;) {
-        // Camera session in progress: every In_I2C touch (M5.update's
-        // touch/BtnPWR poll, INA226 battery, Si12T nadenade, BMI270 shake)
-        // would re-init the I2C controller under the camera's SCCB driver
-        // and kill the capture. Idle the whole iteration instead — sessions
-        // are ~1.5 s one-shots, so buttons/touch just miss a beat.
-        if (g_state->i2c_quiesce.load(std::memory_order_acquire)) {
-            vTaskDelay(pdMS_TO_TICKS(50));
-            continue;
-        }
-
-        // Drive M5.update() so M5.Touch / M5.BtnPWR latch their state machines.
-        M5.update();
-
-        const std::uint32_t now_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
-
-        // Live-apply speaker_volume_pct changes from the device-UI (BLE /
-        // HTTP sinks already apply directly). Cheap atomic compare per
-        // iteration; only triggers M5.Speaker.setVolume + NVS write on
-        // an actual change.
-        {
-            const std::uint16_t cur = g_state->speaker_volume_pct.load(std::memory_order_relaxed);
-            if (cur != last_speaker_volume_pct) {
-                last_speaker_volume_pct = cur;
-                apply_speaker_volume_sink(cur);
-            }
-        }
-
-        // One-touch mute toggles (device_ui corner tap / atom_status BtnA
-        // hold). Re-run apply_speaker_volume with the unchanged percent so
-        // the M5.Speaker master volume snaps to 0 / back immediately — this
-        // also silences audio that's already mid-playback, since the mixer
-        // applies master volume per chunk. A short haptic confirms the
-        // toggle on boards with a vibration motor (no-op elsewhere).
-        {
-            const bool muted = g_state->speaker_muted.load(std::memory_order_relaxed);
-            if (muted != last_speaker_muted) {
-                last_speaker_muted = muted;
-                apply_speaker_volume(g_state->speaker_volume_pct.load(std::memory_order_relaxed));
-                ESP_LOGI(kTag, "speaker %s", muted ? "muted" : "unmuted");
-                if (g_board != nullptr) (void)g_board->vibrate(20);
-            }
-        }
-
-        // IMU shake → cycle to a random expression. Runs before the
-        // touch/UI block so a shake during conv idle interrupts the
-        // expression rotation immediately (no wait for the 5 s timer).
-        // A brief haptic confirms the shake actually registered (handy
-        // when the user can't see the avatar on a wrist-worn device).
-        if (now_ms >= next_shake_ms) {
-            float ax = 0, ay = 0, az = 0;
-            if (M5.Imu.getAccel(&ax, &ay, &az)) {
-                const float mag = std::sqrt(ax * ax + ay * ay + az * az);
-                if (mag >= kShakeThresholdG) {
-                    next_shake_ms = now_ms + kShakeCooldownMs;
-                    const int cur = g_state->expression.load(std::memory_order_relaxed);
-                    int next = cur;
-                    for (int i = 0; i < 4 && next == cur; ++i) {
-                        next = static_cast<int>(esp_random() % 6);
-                    }
-                    g_state->expression.store(next, std::memory_order_relaxed);
-                    ESP_LOGI(kTag, "shake |a|=%.2fg → expression %d", mag, next);
-                    if (g_board != nullptr) (void)g_board->vibrate(60);
-                }
-            }
-        }
-        // BtnB (StopWatch Blue / G1) — manual expression cycle with haptic
-        // confirmation. wasPressed() is false on boards without BtnB so the
-        // check is harmless universally.
-        if (M5.BtnB.wasPressed()) {
-            const int cur = g_state->expression.load(std::memory_order_relaxed);
-            g_state->expression.store((cur + 1) % 6, std::memory_order_relaxed);
-            if (g_board != nullptr) (void)g_board->vibrate(30);
-        }
-        // BtnA on StopWatch (= Yellow / G2) — toggle the device_ui open/close.
-        // The corner tap-to-open hot zone on a round AMOLED is awkward to hit
-        // (corners are within the visible circle but at the edge of the touch
-        // pad), so a physical button is a more reliable opener. On other
-        // boards BtnA either has no role (CoreS3 uses touch only) or is
-        // already claimed by atom_status::poll_button (AtomS3R / AtomS3 →
-        // is_atom_nyan branch above, which doesn't reach this path).
-        if (g_board != nullptr &&
-            g_board->kind() == stackchan::board::BoardKind::StopWatch &&
-            M5.BtnA.wasPressed()) {
-            app::ui::toggle();
-            (void)g_board->vibrate(20);
-        }
-
-        // LT timekeeper: re-configure when BLE/HTTP (or the boot seed) pushed
-        // a new config JSON, then consume UI commands / update the countdown /
-        // announce the 1-minute warning + overtime through speech + balloon.
-        static std::uint32_t lt_cfg_seen = 0;
-        if (const std::uint32_t v = g_state->lt_config_version(); v != lt_cfg_seen) {
-            lt_cfg_seen = v;
-            lt_timer.configure(g_state->snapshot_lt_config(), g_state);
-        }
-        lt_timer.tick(*g_state, speech, now_ms);
-
-        // Battery: sample the INA226 every few seconds and fan the result out to
-        // the device UI (SharedState) + the BLE / Wi-Fi settings services.
-        if (has_battery && now_ms >= next_battery_ms) {
-            next_battery_ms = now_ms + kBatteryPeriodMs;
-            if (auto r = battery.read()) {
-                const int mv = static_cast<int>(r->voltage * 1000.0f + 0.5f);
-                const int ma = static_cast<int>(r->current * 1000.0f + (r->current >= 0 ? 0.5f : -0.5f));
-                const int pct = app::battery_percent_from_voltage(r->voltage);
-                g_state->battery_mv.store(static_cast<std::int16_t>(mv), std::memory_order_relaxed);
-                g_state->battery_ma.store(static_cast<std::int16_t>(ma), std::memory_order_relaxed);
-                g_state->battery_pct.store(static_cast<std::int8_t>(pct), std::memory_order_relaxed);
-                config::notify_battery(mv, ma, pct);
-                wifi_config::set_battery(mv, ma, pct);
-            }
-        }
-
-        // LCD touch (M5.Touch — the screen's capacitive touch, distinct from
-        // the Si12T head sensor) drives the on-device UI. Forward every press
-        // to the UI module, which hit-tests it against the current page.
-        // Handled before the conversation/audio early-returns so the UI opens
-        // in every mode.
-        if (is_atom_nyan) {
-            // AtomS3R: no LCD touch, single USER_BUT toggles the status overlay.
-            app::atom_status::poll_button();
-        } else {
-            const auto td = M5.Touch.getDetail();
-            // Horizontal flick → next/prev tab. M5Unified emits this on the
-            // release frame after a touch that travelled past the flick
-            // threshold. We treat it independently of the press path so a
-            // press that ends in a flick doesn't also fire the tap action.
-            if (td.wasFlicked()) {
-                app::ui::handle_flick(td.distanceX(), td.distanceY());
-            }
-            if (td.wasPressed()) {
-                // AP provisioning screen owns the touch while it's up —
-                // the on-screen "終了" button is how the user dismisses
-                // AP mode on touch boards (CoreS3 / StopWatch). A return
-                // of true swallows the tap so it doesn't leak through to
-                // the device_ui hit-test underneath.
-                if (app::ap_screen::handle_tap(td.x, td.y)) {
-                    continue;
-                }
-                const bool ui_consumed = app::ui::handle_tap(td.x, td.y);
-                // A tap the on-device UI didn't consume (didn't open / use
-                // the UI, didn't hit the mute corner), while the assistant is
-                // mid-reply, is a barge-in request: voice input is paused for
-                // the whole turn, so the screen tap is how the user
-                // interrupts. The conversation task consumes this during
-                // playback.
-                if (!ui_consumed &&
-                    g_state->barge_in_enabled.load(std::memory_order_relaxed) &&
-                    g_state->conversation_active.load(std::memory_order_relaxed) &&
-                    !g_state->conversation_idle.load(std::memory_order_relaxed)) {
-                    g_state->barge_in_request.store(true, std::memory_order_relaxed);
-                }
-            }
-
-            // StopWatch: while the user keeps a finger pressed in the
-            // outer ring of the 466×466 round panel, bias the avatar's
-            // gaze toward the touch point — the eyes follow the finger
-            // as it slides around the rim. Center / device-UI region
-            // taps are unaffected. saccade keeps running in parallel
-            // (the VM sums saccade + gaze_target), so the eyes wander
-            // naturally around the commanded direction rather than
-            // locking dead-stop. Released → reset to (0, 0) and the
-            // saccade-only behaviour resumes.
-            if (g_board != nullptr && g_board->kind() == stackchan::board::BoardKind::StopWatch) {
-                constexpr float kCenter = 233.0f;          // 466 / 2
-                constexpr float kOuterR = 233.0f;          // panel edge
-                constexpr float kInnerR = 180.0f;          // ring inner edge
-                constexpr float kGazeGain = 5.0f;          // DSL multiplier
-                                                            // is *3 → 15 px peak
-                bool follow_active = false;
-                if (td.isPressed() && !app::ui::active()) {
-                    const float dx = static_cast<float>(td.x) - kCenter;
-                    const float dy = static_cast<float>(td.y) - kCenter;
-                    const float r  = std::sqrt(dx * dx + dy * dy);
-                    if (r >= kInnerR && r <= kOuterR) {
-                        // Normalise direction onto the unit circle, then
-                        // amplify by kGazeGain so the offset is visible
-                        // through the VM's gaze * 3 multiplier.
-                        const float inv = 1.0f / r;
-                        g_state->gaze_target_h.store(dx * inv * kGazeGain,
-                                                     std::memory_order_relaxed);
-                        g_state->gaze_target_v.store(dy * inv * kGazeGain,
-                                                     std::memory_order_relaxed);
-                        follow_active = true;
-                    }
-                }
-                if (!follow_active) {
-                    g_state->gaze_target_h.store(0.0f, std::memory_order_relaxed);
-                    g_state->gaze_target_v.store(0.0f, std::memory_order_relaxed);
-                }
-            }
-        }
-
-        const bool conv_active = g_state->conversation_active.load(std::memory_order_relaxed);
-        const bool conv_idle = g_state->conversation_idle.load(std::memory_order_relaxed);
-        const bool audio_streaming = g_state->audio_stream_active.load(std::memory_order_relaxed);
-
-        // While a BLE audio stream is playing, the streamer owns the speaker
-        // and drives mouth_open itself. Stand down completely — stop any
-        // in-flight babble (its playRaw would fight the stream on the I2S
-        // bus) and don't touch mouth_open.
-        if (audio_streaming) {
-            if (speech.is_speaking()) speech.stop();
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
-        }
-
-        // Idle behaviours (random head poses, nadenade) run when there is no
-        // conversation OR the conversation is idly listening. The full demo
-        // (mouth-sync, Wi-Fi balloon, babble, expression cycle) runs only when
-        // there is no conversation at all — otherwise it would fight the
-        // conversation task for the avatar and the I2S bus.
-        const bool allow_idle_demo = !conv_active || conv_idle;
-        const bool allow_full_demo = !conv_active;
-
-        // While the conversation is thinking / speaking it owns the avatar —
-        // stand down completely.
-        if (!allow_idle_demo) {
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
-        }
-
-        if (allow_full_demo) {
-            // When idle jtts babble is enabled, drive the mouth from the
-            // speech envelope and run the Wi-Fi check + random babble. When
-            // disabled, demo_loop becomes a no-op on the mouth so the mic
-            // lip-sync task (main/mic_lip_sync_task.cpp), if active, owns
-            // `mouth_open` without us overwriting it with 0 every tick.
-            if (jtts_idle_enabled) {
-                // Mouth opens with the current speech envelope; closed while silent.
-                g_state->mouth_open.store(speech.current_mouth_open(), std::memory_order_relaxed);
-
-                // The "Wi-Fi: 切断中" balloon and the babble suppression below only
-                // make sense when the assistant actually needs the network — i.e.
-                // when the conversation backend (OpenAI / Gemini / XiaoZhi) is on.
-                // With conversation disabled the demo is fully self-contained
-                // (local jtts babble), so we ignore Wi-Fi state entirely and let
-                // the idle behaviour run from boot without waiting for an AP.
-                const bool wifi_ok = !conversation_enabled || app::wifi_is_connected();
-                if (!wifi_ok && !wifi_warning_active) {
-                    speech.stop();
-                    // hold_ms = UINT32_MAX so the balloon stays put until we clear it.
-                    g_state->set_balloon_text("Wi-Fi: 切断中", /*hold_ms=*/UINT32_MAX);
-                    balloon_in_flight.store(false, std::memory_order_release);
-                    wifi_warning_active = true;
-                } else if (wifi_ok && wifi_warning_active) {
-                    g_state->clear_balloon();
-                    wifi_warning_active = false;
-                    next_speech_ms = now_ms + 1500;
-                }
-
-                // Kick off a new babble + balloon once the previous balloon is done
-                // (callback resets balloon_in_flight) AND audio is idle AND the
-                // random dwell time has elapsed. Suppressed while Wi-Fi is down so
-                // the disconnected balloon stays visible.
-                if (!wifi_warning_active &&
-                    now_ms >= next_speech_ms &&
-                    !speech.is_speaking() &&
-                    !balloon_in_flight.load(std::memory_order_acquire)) {
-                    // Speak a phrase and show ITS display text in the balloon —
-                    // babble() returns the display (発話内容) of the same phrase
-                    // it synthesises (発声内容), so screen and voice always match.
-                    const std::string display = speech.babble(esp_random());
-                    if (!display.empty()) {
-                        balloon_in_flight.store(true, std::memory_order_release);
-                        g_state->set_balloon_text(display, /*hold_ms=*/0, [] {
-                            balloon_in_flight.store(false, std::memory_order_release);
-                        });
-                    }
-                    next_speech_ms = now_ms + rand_range_ms(kSpeechMinMs, kSpeechMaxMs);
-                }
-            }
-        }
-
-        // Nadenade: poll the top sensor and look for a directional stroke
-        // across the three zones. On a completed stroke, run a quick happy
-        // head-wobble. The wobble blocks demo_loop's normal scheduling for
-        // ~1.4 s but the render and servo tasks keep running.
-        if (g_touch != nullptr && !wifi_warning_active && now_ms >= next_nadenade_ms) {
-            const auto reading = g_touch->read();
-            const std::uint8_t f = reading.front(), mid = reading.middle(), bk = reading.back();
-            const std::uint8_t mx = std::max({f, mid, bk});
-
-            // Edge-triggered diagnostic — only log when the reading
-            // actually changes, otherwise a chip that gets stuck at
-            // `2 2 2` from RFI floods the serial port at 20 Hz.
-            static std::uint8_t last_logged[3] = {0xFF, 0xFF, 0xFF};
-            if (f != last_logged[0] || mid != last_logged[1] || bk != last_logged[2]) {
-                if (reading.any_touched() ||
-                    last_logged[0] != 0 || last_logged[1] != 0 || last_logged[2] != 0) {
-                    ESP_LOGI(kTag, "touch raw: front=%u middle=%u back=%u", f, mid, bk);
-                }
-                last_logged[0] = f;
-                last_logged[1] = mid;
-                last_logged[2] = bk;
-            }
-
-            // End (and clear) the gesture once the head's been all-quiet for
-            // longer than the inter-zone gap.
-            if (now_ms - stroke_active_ms > kStrokeGapMs) {
-                stroke_hit_ms = {0, 0, 0};
-            }
-            if (mx > 0) stroke_active_ms = now_ms;
-
-            // Record the first time each zone reaches a firm contact in this
-            // gesture.
-            if (f   >= kStrokePeakIntensity && stroke_hit_ms[0] == 0) stroke_hit_ms[0] = now_ms;
-            if (mid >= kStrokePeakIntensity && stroke_hit_ms[1] == 0) stroke_hit_ms[1] = now_ms;
-            if (bk  >= kStrokePeakIntensity && stroke_hit_ms[2] == 0) stroke_hit_ms[2] = now_ms;
-
-            bool stroke_complete = false;
-            if (stroke_hit_ms[0] && stroke_hit_ms[1] && stroke_hit_ms[2]) {
-                // All three zones firmly touched within one gesture. Accept
-                // only a monotonic onset order across the head, with the two
-                // ends hit in different samples (so a single all-three RFI
-                // spike — equal timestamps — can't qualify).
-                const auto a = stroke_hit_ms[0], b = stroke_hit_ms[1], c = stroke_hit_ms[2];
-                const bool fwd = a <= b && b <= c && a < c;   // front→middle→back
-                const bool rev = a >= b && b >= c && a > c;   // back→middle→front
-                stroke_complete = fwd || rev;
-                if (!stroke_complete) {
-                    // Hit all three but not cleanly ordered → drop so a noisy
-                    // simultaneous lift can't linger and re-qualify.
-                    stroke_hit_ms = {0, 0, 0};
-                }
-            }
-
-            if (stroke_complete) {
-                const char* direction =
-                    stroke_hit_ms[0] < stroke_hit_ms[2] ? "front_to_back" : "back_to_front";
-                ESP_LOGI(kTag, "nadenade! stroke %s (hit ms: f=%u m=%u b=%u)",
-                         direction,
-                         static_cast<unsigned>(stroke_hit_ms[0]),
-                         static_cast<unsigned>(stroke_hit_ms[1]),
-                         static_cast<unsigned>(stroke_hit_ms[2]));
-                stackchan::wifi_config::mcp_events::publish_touch_stroke(direction);
-                speech.stop();
-                const float prev_yaw = g_state->target_yaw_deg.load(std::memory_order_relaxed);
-                const int prev_expr = g_state->expression.load(std::memory_order_relaxed);
-
-                g_state->expression.store(static_cast<int>(avatar::Expression::Happy),
-                                          std::memory_order_relaxed);
-                g_state->servo_speed_override.store(800, std::memory_order_relaxed); // ~120°/s
-                balloon_in_flight.store(true, std::memory_order_release);
-                g_state->set_balloon_text("なでなで♡", /*hold_ms=*/2200, [] {
-                    balloon_in_flight.store(false, std::memory_order_release);
-                });
-
-                constexpr float kWobbleDeg = 8.0f;
-                constexpr std::uint32_t kHalfPeriodMs = 160;
-                for (int i = 0; i < 4; ++i) {
-                    g_state->target_yaw_deg.store(-kWobbleDeg, std::memory_order_relaxed);
-                    vTaskDelay(pdMS_TO_TICKS(kHalfPeriodMs));
-                    g_state->target_yaw_deg.store(+kWobbleDeg, std::memory_order_relaxed);
-                    vTaskDelay(pdMS_TO_TICKS(kHalfPeriodMs));
-                }
-                g_state->target_yaw_deg.store(prev_yaw, std::memory_order_relaxed);
-                vTaskDelay(pdMS_TO_TICKS(kHalfPeriodMs));
-                g_state->servo_speed_override.store(0, std::memory_order_relaxed);
-                g_state->expression.store(prev_expr, std::memory_order_relaxed);
-
-                stroke_hit_ms = {0, 0, 0};
-                stroke_active_ms = 0;
-                const std::uint32_t after_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
-                next_nadenade_ms = after_ms + kNadenadeCooldownMs;
-                // Push back demo activity so the wobble doesn't fight a
-                // freshly-scheduled random pose / babble.
-                next_speech_ms = after_ms + 1500;
-                next_pose_ms = std::max(next_pose_ms, after_ms + 2000);
-                continue;
-            }
-        }
-
-        // Random yaw + pitch every 10–20 s.
-        if (now_ms >= next_pose_ms) {
-            g_state->target_yaw_deg.store(rand_in(kYawMinDeg, kYawMaxDeg), std::memory_order_relaxed);
-            g_state->target_pitch_deg.store(rand_in(kPitchMinDeg, kPitchMaxDeg), std::memory_order_relaxed);
-            next_pose_ms = now_ms + rand_range_ms(kPoseMinMs, kPoseMaxMs);
-        }
-
-        // Cycle expression every 5 s — full demo only; during a conversation
-        // the model drives the expression via the set_expression tool.
-        if (allow_full_demo && now_ms >= next_expression_ms) {
-            g_state->expression.store(static_cast<int>(kCycle[expression_index]), std::memory_order_relaxed);
-            expression_index = (expression_index + 1) % (sizeof(kCycle) / sizeof(kCycle[0]));
-            next_expression_ms = now_ms + kExpressionPeriodMs;
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
 }
 
 } // namespace
@@ -1003,7 +188,6 @@ extern "C" void app_main()
         }
     }
     auto& board = *board_result;
-    g_board = &board;
 
     // Reserve the conversation task's internal-RAM speaker ring *now*, before
     // anything else has a chance to chew up DRAM. The conversation task itself
@@ -1052,28 +236,10 @@ extern "C" void app_main()
     // state we created ourselves.
     stackchan::app::dump_internal_i2c_registers();
 
-#if CONFIG_STACKCHAN_CAMERA_ENABLED
-    // Resident camera init — see g_camera above for the full rationale.
+    // Resident camera init (M5Base only; no-op elsewhere / slim builds).
     // Must run after the i2c dump (which uses In_I2C) and before any task
-    // that touches In_I2C starts. begin() releases In_I2C for the SCCB
-    // register upload; the subsequent In_I2C users below (battery, es8388
-    // probe, …) re-init the controller afterwards, which is harmless once
-    // the sensor free-runs. Failure is non-fatal: has_camera just stays
-    // false (the sink checks initialised()).
-    // VGA (full sensor): the fb size is fixed at esp_camera_init time, so
-    // the resolution is a boot-time choice — 600 KiB PSRAM fb + ~4× the
-    // QVGA streaming bounce bandwidth, in exchange for full-resolution
-    // photos and (crucially) an intact Bayer mosaic for the RAW capture
-    // path, which the QVGA subsampling would scramble.
-    if (board.kind() == stackchan::board::BoardKind::M5Base) {
-        if (auto r = g_camera.begin(stackchan::board::CameraPixelFormat::Rgb565,
-                                    stackchan::board::CameraFrameSize::Vga);
-            !r) {
-            ESP_LOGW(kTag, "resident camera init failed: %d — photo capture disabled",
-                     static_cast<int>(r.error()));
-        }
-    }
-#endif
+    // that touches In_I2C starts — see camera_service::init_resident.
+    stackchan::app::camera_service::init_resident(board);
 
     // CoreS3 Speaker and Mic share I2S_NUM_1 (BCK=GPIO34, WS=GPIO33),
     // so the side that's done has to release the bus before the other
@@ -1098,9 +264,8 @@ extern "C" void app_main()
     // Cache the jtts options used by the settings-page test-speak buttons
     // (BLE chr 0x2d + /api/jtts-say). Same JSON the demo_loop babble
     // parses, so the test voice matches the babble voice.
-    g_say_opts = stackchan::app::resolve_speech_options(
-        cfg.jtts_config_json, stackchan::app::Speech::kSampleRate);
-    g_say_opts_ready = true;
+    stackchan::app::settings_sinks::set_say_options(stackchan::app::resolve_speech_options(
+        cfg.jtts_config_json, stackchan::app::Speech::kSampleRate));
 
     // Module Audio (M144, ES8388 codec): probe once at boot. With its
     // jumpers in Config B the codec listens on the M-BUS I2S; the host
@@ -1257,10 +422,10 @@ extern "C" void app_main()
         (board.kind() == stackchan::board::BoardKind::StopWatch || has_audio_module)
             ? 255
             : 128;
-    g_speaker_base_volume = spk_base_volume;
+    stackchan::app::settings_sinks::set_speaker_base_volume(spk_base_volume);
     // Apply the user's gain (cfg already loaded above). 0..200 % → byte
     // is clamped at 255 so boards already at 255 are unchanged at 100 %.
-    apply_speaker_volume(cfg.speaker_volume_pct);
+    stackchan::app::settings_sinks::apply_speaker_volume(cfg.speaker_volume_pct);
     if (cfg.startup_arpeggio_enabled) {
         for (float freq : {523.25f, 659.25f, 783.99f}) { // C5 – E5 – G5
             M5.Speaker.tone(freq, 150);
@@ -1336,6 +501,7 @@ extern "C" void app_main()
     // the entire audio session is silently dropped — every subsequent
     // audio_data write sees g_audio_sink == nullptr and bails.
     g_state = new stackchan::app::SharedState{};
+    stackchan::app::settings_sinks::attach_state(*g_state);
     // Seed the speaker volume atom from NVS. apply_speaker_volume was
     // already called before g_state existed (the boot arpeggio block,
     // line ~1093) so M5.Speaker is already at the right level — we just
@@ -1378,24 +544,8 @@ extern "C" void app_main()
                                        std::memory_order_relaxed);
     g_state->barge_in_enabled.store(cfg.barge_in_enabled,
                                     std::memory_order_relaxed);
-    stackchan::config::set_face_config_sink(&on_face_config);
-    stackchan::config::set_lt_config_sink(+[](std::string_view json) {
-        if (g_state != nullptr) g_state->set_lt_config(json);
-    });
-    stackchan::config::set_servo_range_mode_sink(&on_servo_range_mode);
-    stackchan::config::set_servo_positions_getter(&servo_positions);
-    stackchan::config::set_audio_metrics_getter(&audio_metrics_json);
-    stackchan::config::set_led_state_getter(&read_led_state);
-    stackchan::config::set_led_state_sink(&apply_led_patch);
-    stackchan::config::set_mic_lip_gain_getter(&read_mic_lip_gain);
-    stackchan::config::set_mic_lip_gain_sink(&apply_mic_lip_gain);
-    stackchan::config::set_speaker_volume_getter(&read_speaker_volume_pct);
-    stackchan::config::set_speaker_volume_sink(&apply_speaker_volume_sink);
-    // Tell the settings services which board we're on so the web UIs can hide
-    // sections that don't apply (e.g. servo config on Atom-nyan). Must happen
-    // before config::start / wifi_config setup so the first central read sees
-    // the right value.
-    stackchan::config::set_board_kind(static_cast<std::uint8_t>(board.kind()));
+    stackchan::app::settings_sinks::register_ble_sinks(
+        static_cast<std::uint8_t>(board.kind()));
     // BLE audio streaming and the realtime voice conversation are mutually
     // exclusive — both saturate the radio/CPU and running them together
     // makes streaming playback choppy. Pass the conversation-enabled flag
@@ -1416,16 +566,8 @@ extern "C" void app_main()
     // task after Wi-Fi STA gets an IP — the calls below race that; the setters
     // tolerate being called before the HTTP server is up (the values are
     // cached in static storage and applied once the handlers register).
-    stackchan::wifi_config::set_servo_range_mode_sink(&on_servo_range_mode);
-    stackchan::wifi_config::set_servo_positions_getter(&servo_positions);
-    stackchan::wifi_config::set_audio_metrics_getter(&audio_metrics_json);
-    stackchan::wifi_config::set_led_state_getter(&read_led_state);
-    stackchan::wifi_config::set_led_state_sink(&apply_led_patch);
-    stackchan::wifi_config::set_mic_lip_gain_getter(&read_mic_lip_gain);
-    stackchan::wifi_config::set_mic_lip_gain_sink(&apply_mic_lip_gain);
-    stackchan::wifi_config::set_speaker_volume_getter(&read_speaker_volume_pct);
-    stackchan::wifi_config::set_speaker_volume_sink(&apply_speaker_volume_sink);
-    stackchan::wifi_config::set_board_kind(static_cast<std::uint8_t>(board.kind()));
+    stackchan::app::settings_sinks::register_http_sinks(
+        static_cast<std::uint8_t>(board.kind()));
     // (Channel /mcp/events bring-up happens AFTER start_conversation_task so
     //  the conv-task gets first dibs on contiguous internal RAM for its 3 ×
     //  8 KB segment buffers + TLS handshake. See below.)
@@ -1474,219 +616,14 @@ extern "C" void app_main()
         ESP_LOGW(kTag, "avatar_vm: load failed (%s) — using firmware default",
                  stackchan::avatar_vm::storage::to_string(loaded.error()));
     }
-    // Same closure for both transports: chr 0x21 (BLE) and POST /api/avatar-dsl
-    // (HTTP). The free function decays to a function pointer for the BLE
-    // setter, and converts implicitly to std::function for the HTTP one.
-    stackchan::config::set_avatar_bytecode_sink(&apply_avatar_bytecode);
-    stackchan::wifi_config::set_avatar_bytecode_sink(&apply_avatar_bytecode);
+    stackchan::app::settings_sinks::register_avatar_bytecode_sinks();
 
-#if CONFIG_STACKCHAN_CAMERA_ENABLED
-    // One-shot camera capture for the settings page (GET /api/camera/capture).
-    // Registered only when the resident camera actually came up at boot —
-    // /api/status's has_camera flag derives from this registration, which is
-    // how the web UI decides to show the 撮影 section. (initialised() also
-    // implies BoardKind::M5Base: boot only begins g_camera on that board.)
-    if (g_camera.initialised()) {
-        stackchan::wifi_config::set_camera_capture_sink(
-            [](const stackchan::wifi_config::CameraCaptureOptions& options,
-               std::vector<std::uint8_t>& out, std::size_t& w, std::size_t& h,
-               std::string& format) -> bool {
-                using stackchan::board::CameraFrameSize;
-                using stackchan::board::CameraPixelFormat;
-                // Resident camera (g_camera, initialised at boot). Boot-time
-                // init failure leaves it uninitialised — report unavailable.
-                if (!g_camera.initialised()) {
-                    return false;
-                }
-                // Quiesce the PSRAM-heavy tasks (render sprite traffic) and
-                // the In_I2C pollers for the duration of the grab. The
-                // sensor streams continuously, so frames completed BEFORE
-                // the bus went quiet may be torn by concurrent PSRAM
-                // traffic — confirmed on hardware as bands of corrupt
-                // pixels. Discard two frames after the drain so the one we
-                // keep was composed entirely under quiesce. The quiesce also
-                // covers all runtime SCCB traffic below (colorbar / RAW
-                // re-init / register pokes): SCCB shares GPIO12/11 with
-                // In_I2C, so the pollers must be parked first.
-                struct QuiesceGuard {
-                    QuiesceGuard()
-                    {
-                        g_state->i2c_quiesce.store(true, std::memory_order_release);
-                        // demo_loop polls every ~50 ms, led_task every
-                        // 100 ms, render every 33 ms — 150 ms guarantees
-                        // all of them observed the flag.
-                        vTaskDelay(pdMS_TO_TICKS(150));
-                    }
-                    ~QuiesceGuard()
-                    {
-                        g_state->i2c_quiesce.store(false, std::memory_order_release);
-                    }
-                } quiesce;
+    // Camera capture / register sinks (no-op when the resident camera did
+    // not come up; /api/status's has_camera derives from this registration).
+    stackchan::app::camera_service::register_sinks(*g_state);
 
-                // RAW Bayer: the DVP path is 1 B/px vs the resident RGB565's
-                // 2 B/px, so this needs a driver re-init, not just a sensor
-                // register flip. Deinit → BayerRaw init → grab → restore
-                // RGB565. The swap reuses the internal-RAM blocks the
-                // resident driver just freed (same allocation pattern), so
-                // it works at steady state where a cold init would not —
-                // but a restore failure leaves the camera down until
-                // reboot, so both steps log loudly.
-                if (options.raw_bayer) {
-                    // Format switches contend with other tasks (conversation,
-                    // WebSocket) for fragmented internal RAM — begin() can
-                    // lose the allocation race (it detects this and fails
-                    // loudly), so every (re)init below retries a few times.
-                    auto begin_with_retry = [](CameraPixelFormat fmt, const char* what) -> bool {
-                        for (int attempt = 0; attempt < 5; ++attempt) {
-                            auto r = g_camera.begin(fmt, CameraFrameSize::Vga);
-                            if (r) {
-                                return true;
-                            }
-                            if (attempt == 4) {
-                                ESP_LOGE(kTag, "%s init failed: %d", what,
-                                         static_cast<int>(r.error()));
-                            } else {
-                                vTaskDelay(pdMS_TO_TICKS(200));
-                            }
-                        }
-                        return false;
-                    };
-                    (void)g_camera.end();
-                    if (!begin_with_retry(CameraPixelFormat::BayerRaw, "RAW")) {
-                        ESP_LOGE(kTag, "restoring RGB565 after RAW init failure");
-                        (void)begin_with_retry(CameraPixelFormat::Rgb565, "RGB565 fallback");
-                        return false;
-                    }
-                    bool ok = false;
-                    {
-                        for (int i = 0; i < 2; ++i) {
-                            (void)g_camera.capture();
-                        }
-                        auto frame = g_camera.capture();
-                        if (frame) {
-                            out.assign(frame->data(), frame->data() + frame->size());
-                            w = frame->width();
-                            h = frame->height();
-                            format = "bayer8-rggb";
-                            ok = true;
-                        } else {
-                            ESP_LOGE(kTag, "RAW capture failed: %d",
-                                     static_cast<int>(frame.error()));
-                        }
-                    }
-                    (void)g_camera.end();
-                    if (!begin_with_retry(CameraPixelFormat::Rgb565, "RGB565 restore")) {
-                        ESP_LOGE(kTag, "camera down until reboot");
-                    }
-                    return ok;
-                }
-
-                // Colour-bar test pattern: optics-independent reference for
-                // validating the transfer path. Same RGB565 pipeline, the
-                // sensor just substitutes its generator for the array.
-                if (options.colorbar) {
-                    (void)g_camera.set_colorbar(true);
-                }
-                format = "rgb565be";
-                for (int i = 0; i < 2; ++i) {
-                    (void)g_camera.capture();
-                }
-                auto frame = g_camera.capture();
-                if (!frame) {
-                    // The first fb_get after a long idle-streaming stretch
-                    // can time out (the DVP stalls once the un-consumed
-                    // frame queue overflows; the failed fb_get itself kicks
-                    // the driver back into motion) — seen on HW after the
-                    // RAW swap. One more attempt recovers it.
-                    ESP_LOGW(kTag, "camera capture timed out — retrying once");
-                    frame = g_camera.capture();
-                }
-                if (options.colorbar) {
-                    (void)g_camera.set_colorbar(false);
-                }
-                if (!frame) {
-                    ESP_LOGE(kTag, "camera capture failed: %d",
-                             static_cast<int>(frame.error()));
-                    return false;
-                }
-                out.assign(frame->data(), frame->data() + frame->size());
-                w = frame->width();
-                h = frame->height();
-                return true;
-            });
-
-        // Raw register access for interactive colour tuning. Same quiesce
-        // rule as capture: SCCB may only run while the In_I2C pollers are
-        // parked.
-        stackchan::wifi_config::set_camera_reg_sink(
-            [](bool write, std::uint8_t page, std::uint8_t reg, std::uint8_t& value) -> bool {
-                if (!g_camera.initialised()) {
-                    return false;
-                }
-                struct QuiesceGuard {
-                    QuiesceGuard()
-                    {
-                        g_state->i2c_quiesce.store(true, std::memory_order_release);
-                        vTaskDelay(pdMS_TO_TICKS(150));
-                    }
-                    ~QuiesceGuard()
-                    {
-                        g_state->i2c_quiesce.store(false, std::memory_order_release);
-                    }
-                } quiesce;
-                if (write) {
-                    return static_cast<bool>(g_camera.write_reg(page, reg, value));
-                }
-                auto r = g_camera.read_reg(page, reg);
-                if (!r) {
-                    return false;
-                }
-                value = *r;
-                return true;
-            });
-    }
-#endif
-
-    // Channel adapter (/mcp/*) sinks. Expression / balloon ride the existing
-    // SharedState pipelines (render_task picks them up next frame). `say`
-    // spawns a one-shot worker because synthesis + playback can take
-    // hundreds of ms, way too long to block the HTTP server task.
-    stackchan::wifi_config::set_mcp_expression_sink(
-        [](std::string_view name) {
-            if (g_state == nullptr) return;
-            // Map enum names to the Expression integer. Unknown names fall
-            // back to Neutral rather than rejecting — the HTTP handler has
-            // already accepted the request, so silent fallback is the kinder
-            // failure mode.
-            using E = stackchan::avatar::Expression;
-            int v = static_cast<int>(E::Neutral);
-            if (name == "happy")        v = static_cast<int>(E::Happy);
-            else if (name == "sad")     v = static_cast<int>(E::Sad);
-            else if (name == "angry")   v = static_cast<int>(E::Angry);
-            else if (name == "doubt")   v = static_cast<int>(E::Doubt);
-            else if (name == "sleepy")  v = static_cast<int>(E::Sleepy);
-            else if (name == "neutral") v = static_cast<int>(E::Neutral);
-            g_state->expression.store(v, std::memory_order_relaxed);
-        });
-
-    stackchan::wifi_config::set_mcp_balloon_sink(
-        [](std::string_view text, std::uint32_t hold_ms) {
-            if (g_state == nullptr) return;
-            g_state->set_balloon_text(text, hold_ms);
-        });
-
-    stackchan::wifi_config::set_lt_config_sink([](std::string_view json) {
-        if (g_state != nullptr) g_state->set_lt_config(json);
-    });
-
-    stackchan::wifi_config::set_mcp_say_kana_sink(
-        [](std::string_view kana_utf8) { start_say_worker(kana_utf8); });
-    // Settings-page "speak this" test buttons — same body as /mcp/say
-    // but gated by the page's existing auth (BLE session crypto or
-    // HTTP Basic) instead of the MCP token, so the owner can test
-    // jtts without setting up MCP.
-    stackchan::config::set_jtts_say_kana_sink(&start_say_worker);
-    stackchan::wifi_config::set_jtts_say_kana_sink(&start_say_worker);
+    // /mcp/* channel sinks + the settings-page test-speak buttons.
+    stackchan::app::settings_sinks::register_mcp_sinks();
 
     // Wi-Fi live audio (RTP/L16 today). Like the BLE sink, mutually exclusive
     // with the conversation backend, so it self-disables when voice chat is on.
@@ -1783,7 +720,7 @@ extern "C" void app_main()
             .limits = servo_limits,
         };
     }
-    g_touch = board.touch_sensor();
+    stackchan::board::Si12tTouch* const head_touch = board.touch_sensor();
 
     // API key + provider: pick whichever backend the user configured. The
     // openai_enabled flag still acts as a master "conversation off" switch
@@ -1817,7 +754,7 @@ extern "C" void app_main()
 
 #if CONFIG_STACKCHAN_CONVERSATION_ENABLED
     g_conversation_args = new stackchan::app::ConversationTaskArgs{
-        .state = g_state, .api_key = api_key, .provider = cfg.provider, .touch = g_touch,
+        .state = g_state, .api_key = api_key, .provider = cfg.provider, .touch = head_touch,
         .xiaozhi_url = xiaozhi_url, .xiaozhi_token = xiaozhi_token,
         .system_prompt = cfg.system_prompt.c_str(),
         .extra_headers = cfg.conv_extra_headers.c_str(),
@@ -1957,6 +894,15 @@ extern "C" void app_main()
         "qr_boot", 3072, &board, tskIDLE_PRIORITY + 1, nullptr, 0);
 #endif
 
-    demo_loop(cfg.jtts_config_json, board.has_battery(), is_atom_nyan,
-              cfg.openai_enabled, cfg.jtts_idle_enabled, servo_limits);
+    stackchan::app::run_demo_loop({
+        .state = g_state,
+        .board = &board,
+        .touch = head_touch,
+        .jtts_config_json = cfg.jtts_config_json,
+        .has_battery = board.has_battery(),
+        .is_atom_nyan = is_atom_nyan,
+        .conversation_enabled = cfg.openai_enabled,
+        .jtts_idle_enabled = cfg.jtts_idle_enabled,
+        .limits = servo_limits,
+    });
 }

@@ -68,6 +68,27 @@ enum class LipSyncMode : std::uint8_t {
     LevelMeter  = 1,
 };
 
+// WIRE-FORMAT CONTRACT: the four enums above cross external boundaries as
+// their numeric values — BLE characteristics (Provider / OperationMode /
+// AudioOutput / LipSyncMode are 1-byte reads/writes from the web UI), the
+// HTTP settings API, and the NVS u8 keys all carry the raw value. Never
+// reorder or renumber; append new entries at the end only.
+static_assert(static_cast<int>(Provider::OpenAi) == 0 &&
+              static_cast<int>(Provider::Gemini) == 1 &&
+              static_cast<int>(Provider::XiaoZhi) == 2,
+              "Provider numbering is a BLE/HTTP/NVS wire contract — append only");
+static_assert(static_cast<int>(OperationMode::MicLipSync) == 0 &&
+              static_cast<int>(OperationMode::JttsRandom) == 1 &&
+              static_cast<int>(OperationMode::Conversation) == 2,
+              "OperationMode numbering is a BLE/HTTP/NVS wire contract — append only");
+static_assert(static_cast<int>(AudioOutput::Auto) == 0 &&
+              static_cast<int>(AudioOutput::Internal) == 1 &&
+              static_cast<int>(AudioOutput::ModuleAudio) == 2,
+              "AudioOutput numbering is a BLE/HTTP/NVS wire contract — append only");
+static_assert(static_cast<int>(LipSyncMode::Brightness) == 0 &&
+              static_cast<int>(LipSyncMode::LevelMeter) == 1,
+              "LipSyncMode numbering is a BLE/HTTP/NVS wire contract — append only");
+
 struct DeviceConfig {
     std::string wifi_ssid;
     std::string wifi_password;
