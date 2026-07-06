@@ -235,7 +235,7 @@ public:
         }
 
         ESP_LOGI(kTag, "waiting for Wi-Fi...");
-        state_.conversation_status.store(ConvStatus::WaitingWifi, std::memory_order_relaxed);
+        state_.conv.status.store(ConvStatus::WaitingWifi, std::memory_order_relaxed);
         while (!wifi_is_connected()) {
             vTaskDelay(pdMS_TO_TICKS(500));
         }
@@ -256,7 +256,7 @@ public:
                 ESP_LOGE(kTag,
                          "seg_buf not provided by app_main — conversation disabled "
                          "(boot-time internal-RAM reservation failed)");
-                state_.conversation_status.store(ConvStatus::Error, std::memory_order_relaxed);
+                state_.conv.status.store(ConvStatus::Error, std::memory_order_relaxed);
                 vTaskDelete(nullptr);
                 return;
             }
@@ -273,7 +273,7 @@ public:
 
         if (!connect()) {
             ESP_LOGE(kTag, "initial connect failed; conversation disabled");
-            state_.conversation_status.store(ConvStatus::Error, std::memory_order_relaxed);
+            state_.conv.status.store(ConvStatus::Error, std::memory_order_relaxed);
             vTaskDelete(nullptr);
             return;
         }
@@ -292,23 +292,23 @@ public:
                     ESP_LOGI(kTag, "yielding to BLE audio stream — stopping conversation");
                     M5.Mic.end();
                     M5.Speaker.end();
-                    state_.mouth_open.store(0.0f, std::memory_order_relaxed);
+                    state_.face.mouth_open.store(0.0f, std::memory_order_relaxed);
                     client_->stop();
                     vTaskDelay(pdMS_TO_TICKS(500));
                     flush_events();
                     assistant_pcm_.clear();
                     assistant_text_.clear();
                     set_local(Local::Yielded);
-                    state_.conversation_active.store(false, std::memory_order_relaxed);
-                    state_.conversation_idle.store(false, std::memory_order_relaxed);
-                    state_.conversation_yielded_i2s.store(true, std::memory_order_release);
+                    state_.conv.active.store(false, std::memory_order_relaxed);
+                    state_.conv.idle.store(false, std::memory_order_relaxed);
+                    state_.conv.yielded_i2s.store(true, std::memory_order_release);
                 }
                 vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
             }
             if (local_ == Local::Yielded) {
                 ESP_LOGI(kTag, "BLE audio done — restarting conversation");
-                state_.conversation_yielded_i2s.store(false, std::memory_order_release);
+                state_.conv.yielded_i2s.store(false, std::memory_order_release);
                 if (!connect()) {
                     ESP_LOGW(kTag, "reconnect after audio stream failed; retrying in 5 s");
                     vTaskDelay(pdMS_TO_TICKS(5000));
@@ -429,13 +429,13 @@ private:
         } else {
             ESP_LOGI(kTag, "graceful session handoff (goAway)");
         }
-        state_.conversation_status.store(ConvStatus::Reconnecting, std::memory_order_relaxed);
-        state_.conversation_reconnects.fetch_add(1, std::memory_order_relaxed);
+        state_.conv.status.store(ConvStatus::Reconnecting, std::memory_order_relaxed);
+        state_.conv.reconnects.fetch_add(1, std::memory_order_relaxed);
         if (local_ == Local::Speaking) {
             M5.Speaker.end();
             vTaskDelay(kI2sSettle);
         }
-        state_.mouth_open.store(0.0f, std::memory_order_relaxed);
+        state_.face.mouth_open.store(0.0f, std::memory_order_relaxed);
         client_->stop();
         // The shutdown fires WEBSOCKET_EVENT_DISCONNECTED (and sometimes a
         // trailing ERROR) which the trampoline turns into transport-error
@@ -488,7 +488,7 @@ private:
         if (state_.audio_stream_active.load(std::memory_order_acquire)) return;
         if (!connect()) {
             ESP_LOGE(kTag, "reconnect failed; retrying in 5 s");
-            state_.conversation_status.store(ConvStatus::Error, std::memory_order_relaxed);
+            state_.conv.status.store(ConvStatus::Error, std::memory_order_relaxed);
             vTaskDelay(pdMS_TO_TICKS(5000));
             flush_events();
             connect();
@@ -503,12 +503,12 @@ private:
     void set_local(Local s)
     {
         local_ = s;
-        state_.conversation_idle.store(s == Local::Listening, std::memory_order_relaxed);
+        state_.conv.idle.store(s == Local::Listening, std::memory_order_relaxed);
         // Mask servo motion for the entire reply playback (Speaking). Deriving
         // it from the state — rather than the speaker's isPlaying() — keeps the
         // head still across the brief silences between streamed reply segments,
         // which is exactly where the servo was twitching and cutting the audio.
-        state_.servo_masked.store(s == Local::Speaking, std::memory_order_relaxed);
+        state_.servo.masked.store(s == Local::Speaking, std::memory_order_relaxed);
         ConvStatus cs = ConvStatus::Connecting;
         switch (s) {
         case Local::Init: cs = ConvStatus::Connecting; break;
@@ -517,7 +517,7 @@ private:
         case Local::Speaking: cs = ConvStatus::Talking; break;
         case Local::Yielded: cs = ConvStatus::Yielded; break;
         }
-        state_.conversation_status.store(cs, std::memory_order_relaxed);
+        state_.conv.status.store(cs, std::memory_order_relaxed);
     }
 
     void service_state()
@@ -645,7 +645,7 @@ private:
     {
         M5.Speaker.end();
         vTaskDelay(kI2sSettle);
-        state_.mouth_open.store(0.0f, std::memory_order_relaxed);
+        state_.face.mouth_open.store(0.0f, std::memory_order_relaxed);
         // Safety net: log_playback_metrics already cleared these on
         // finish_speaking / barge_in, but recover_after_error skips that
         // path. Clear here so a stale pending entry from a half-finished
@@ -703,7 +703,7 @@ private:
     {
         const std::size_t window = speaker_sample_rate_ * kEnvelopeStepMs / 1000u;
         if (seg_pos_ < window) {
-            state_.mouth_open.store(0.0f, std::memory_order_relaxed);
+            state_.face.mouth_open.store(0.0f, std::memory_order_relaxed);
             return;
         }
         const std::size_t begin = seg_pos_ - window;
@@ -711,14 +711,14 @@ private:
         for (std::size_t i = begin; i < begin + window; ++i) {
             peak = std::max(peak, std::abs(static_cast<std::int32_t>(assistant_pcm_[i])));
         }
-        state_.mouth_open.store(static_cast<float>(peak) / 32767.0f, std::memory_order_relaxed);
+        state_.face.mouth_open.store(static_cast<float>(peak) / 32767.0f, std::memory_order_relaxed);
     }
 
     void finish_speaking()
     {
         M5.Speaker.end();
         vTaskDelay(kI2sSettle);
-        state_.mouth_open.store(0.0f, std::memory_order_relaxed);
+        state_.face.mouth_open.store(0.0f, std::memory_order_relaxed);
         log_playback_metrics();
         enter_listening();
     }
@@ -795,7 +795,7 @@ private:
             // local state machine owns mic/speaker timing.
             if (local_ == Local::Init && ev.state == conv::ConversationState::Listening) {
                 ESP_LOGI(kTag, "session ready");
-                state_.conversation_active.store(true, std::memory_order_relaxed);
+                state_.conv.active.store(true, std::memory_order_relaxed);
                 enter_listening();
             }
             // Any time the backend reaches Listening (= setup accepted, session
@@ -888,7 +888,7 @@ private:
             // tool_pending_ / the turn state machine.
             if (const auto expr = parse_emotion(ev.text.c_str())) {
                 ESP_LOGI(kTag, "emotion: %s", ev.text.c_str());
-                state_.expression.store(static_cast<int>(*expr), std::memory_order_relaxed);
+                state_.face.expression.store(static_cast<int>(*expr), std::memory_order_relaxed);
             }
             break;
 
@@ -966,7 +966,7 @@ private:
         const auto expr = parse_expression(name);
         std::string result;
         if (expr) {
-            state_.expression.store(static_cast<int>(*expr), std::memory_order_relaxed);
+            state_.face.expression.store(static_cast<int>(*expr), std::memory_order_relaxed);
             result = R"({"ok":true})";
         } else {
             result = R"({"ok":false,"error":"unknown expression"})";
@@ -1049,7 +1049,7 @@ private:
         auto update_mouth_from_envelope = [&](std::uint32_t elapsed_ms) {
             const std::size_t idx = elapsed_ms / kEnvelopeStepMs;
             const float open = idx < envelope.size() ? envelope[idx] : 0.0f;
-            state_.mouth_open.store(open, std::memory_order_relaxed);
+            state_.face.mouth_open.store(open, std::memory_order_relaxed);
         };
 
         const std::uint32_t start_ms = now_ms();
@@ -1074,7 +1074,7 @@ private:
 
         M5.Speaker.end();
         vTaskDelay(kI2sSettle);
-        state_.mouth_open.store(0.0f, std::memory_order_relaxed);
+        state_.face.mouth_open.store(0.0f, std::memory_order_relaxed);
         return R"({"ok":true})";
     }
 
@@ -1090,8 +1090,8 @@ private:
         if (cJSON_IsNumber(yaw) && cJSON_IsNumber(pitch)) {
             const float yaw_deg = std::clamp(static_cast<float>(yaw->valuedouble), -40.0f, 40.0f);
             const float pitch_deg = std::clamp(static_cast<float>(pitch->valuedouble), -10.0f, 25.0f);
-            state_.target_yaw_deg.store(yaw_deg, std::memory_order_relaxed);
-            state_.target_pitch_deg.store(pitch_deg, std::memory_order_relaxed);
+            state_.servo.target_yaw_deg.store(yaw_deg, std::memory_order_relaxed);
+            state_.servo.target_pitch_deg.store(pitch_deg, std::memory_order_relaxed);
             result = R"({"ok":true})";
         } else {
             result = R"({"ok":false,"error":"yaw_deg and pitch_deg required"})";

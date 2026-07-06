@@ -29,12 +29,12 @@ void LtTimer::configure(const std::string& json, SharedState* state)
         cJSON_IsNumber(v) && v->valueint > 0 && v->valueint <= 0xFFFF && state != nullptr) {
         // Don't yank a live countdown; the new default applies from the
         // next start. lt_remaining_s doubles as the idle-state display.
-        if (!state->lt_active.load(std::memory_order_relaxed)) {
-            state->lt_total_s.store(static_cast<std::uint16_t>(v->valueint),
+        if (!state->lt.active.load(std::memory_order_relaxed)) {
+            state->lt.total_s.store(static_cast<std::uint16_t>(v->valueint),
                                     std::memory_order_relaxed);
-            state->lt_remaining_s.store(v->valueint, std::memory_order_relaxed);
+            state->lt.remaining_s.store(v->valueint, std::memory_order_relaxed);
         } else {
-            state->lt_total_s.store(static_cast<std::uint16_t>(v->valueint),
+            state->lt.total_s.store(static_cast<std::uint16_t>(v->valueint),
                                     std::memory_order_relaxed);
         }
     }
@@ -82,26 +82,26 @@ void LtTimer::announce(SharedState& state, Speech& speech,
 void LtTimer::tick(SharedState& state, Speech& speech, std::uint32_t now_ms)
 {
     // Consume a pending UI command (exchange so we never double-run one).
-    switch (state.lt_command.exchange(0, std::memory_order_acq_rel)) {
+    switch (state.lt.command.exchange(0, std::memory_order_acq_rel)) {
     case 1: { // start
-        const std::uint32_t total_s = state.lt_total_s.load(std::memory_order_relaxed);
+        const std::uint32_t total_s = state.lt.total_s.load(std::memory_order_relaxed);
         deadline_ms_ = now_ms + total_s * 1000U;
         running_ = true;
         warned_ = false;
         soon_fired_ = false;
         just_fired_ = false;
         next_over_ms_ = 0;
-        state.lt_active.store(true, std::memory_order_relaxed);
-        state.lt_remaining_s.store(static_cast<std::int32_t>(total_s), std::memory_order_relaxed);
+        state.lt.active.store(true, std::memory_order_relaxed);
+        state.lt.remaining_s.store(static_cast<std::int32_t>(total_s), std::memory_order_relaxed);
         ESP_LOGI(kTag, "start: %u s", static_cast<unsigned>(total_s));
         break;
     }
     case 2: // stop / reset
         if (running_) ESP_LOGI(kTag, "stopped");
         running_ = false;
-        state.lt_active.store(false, std::memory_order_relaxed);
-        state.lt_remaining_s.store(
-            static_cast<std::int32_t>(state.lt_total_s.load(std::memory_order_relaxed)),
+        state.lt.active.store(false, std::memory_order_relaxed);
+        state.lt.remaining_s.store(
+            static_cast<std::int32_t>(state.lt.total_s.load(std::memory_order_relaxed)),
             std::memory_order_relaxed);
         break;
     default:
@@ -116,7 +116,7 @@ void LtTimer::tick(SharedState& state, Speech& speech, std::uint32_t now_ms)
         static_cast<std::int64_t>(deadline_ms_) - static_cast<std::int64_t>(now_ms);
     const auto remaining_s = static_cast<std::int32_t>(
         remaining_ms >= 0 ? (remaining_ms + 999) / 1000 : remaining_ms / 1000);
-    state.lt_remaining_s.store(remaining_s, std::memory_order_relaxed);
+    state.lt.remaining_s.store(remaining_s, std::memory_order_relaxed);
 
     if (!warned_ && remaining_ms <= static_cast<std::int64_t>(cfg_.warn_s) * 1000) {
         warned_ = true;

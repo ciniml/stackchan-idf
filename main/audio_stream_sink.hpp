@@ -10,7 +10,7 @@ namespace stackchan::app::audio_stream {
 // Initialise the BLE audio streaming sink and register it with
 // config_service. Spawns a worker task that owns the AAC decoder, drains
 // incoming ADTS bytes, plays the decoded PCM through M5.Speaker, and
-// updates `state.mouth_open` from the chunk RMS.
+// updates `state.face.mouth_open` from the chunk RMS.
 //
 // `conversation_enabled` reflects cfg.openai_enabled: when the realtime
 // conversation backend is active it contends with BLE for the radio/CPU

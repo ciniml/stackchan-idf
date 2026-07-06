@@ -171,8 +171,8 @@ void poll_button()
             // demo_loop watches the atom and re-applies the M5.Speaker
             // volume; render_task shows the mute badge for feedback.
             if (g_state != nullptr) {
-                g_state->speaker_muted.store(
-                    !g_state->speaker_muted.load(std::memory_order_relaxed),
+                g_state->speaker.muted.store(
+                    !g_state->speaker.muted.load(std::memory_order_relaxed),
                     std::memory_order_relaxed);
             }
         }
@@ -211,7 +211,7 @@ bool draw(avatar::RichCanvas& canvas)
     const bool wifi = wifi_is_connected();
     const bool ble = config::ble_connected();
     const std::string ip = current_ip();
-    const ConvStatus cs = g_state ? g_state->conversation_status.load(std::memory_order_relaxed)
+    const ConvStatus cs = g_state ? g_state->conv.status.load(std::memory_order_relaxed)
                                   : ConvStatus::Disabled;
 
     // Format wall-clock time. SNTP sets system time on first WiFi GOT_IP
@@ -258,7 +258,7 @@ bool draw(avatar::RichCanvas& canvas)
     // Mute marker folded into the Mode row — a dedicated row would push the
     // 128 px layout past the panel edge.
     const bool muted = g_state != nullptr &&
-                       g_state->speaker_muted.load(std::memory_order_relaxed);
+                       g_state->speaker.muted.load(std::memory_order_relaxed);
     char mode_buf[20];
     std::snprintf(mode_buf, sizeof(mode_buf), "%s%s", op_mode_short(g_op_mode),
                   muted ? " (mute)" : "");

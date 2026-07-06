@@ -306,9 +306,9 @@ void mic_lip_sync_task_entry(void* arg)
         // Pull the calibration sliders. Both are integer percent (100 = 1.0x).
         // Clamp to a sane range so a corrupted NVS slot can't divide-by-zero
         // or send the mouth to NaN.
-        const std::uint16_t in_pct  = state->mic_lip_input_gain_pct.load(
+        const std::uint16_t in_pct  = state->mic_lip.input_gain_pct.load(
             std::memory_order_relaxed);
-        const std::uint16_t out_pct = state->mic_lip_output_gain_pct.load(
+        const std::uint16_t out_pct = state->mic_lip.output_gain_pct.load(
             std::memory_order_relaxed);
         const float in_gain  = static_cast<float>(in_pct  ? in_pct  : 100) / 100.0f;
         const float out_gain = static_cast<float>(out_pct ? out_pct : 100) / 100.0f;
@@ -316,7 +316,7 @@ void mic_lip_sync_task_entry(void* arg)
         // FFT-based voice-band log energy + spectral-flux onset detector.
         // estimate_mouth_open already normalises to [0, 1]; output gain
         // scales beyond that, saturating quiet inputs to full mouth open.
-        const bool agc_on = state->mic_lip_agc_enabled.load(std::memory_order_relaxed);
+        const bool agc_on = state->mic_lip.agc_enabled.load(std::memory_order_relaxed);
         float level = estimate_mouth_open(buf.data(), buf.size(), in_gain, agc_on);
         level *= out_gain;
         if (level > 1.0f) level = 1.0f;
@@ -327,7 +327,7 @@ void mic_lip_sync_task_entry(void* arg)
         const float coef = (level > smoothed) ? kAttack : kRelease;
         smoothed += (level - smoothed) * coef;
 
-        state->mouth_open.store(smoothed, std::memory_order_relaxed);
+        state->face.mouth_open.store(smoothed, std::memory_order_relaxed);
     }
 }
 

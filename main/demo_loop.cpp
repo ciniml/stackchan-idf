@@ -130,10 +130,10 @@ constexpr const char* kTag = "stackchan";
     // setVolume + NVS path the BLE / WiFi sinks use. Seeded from the
     // current atom (set by boot's apply_speaker_volume_sink call).
     std::uint16_t last_speaker_volume_pct =
-        g_state->speaker_volume_pct.load(std::memory_order_relaxed);
+        g_state->speaker.volume_pct.load(std::memory_order_relaxed);
     // One-touch mute edge detection (corner tap / BtnA hold). Applied via
     // apply_speaker_volume (NOT the sink) — mute is session-only, no NVS.
-    bool last_speaker_muted = g_state->speaker_muted.load(std::memory_order_relaxed);
+    bool last_speaker_muted = g_state->speaker.muted.load(std::memory_order_relaxed);
 
     // Set true by the (render-task) completion callback so demo_loop knows
     // the previous balloon finished. Atomics keep it thread-safe.
@@ -177,7 +177,7 @@ constexpr const char* kTag = "stackchan";
         // iteration; only triggers M5.Speaker.setVolume + NVS write on
         // an actual change.
         {
-            const std::uint16_t cur = g_state->speaker_volume_pct.load(std::memory_order_relaxed);
+            const std::uint16_t cur = g_state->speaker.volume_pct.load(std::memory_order_relaxed);
             if (cur != last_speaker_volume_pct) {
                 last_speaker_volume_pct = cur;
                 settings_sinks::apply_speaker_volume_persist(cur);
@@ -191,11 +191,11 @@ constexpr const char* kTag = "stackchan";
         // applies master volume per chunk. A short haptic confirms the
         // toggle on boards with a vibration motor (no-op elsewhere).
         {
-            const bool muted = g_state->speaker_muted.load(std::memory_order_relaxed);
+            const bool muted = g_state->speaker.muted.load(std::memory_order_relaxed);
             if (muted != last_speaker_muted) {
                 last_speaker_muted = muted;
                 settings_sinks::apply_speaker_volume(
-                    g_state->speaker_volume_pct.load(std::memory_order_relaxed));
+                    g_state->speaker.volume_pct.load(std::memory_order_relaxed));
                 ESP_LOGI(kTag, "speaker %s", muted ? "muted" : "unmuted");
                 if (g_board != nullptr) (void)g_board->vibrate(20);
             }
@@ -212,12 +212,12 @@ constexpr const char* kTag = "stackchan";
                 const float mag = std::sqrt(ax * ax + ay * ay + az * az);
                 if (mag >= kShakeThresholdG) {
                     next_shake_ms = now_ms + kShakeCooldownMs;
-                    const int cur = g_state->expression.load(std::memory_order_relaxed);
+                    const int cur = g_state->face.expression.load(std::memory_order_relaxed);
                     int next = cur;
                     for (int i = 0; i < 4 && next == cur; ++i) {
                         next = static_cast<int>(esp_random() % 6);
                     }
-                    g_state->expression.store(next, std::memory_order_relaxed);
+                    g_state->face.expression.store(next, std::memory_order_relaxed);
                     ESP_LOGI(kTag, "shake |a|=%.2fg → expression %d", mag, next);
                     if (g_board != nullptr) (void)g_board->vibrate(60);
                 }
@@ -227,8 +227,8 @@ constexpr const char* kTag = "stackchan";
         // confirmation. wasPressed() is false on boards without BtnB so the
         // check is harmless universally.
         if (M5.BtnB.wasPressed()) {
-            const int cur = g_state->expression.load(std::memory_order_relaxed);
-            g_state->expression.store((cur + 1) % 6, std::memory_order_relaxed);
+            const int cur = g_state->face.expression.load(std::memory_order_relaxed);
+            g_state->face.expression.store((cur + 1) % 6, std::memory_order_relaxed);
             if (g_board != nullptr) (void)g_board->vibrate(30);
         }
         // BtnA on StopWatch (= Yellow / G2) — toggle the device_ui open/close.
@@ -263,9 +263,9 @@ constexpr const char* kTag = "stackchan";
                 const int mv = static_cast<int>(r->voltage * 1000.0f + 0.5f);
                 const int ma = static_cast<int>(r->current * 1000.0f + (r->current >= 0 ? 0.5f : -0.5f));
                 const int pct = app::battery_percent_from_voltage(r->voltage);
-                g_state->battery_mv.store(static_cast<std::int16_t>(mv), std::memory_order_relaxed);
-                g_state->battery_ma.store(static_cast<std::int16_t>(ma), std::memory_order_relaxed);
-                g_state->battery_pct.store(static_cast<std::int8_t>(pct), std::memory_order_relaxed);
+                g_state->battery.mv.store(static_cast<std::int16_t>(mv), std::memory_order_relaxed);
+                g_state->battery.ma.store(static_cast<std::int16_t>(ma), std::memory_order_relaxed);
+                g_state->battery.pct.store(static_cast<std::int8_t>(pct), std::memory_order_relaxed);
                 config::notify_battery(mv, ma, pct);
                 wifi_config::set_battery(mv, ma, pct);
             }
@@ -306,8 +306,8 @@ constexpr const char* kTag = "stackchan";
                 // playback.
                 if (!ui_consumed &&
                     g_state->barge_in_enabled.load(std::memory_order_relaxed) &&
-                    g_state->conversation_active.load(std::memory_order_relaxed) &&
-                    !g_state->conversation_idle.load(std::memory_order_relaxed)) {
+                    g_state->conv.active.load(std::memory_order_relaxed) &&
+                    !g_state->conv.idle.load(std::memory_order_relaxed)) {
                     g_state->barge_in_request.store(true, std::memory_order_relaxed);
                 }
             }
@@ -337,22 +337,22 @@ constexpr const char* kTag = "stackchan";
                         // amplify by kGazeGain so the offset is visible
                         // through the VM's gaze * 3 multiplier.
                         const float inv = 1.0f / r;
-                        g_state->gaze_target_h.store(dx * inv * kGazeGain,
+                        g_state->face.gaze_target_h.store(dx * inv * kGazeGain,
                                                      std::memory_order_relaxed);
-                        g_state->gaze_target_v.store(dy * inv * kGazeGain,
+                        g_state->face.gaze_target_v.store(dy * inv * kGazeGain,
                                                      std::memory_order_relaxed);
                         follow_active = true;
                     }
                 }
                 if (!follow_active) {
-                    g_state->gaze_target_h.store(0.0f, std::memory_order_relaxed);
-                    g_state->gaze_target_v.store(0.0f, std::memory_order_relaxed);
+                    g_state->face.gaze_target_h.store(0.0f, std::memory_order_relaxed);
+                    g_state->face.gaze_target_v.store(0.0f, std::memory_order_relaxed);
                 }
             }
         }
 
-        const bool conv_active = g_state->conversation_active.load(std::memory_order_relaxed);
-        const bool conv_idle = g_state->conversation_idle.load(std::memory_order_relaxed);
+        const bool conv_active = g_state->conv.active.load(std::memory_order_relaxed);
+        const bool conv_idle = g_state->conv.idle.load(std::memory_order_relaxed);
         const bool audio_streaming = g_state->audio_stream_active.load(std::memory_order_relaxed);
 
         // While a BLE audio stream is playing, the streamer owns the speaker
@@ -388,7 +388,7 @@ constexpr const char* kTag = "stackchan";
             // `mouth_open` without us overwriting it with 0 every tick.
             if (jtts_idle_enabled) {
                 // Mouth opens with the current speech envelope; closed while silent.
-                g_state->mouth_open.store(speech.current_mouth_open(), std::memory_order_relaxed);
+                g_state->face.mouth_open.store(speech.current_mouth_open(), std::memory_order_relaxed);
 
                 // The "Wi-Fi: 切断中" balloon and the babble suppression below only
                 // make sense when the assistant actually needs the network — i.e.
@@ -495,12 +495,12 @@ constexpr const char* kTag = "stackchan";
                          static_cast<unsigned>(stroke_hit_ms[2]));
                 stackchan::wifi_config::mcp_events::publish_touch_stroke(direction);
                 speech.stop();
-                const float prev_yaw = g_state->target_yaw_deg.load(std::memory_order_relaxed);
-                const int prev_expr = g_state->expression.load(std::memory_order_relaxed);
+                const float prev_yaw = g_state->servo.target_yaw_deg.load(std::memory_order_relaxed);
+                const int prev_expr = g_state->face.expression.load(std::memory_order_relaxed);
 
-                g_state->expression.store(static_cast<int>(avatar::Expression::Happy),
+                g_state->face.expression.store(static_cast<int>(avatar::Expression::Happy),
                                           std::memory_order_relaxed);
-                g_state->servo_speed_override.store(800, std::memory_order_relaxed); // ~120°/s
+                g_state->servo.speed_override.store(800, std::memory_order_relaxed); // ~120°/s
                 balloon_in_flight.store(true, std::memory_order_release);
                 g_state->set_balloon_text("なでなで♡", /*hold_ms=*/2200, [] {
                     balloon_in_flight.store(false, std::memory_order_release);
@@ -509,15 +509,15 @@ constexpr const char* kTag = "stackchan";
                 constexpr float kWobbleDeg = 8.0f;
                 constexpr std::uint32_t kHalfPeriodMs = 160;
                 for (int i = 0; i < 4; ++i) {
-                    g_state->target_yaw_deg.store(-kWobbleDeg, std::memory_order_relaxed);
+                    g_state->servo.target_yaw_deg.store(-kWobbleDeg, std::memory_order_relaxed);
                     vTaskDelay(pdMS_TO_TICKS(kHalfPeriodMs));
-                    g_state->target_yaw_deg.store(+kWobbleDeg, std::memory_order_relaxed);
+                    g_state->servo.target_yaw_deg.store(+kWobbleDeg, std::memory_order_relaxed);
                     vTaskDelay(pdMS_TO_TICKS(kHalfPeriodMs));
                 }
-                g_state->target_yaw_deg.store(prev_yaw, std::memory_order_relaxed);
+                g_state->servo.target_yaw_deg.store(prev_yaw, std::memory_order_relaxed);
                 vTaskDelay(pdMS_TO_TICKS(kHalfPeriodMs));
-                g_state->servo_speed_override.store(0, std::memory_order_relaxed);
-                g_state->expression.store(prev_expr, std::memory_order_relaxed);
+                g_state->servo.speed_override.store(0, std::memory_order_relaxed);
+                g_state->face.expression.store(prev_expr, std::memory_order_relaxed);
 
                 stroke_hit_ms = {0, 0, 0};
                 stroke_active_ms = 0;
@@ -533,15 +533,15 @@ constexpr const char* kTag = "stackchan";
 
         // Random yaw + pitch every 10–20 s.
         if (now_ms >= next_pose_ms) {
-            g_state->target_yaw_deg.store(rand_in(kYawMinDeg, kYawMaxDeg), std::memory_order_relaxed);
-            g_state->target_pitch_deg.store(rand_in(kPitchMinDeg, kPitchMaxDeg), std::memory_order_relaxed);
+            g_state->servo.target_yaw_deg.store(rand_in(kYawMinDeg, kYawMaxDeg), std::memory_order_relaxed);
+            g_state->servo.target_pitch_deg.store(rand_in(kPitchMinDeg, kPitchMaxDeg), std::memory_order_relaxed);
             next_pose_ms = now_ms + rand_range_ms(kPoseMinMs, kPoseMaxMs);
         }
 
         // Cycle expression every 5 s — full demo only; during a conversation
         // the model drives the expression via the set_expression tool.
         if (allow_full_demo && now_ms >= next_expression_ms) {
-            g_state->expression.store(static_cast<int>(kCycle[expression_index]), std::memory_order_relaxed);
+            g_state->face.expression.store(static_cast<int>(kCycle[expression_index]), std::memory_order_relaxed);
             expression_index = (expression_index + 1) % (sizeof(kCycle) / sizeof(kCycle[0]));
             next_expression_ms = now_ms + kExpressionPeriodMs;
         }

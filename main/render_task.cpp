@@ -221,20 +221,20 @@ void render_task_entry(void* arg)
         // Mute badge appears/disappears with the flag; the direct (partial-
         // update) strategy never repaints untouched pixels, so force a full
         // repaint on each edge or the stale badge lingers after unmute.
-        const bool muted_now = state->speaker_muted.load(std::memory_order_relaxed);
+        const bool muted_now = state->speaker.muted.load(std::memory_order_relaxed);
         if (muted_now != last_muted) {
             last_muted = muted_now;
             avatar.request_full_repaint();
         }
 
-        const int expr = args.state->expression.load(std::memory_order_relaxed);
+        const int expr = args.state->face.expression.load(std::memory_order_relaxed);
         if (expr != last_expression) {
             avatar.set_expression(static_cast<avatar::Expression>(expr));
             last_expression = expr;
         }
-        avatar.set_mouth_open(args.state->mouth_open.load(std::memory_order_relaxed));
-        avatar.set_gaze(args.state->gaze_target_h.load(std::memory_order_relaxed),
-                        args.state->gaze_target_v.load(std::memory_order_relaxed));
+        avatar.set_mouth_open(args.state->face.mouth_open.load(std::memory_order_relaxed));
+        avatar.set_gaze(args.state->face.gaze_target_h.load(std::memory_order_relaxed),
+                        args.state->face.gaze_target_v.load(std::memory_order_relaxed));
 
         const std::uint32_t balloon_version = args.state->balloon_version();
         if (balloon_version != last_balloon_version) {
@@ -256,8 +256,8 @@ void render_task_entry(void* arg)
 
         // Battery gauge overlay. Live from SharedState.
         bool gauge_shown = false;
-        if (state->battery_gauge_enabled.load(std::memory_order_relaxed)) {
-            const int pct = state->battery_pct.load(std::memory_order_relaxed);
+        if (state->battery.gauge_enabled.load(std::memory_order_relaxed)) {
+            const int pct = state->battery.pct.load(std::memory_order_relaxed);
             if (pct >= 0) {
                 draw_battery_gauge(canvas, pct);
                 gauge_shown = true;
@@ -267,7 +267,7 @@ void render_task_entry(void* arg)
         // Mute badge, below the battery gauge when both are up. Round
         // panels (StopWatch) inset it to the inscribed square so it stays
         // on the visible circle.
-        if (state->speaker_muted.load(std::memory_order_relaxed)) {
+        if (state->speaker.muted.load(std::memory_order_relaxed)) {
             const int inset = args.circular_display
                 ? static_cast<int>(canvas_w * (1.0f - 0.70710678f) * 0.5f) + 4
                 : 6;

@@ -64,14 +64,14 @@ void on_face_config(std::string_view json)
 void on_servo_range_mode(bool on)
 {
     if (g_state != nullptr) {
-        g_state->servo_range_mode.store(on, std::memory_order_relaxed);
+        g_state->servo.range_mode.store(on, std::memory_order_relaxed);
     }
 }
 stackchan::config::ServoPositionsView servo_positions()
 {
     if (g_state == nullptr) return {-1, -1};
-    return {g_state->servo_yaw_raw.load(std::memory_order_relaxed),
-            g_state->servo_pitch_raw.load(std::memory_order_relaxed)};
+    return {g_state->servo.yaw_raw.load(std::memory_order_relaxed),
+            g_state->servo.pitch_raw.load(std::memory_order_relaxed)};
 }
 
 // LED state pulled live out of SharedState atomics. Used by both BLE chr 0x20
@@ -80,13 +80,13 @@ stackchan::config::LedState read_led_state()
 {
     stackchan::config::LedState s{};
     if (g_state == nullptr) return s;
-    const std::uint32_t color = g_state->led_color.load(std::memory_order_relaxed);
-    s.mode = g_state->led_mode.load(std::memory_order_relaxed);
+    const std::uint32_t color = g_state->led.color.load(std::memory_order_relaxed);
+    s.mode = g_state->led.mode.load(std::memory_order_relaxed);
     s.r = static_cast<std::uint8_t>((color >> 16) & 0xFF);
     s.g = static_cast<std::uint8_t>((color >>  8) & 0xFF);
     s.b = static_cast<std::uint8_t>( color        & 0xFF);
-    s.brightness = g_state->led_brightness.load(std::memory_order_relaxed);
-    s.gradient_period_ds = g_state->led_gradient_period_ds.load(std::memory_order_relaxed);
+    s.brightness = g_state->led.brightness.load(std::memory_order_relaxed);
+    s.gradient_period_ds = g_state->led.gradient_period_ds.load(std::memory_order_relaxed);
     return s;
 }
 
@@ -100,39 +100,39 @@ void apply_led_patch(const stackchan::config::LedStatePatch& p)
         const std::uint8_t m = *p.mode;
         // Clamp invalid modes to "off" rather than ignoring — easier to debug
         // a typo from a client than a silently-dropped value.
-        g_state->led_mode.store(m <= 3 ? m : 0, std::memory_order_relaxed);
+        g_state->led.mode.store(m <= 3 ? m : 0, std::memory_order_relaxed);
     }
     if (p.r || p.g || p.b) {
-        std::uint32_t cur = g_state->led_color.load(std::memory_order_relaxed);
+        std::uint32_t cur = g_state->led.color.load(std::memory_order_relaxed);
         std::uint8_t cr = static_cast<std::uint8_t>((cur >> 16) & 0xFF);
         std::uint8_t cg = static_cast<std::uint8_t>((cur >>  8) & 0xFF);
         std::uint8_t cb = static_cast<std::uint8_t>( cur        & 0xFF);
         if (p.r) cr = *p.r;
         if (p.g) cg = *p.g;
         if (p.b) cb = *p.b;
-        g_state->led_color.store((static_cast<std::uint32_t>(cr) << 16) |
+        g_state->led.color.store((static_cast<std::uint32_t>(cr) << 16) |
                                  (static_cast<std::uint32_t>(cg) <<  8) |
                                  static_cast<std::uint32_t>(cb),
                                  std::memory_order_relaxed);
     }
     if (p.brightness) {
-        g_state->led_brightness.store(*p.brightness, std::memory_order_relaxed);
+        g_state->led.brightness.store(*p.brightness, std::memory_order_relaxed);
     }
     if (p.gradient_period_ds) {
         // Clamp 0 → 1 so the divisor in led_task never hits zero. The wire
         // protocol accepts the full u8 range; we just refuse the one
         // pathological value here rather than sprinkle clamps on every read.
         const std::uint8_t v = *p.gradient_period_ds == 0 ? 1 : *p.gradient_period_ds;
-        g_state->led_gradient_period_ds.store(v, std::memory_order_relaxed);
+        g_state->led.gradient_period_ds.store(v, std::memory_order_relaxed);
     }
     // Persist immediately so a reboot replays the same look. The settings
     // UI debounces writes ~150 ms so we don't write to NVS faster than the
     // user can drag a slider; HTTP clients posting in a loop are on their
     // own (no debounce here).
-    const std::uint8_t mode = g_state->led_mode.load(std::memory_order_relaxed);
-    const std::uint32_t color = g_state->led_color.load(std::memory_order_relaxed);
-    const std::uint8_t bright = g_state->led_brightness.load(std::memory_order_relaxed);
-    const std::uint8_t period_ds = g_state->led_gradient_period_ds.load(std::memory_order_relaxed);
+    const std::uint8_t mode = g_state->led.mode.load(std::memory_order_relaxed);
+    const std::uint32_t color = g_state->led.color.load(std::memory_order_relaxed);
+    const std::uint8_t bright = g_state->led.brightness.load(std::memory_order_relaxed);
+    const std::uint8_t period_ds = g_state->led.gradient_period_ds.load(std::memory_order_relaxed);
     (void)stackchan::config::store::save_led_state(mode, color, bright, period_ds);
 }
 
@@ -143,8 +143,8 @@ stackchan::config::MicLipGain read_mic_lip_gain()
 {
     stackchan::config::MicLipGain g{100, 100};
     if (g_state == nullptr) return g;
-    const std::uint16_t in_pct = g_state->mic_lip_input_gain_pct.load(std::memory_order_relaxed);
-    const std::uint16_t out_pct = g_state->mic_lip_output_gain_pct.load(std::memory_order_relaxed);
+    const std::uint16_t in_pct = g_state->mic_lip.input_gain_pct.load(std::memory_order_relaxed);
+    const std::uint16_t out_pct = g_state->mic_lip.output_gain_pct.load(std::memory_order_relaxed);
     g.input_pct = in_pct ? in_pct : 100;
     g.output_pct = out_pct ? out_pct : 100;
     return g;
@@ -163,15 +163,15 @@ void apply_mic_lip_gain(const stackchan::config::MicLipGain& g)
     };
     const std::uint16_t in_pct  = clamp(g.input_pct);
     const std::uint16_t out_pct = clamp(g.output_pct);
-    g_state->mic_lip_input_gain_pct.store(in_pct, std::memory_order_relaxed);
-    g_state->mic_lip_output_gain_pct.store(out_pct, std::memory_order_relaxed);
+    g_state->mic_lip.input_gain_pct.store(in_pct, std::memory_order_relaxed);
+    g_state->mic_lip.output_gain_pct.store(out_pct, std::memory_order_relaxed);
     (void)stackchan::config::store::save_mic_lip_gain(in_pct, out_pct);
 }
 
 std::uint16_t read_speaker_volume_pct()
 {
     if (g_state == nullptr) return 100;
-    return g_state->speaker_volume_pct.load(std::memory_order_relaxed);
+    return g_state->speaker.volume_pct.load(std::memory_order_relaxed);
 }
 
 // Spawn a PSRAM-stack worker that synthesises `kana_utf8` via jtts and
@@ -317,12 +317,12 @@ void apply_speaker_volume(std::uint16_t pct) noexcept
     if (v < 0) v = 0;
     // One-touch mute overrides the percent: master volume goes to 0 while
     // the flag is set, and the user's pct survives untouched for unmute.
-    if (g_state != nullptr && g_state->speaker_muted.load(std::memory_order_relaxed)) {
+    if (g_state != nullptr && g_state->speaker.muted.load(std::memory_order_relaxed)) {
         v = 0;
     }
     M5.Speaker.setVolume(static_cast<std::uint8_t>(v));
     if (g_state != nullptr) {
-        g_state->speaker_volume_pct.store(pct, std::memory_order_relaxed);
+        g_state->speaker.volume_pct.store(pct, std::memory_order_relaxed);
     }
 }
 
@@ -402,7 +402,7 @@ void register_mcp_sinks()
             else if (name == "doubt")   v = static_cast<int>(E::Doubt);
             else if (name == "sleepy")  v = static_cast<int>(E::Sleepy);
             else if (name == "neutral") v = static_cast<int>(E::Neutral);
-            g_state->expression.store(v, std::memory_order_relaxed);
+            g_state->face.expression.store(v, std::memory_order_relaxed);
         });
 
     stackchan::wifi_config::set_mcp_balloon_sink(

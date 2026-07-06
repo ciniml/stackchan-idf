@@ -104,9 +104,9 @@ void led_task_entry(void* arg)
             vTaskDelayUntil(&last_wake, kPeriodTicks);
             continue;
         }
-        const std::uint8_t mode = state.led_mode.load(std::memory_order_relaxed);
-        const std::uint32_t color = state.led_color.load(std::memory_order_relaxed);
-        const std::uint8_t base_bright = state.led_brightness.load(std::memory_order_relaxed);
+        const std::uint8_t mode = state.led.mode.load(std::memory_order_relaxed);
+        const std::uint32_t color = state.led.color.load(std::memory_order_relaxed);
+        const std::uint8_t base_bright = state.led.brightness.load(std::memory_order_relaxed);
         const std::uint8_t cr = static_cast<std::uint8_t>((color >> 16) & 0xFF);
         const std::uint8_t cg = static_cast<std::uint8_t>((color >>  8) & 0xFF);
         const std::uint8_t cb = static_cast<std::uint8_t>( color        & 0xFF);
@@ -125,15 +125,15 @@ void led_task_entry(void* arg)
         //     this mode (the meter visualises the level instead).
         // All mouth_open writers (mic lip-sync, jtts babble, conversation
         // playback) feed through the same atomic.
-        const bool mouth_sync = state.led_mouth_sync_enabled.load(std::memory_order_relaxed);
-        const std::uint8_t lip_mode = state.lip_sync_mode.load(std::memory_order_relaxed);
+        const bool mouth_sync = state.led.mouth_sync_enabled.load(std::memory_order_relaxed);
+        const std::uint8_t lip_mode = state.led.lip_sync_mode.load(std::memory_order_relaxed);
         const bool level_meter_active = mouth_sync && lip_mode == kLipLevelMeter;
 
         constexpr float kMouthFloor = 0.25f;
         std::uint8_t bright = base_bright;
         float mouth = 0.0f;
         if (mouth_sync) {
-            mouth = state.mouth_open.load(std::memory_order_relaxed);
+            mouth = state.face.mouth_open.load(std::memory_order_relaxed);
             if (mouth < 0.0f) mouth = 0.0f;
             if (mouth > 1.0f) mouth = 1.0f;
             if (lip_mode == kLipBrightness) {
@@ -166,7 +166,7 @@ void led_task_entry(void* arg)
             // brightness applies. Clamp the divisor so a runaway 0 doesn't
             // blow up the float division.
             const std::uint8_t period_ds = std::max<std::uint8_t>(
-                1, state.led_gradient_period_ds.load(std::memory_order_relaxed));
+                1, state.led.gradient_period_ds.load(std::memory_order_relaxed));
             const float period_s = static_cast<float>(period_ds) * 0.1f;
             const float h0 = t / period_s;
             for (std::size_t i = 0; i < n; ++i) {

@@ -508,7 +508,7 @@ extern "C" void app_main()
     // need the atom mirrored so the BLE / WiFi getters and the
     // device-UI row read the correct value when the user first opens
     // a settings page.
-    g_state->speaker_volume_pct.store(cfg.speaker_volume_pct, std::memory_order_relaxed);
+    g_state->speaker.volume_pct.store(cfg.speaker_volume_pct, std::memory_order_relaxed);
     // Seed the avatar face tuning from NVS (empty → built-in default face) and
     // register the live BLE update sink, both before config::start brings the
     // GATT service online so an early client write is applied immediately.
@@ -518,29 +518,29 @@ extern "C" void app_main()
     if (!cfg.lt_config_json.empty()) {
         g_state->set_lt_config(cfg.lt_config_json);
     }
-    g_state->battery_gauge_enabled.store(cfg.battery_gauge_enabled, std::memory_order_relaxed);
+    g_state->battery.gauge_enabled.store(cfg.battery_gauge_enabled, std::memory_order_relaxed);
     // LED state: replay the persisted values so the strip lights up the same
     // way it did before the reboot. NVS-missing → DeviceConfig's struct
     // defaults (gradient @ ~10%) so a fresh-install device still glows.
-    g_state->led_mode.store(cfg.led_mode, std::memory_order_relaxed);
-    g_state->led_color.store(cfg.led_color, std::memory_order_relaxed);
-    g_state->led_brightness.store(cfg.led_brightness, std::memory_order_relaxed);
-    g_state->led_gradient_period_ds.store(
+    g_state->led.mode.store(cfg.led_mode, std::memory_order_relaxed);
+    g_state->led.color.store(cfg.led_color, std::memory_order_relaxed);
+    g_state->led.brightness.store(cfg.led_brightness, std::memory_order_relaxed);
+    g_state->led.gradient_period_ds.store(
         cfg.led_gradient_period_ds == 0 ? 1 : cfg.led_gradient_period_ds,
         std::memory_order_relaxed);
     // Mic lip-sync calibration: seed atomics from NVS. The mic task reads
     // them every loop iteration so slider changes take effect immediately.
-    g_state->mic_lip_input_gain_pct.store(
+    g_state->mic_lip.input_gain_pct.store(
         cfg.mic_lip_input_gain_pct ? cfg.mic_lip_input_gain_pct : 100,
         std::memory_order_relaxed);
-    g_state->mic_lip_output_gain_pct.store(
+    g_state->mic_lip.output_gain_pct.store(
         cfg.mic_lip_output_gain_pct ? cfg.mic_lip_output_gain_pct : 100,
         std::memory_order_relaxed);
-    g_state->led_mouth_sync_enabled.store(cfg.led_mouth_sync_enabled,
+    g_state->led.mouth_sync_enabled.store(cfg.led_mouth_sync_enabled,
                                           std::memory_order_relaxed);
-    g_state->lip_sync_mode.store(static_cast<std::uint8_t>(cfg.lip_sync_mode),
+    g_state->led.lip_sync_mode.store(static_cast<std::uint8_t>(cfg.lip_sync_mode),
                                  std::memory_order_relaxed);
-    g_state->mic_lip_agc_enabled.store(cfg.mic_lip_agc_enabled,
+    g_state->mic_lip.agc_enabled.store(cfg.mic_lip_agc_enabled,
                                        std::memory_order_relaxed);
     g_state->barge_in_enabled.store(cfg.barge_in_enabled,
                                     std::memory_order_relaxed);
@@ -817,7 +817,7 @@ extern "C" void app_main()
     // fragmenting if it lands before the segment buffers.
     stackchan::wifi_config::mcp_events::start(+[]() -> int {
         return g_state == nullptr ? 0
-                                  : static_cast<int>(g_state->conversation_status.load(
+                                  : static_cast<int>(g_state->conv.status.load(
                                         std::memory_order_relaxed));
     });
     // Fire the boot event once Wi-Fi has an IP — Claude wants the address +

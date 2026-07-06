@@ -107,7 +107,7 @@ void update_mouth(const std::int16_t* samples, std::size_t n)
     constexpr float kRelease = 0.65f;
     const float a = (target > g_mouth_smoothed) ? kAttack : kRelease;
     g_mouth_smoothed += a * (target - g_mouth_smoothed);
-    g_state->mouth_open.store(g_mouth_smoothed, std::memory_order_relaxed);
+    g_state->face.mouth_open.store(g_mouth_smoothed, std::memory_order_relaxed);
 }
 
 // --- PCM ring (single producer = single consumer = the receiver task) ------
@@ -184,7 +184,7 @@ public:
         ring_.write = ring_.read = 0;
         playing_ = false;
         if (g_state != nullptr) {
-            g_state->mouth_open.store(0.0f, std::memory_order_relaxed);
+            g_state->face.mouth_open.store(0.0f, std::memory_order_relaxed);
             g_state->audio_stream_active.store(false, std::memory_order_release);
         }
         ESP_LOGI(kTag, "stream end");

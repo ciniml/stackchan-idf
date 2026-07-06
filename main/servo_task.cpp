@@ -90,7 +90,7 @@ void servo_task_entry(void* arg)
 
     TickType_t last_wake = xTaskGetTickCount();
     for (;;) {
-        const bool range_mode = args.state->servo_range_mode.load(std::memory_order_relaxed);
+        const bool range_mode = args.state->servo.range_mode.load(std::memory_order_relaxed);
         if (range_mode) {
             if (torque_on || !last_range_mode) {
                 (void)yaw.enable_torque(false);
@@ -105,11 +105,11 @@ void servo_task_entry(void* arg)
             if (static_cast<std::int32_t>(now - next_range_poll) >= 0) {
                 next_range_poll = now + kRangePollTicks;
                 if (auto r = yaw.read_present_position()) {
-                    args.state->servo_yaw_raw.store(static_cast<std::int16_t>(*r),
+                    args.state->servo.yaw_raw.store(static_cast<std::int16_t>(*r),
                                                     std::memory_order_relaxed);
                 }
                 if (auto r = pitch.read_present_position()) {
-                    args.state->servo_pitch_raw.store(static_cast<std::int16_t>(*r),
+                    args.state->servo.pitch_raw.store(static_cast<std::int16_t>(*r),
                                                       std::memory_order_relaxed);
                 }
             }
@@ -119,13 +119,13 @@ void servo_task_entry(void* arg)
         if (last_range_mode) {
             // Exited range mode: drop stale present-position so a stale read
             // doesn't confuse the UI (re-publish on the next entry).
-            args.state->servo_yaw_raw.store(-1, std::memory_order_relaxed);
-            args.state->servo_pitch_raw.store(-1, std::memory_order_relaxed);
+            args.state->servo.yaw_raw.store(-1, std::memory_order_relaxed);
+            args.state->servo.pitch_raw.store(-1, std::memory_order_relaxed);
             last_yaw_target = last_pitch_target = 0xFFFF; // re-drive
             last_range_mode = false;
         }
 
-        const bool enabled = args.state->servo_enabled.load(std::memory_order_relaxed);
+        const bool enabled = args.state->servo.enabled.load(std::memory_order_relaxed);
         if (!enabled) {
             if (torque_on) {
                 (void)yaw.enable_torque(false);
@@ -151,7 +151,7 @@ void servo_task_entry(void* arg)
         // uses audio_stream_active. We never poll the speaker directly: its
         // isPlaying() flickers false between streamed reply segments and would
         // let the head twitch mid-reply.
-        const bool audio_active = args.state->servo_masked.load(std::memory_order_relaxed) ||
+        const bool audio_active = args.state->servo.masked.load(std::memory_order_relaxed) ||
                                   args.state->audio_stream_active.load(std::memory_order_relaxed);
         if (audio_active) {
             vTaskDelayUntil(&last_wake, kPeriodTicks);
@@ -160,9 +160,9 @@ void servo_task_entry(void* arg)
 
         // Clamp commanded angles to the configured motion range so callers
         // (demo, conversation, future UI) all stay within the per-device limits.
-        const float yaw_deg = clamp_deg(args.state->target_yaw_deg.load(std::memory_order_relaxed),
+        const float yaw_deg = clamp_deg(args.state->servo.target_yaw_deg.load(std::memory_order_relaxed),
                                         args.limits.yaw_min_deg, args.limits.yaw_max_deg);
-        const float pitch_deg = clamp_deg(args.state->target_pitch_deg.load(std::memory_order_relaxed),
+        const float pitch_deg = clamp_deg(args.state->servo.target_pitch_deg.load(std::memory_order_relaxed),
                                           args.limits.pitch_min_deg, args.limits.pitch_max_deg);
         const std::uint16_t yaw_target = scs_servo::deg_to_raw(yaw_deg, args.limits.yaw_zero);
         const std::uint16_t pitch_target = scs_servo::deg_to_raw(pitch_deg, args.limits.pitch_zero);
@@ -170,7 +170,7 @@ void servo_task_entry(void* arg)
         // Non-zero servo_speed_override lets the demo task drive snappy
         // gestures (e.g. head shake on nadenade) without permanently raising
         // the default head-turn speed.
-        const std::uint16_t override = args.state->servo_speed_override.load(std::memory_order_relaxed);
+        const std::uint16_t override = args.state->servo.speed_override.load(std::memory_order_relaxed);
         const std::uint16_t speed = override != 0 ? override : kGoalSpeed;
 
         if (yaw_target != last_yaw_target || pitch_target != last_pitch_target) {

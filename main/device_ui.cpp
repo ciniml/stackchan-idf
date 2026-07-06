@@ -75,7 +75,7 @@ std::atomic<bool> g_stage_conv{true};
 std::atomic<bool> g_stage_rtp{true};
 std::atomic<bool> g_stage_bat_gauge{true};
 std::atomic<bool> g_stage_boot_arp{true};
-// Master servo enable (NVS-persisted). Distinct from g_state->servo_enabled,
+// Master servo enable (NVS-persisted). Distinct from g_state->servo.enabled,
 // which is the runtime torque toggle on the kControl page.
 std::atomic<bool> g_stage_servo_master{true};
 // Primary operation mode (config::OperationMode as u8). Cycled by tapping
@@ -329,9 +329,9 @@ void draw_info()
     std::snprintf(heap, sizeof(heap), "%u KB", static_cast<unsigned>(esp_get_free_heap_size() / 1024));
 
     // Battery (INA226, refreshed by demo_loop). pct < 0 → not yet read / absent.
-    const int bat_mv = g_state->battery_mv.load(std::memory_order_relaxed);
-    const int bat_ma = g_state->battery_ma.load(std::memory_order_relaxed);
-    const int bat_pct = g_state->battery_pct.load(std::memory_order_relaxed);
+    const int bat_mv = g_state->battery.mv.load(std::memory_order_relaxed);
+    const int bat_ma = g_state->battery.ma.load(std::memory_order_relaxed);
+    const int bat_pct = g_state->battery.pct.load(std::memory_order_relaxed);
     char battery[32];
     std::uint16_t bat_color = dim;
     if (bat_pct < 0 || bat_mv < 0) {
@@ -467,14 +467,14 @@ void draw_settings2()
 
 void draw_control()
 {
-    const bool servo_on = g_state->servo_enabled.load(std::memory_order_relaxed);
+    const bool servo_on = g_state->servo.enabled.load(std::memory_order_relaxed);
     draw_toggle_row(0, "サーボ（脱力/復帰）", servo_on);
     draw_button(1, "姿勢をリセット", g_cv->color565(60, 120, 200));
 
     // Speaker volume row: 3 hit zones — left third = -10 %, right third =
     // +10 %, center shows the current value and toggles mute. Live (no
     // reboot) — applied by demo_loop on the next iteration.
-    const std::uint16_t pct = g_state->speaker_volume_pct.load(std::memory_order_relaxed);
+    const std::uint16_t pct = g_state->speaker.volume_pct.load(std::memory_order_relaxed);
     int rx, ry, rw, rh;
     row_rect(2, rx, ry, rw, rh);
     g_cv->fillRoundRect(rx, ry, rw, rh, 6, g_cv->color565(40, 44, 54));
@@ -492,7 +492,7 @@ void draw_control()
     // Value in the middle, big enough to read at a glance. While muted the
     // value is replaced by a red ミュート label — tapping the center toggles
     // it back (same zone as the mute tap).
-    if (g_state->speaker_muted.load(std::memory_order_relaxed)) {
+    if (g_state->speaker.muted.load(std::memory_order_relaxed)) {
         g_cv->setTextColor(g_cv->color565(230, 110, 110));
         g_cv->drawString("ミュート中", rx + rw / 2, ry + rh / 2);
     } else {
@@ -587,8 +587,8 @@ void draw_range_btn(int x, int y, int w, int h, const char* label, std::uint16_t
 void draw_range()
 {
     const RangeLayout L = layout_range();
-    const std::int16_t yaw_raw = g_state->servo_yaw_raw.load(std::memory_order_relaxed);
-    const std::int16_t pitch_raw = g_state->servo_pitch_raw.load(std::memory_order_relaxed);
+    const std::int16_t yaw_raw = g_state->servo.yaw_raw.load(std::memory_order_relaxed);
+    const std::int16_t pitch_raw = g_state->servo.pitch_raw.load(std::memory_order_relaxed);
     const std::uint16_t zero_c = g_cv->color565(70, 110, 170);
     const std::uint16_t min_c = g_cv->color565(120, 80, 160);
     const std::uint16_t max_c = g_cv->color565(160, 100, 70);
@@ -620,7 +620,7 @@ void draw_conversation()
     const std::uint16_t err = g_cv->color565(235, 100, 100);
     const std::uint16_t dim = g_cv->color565(150, 150, 150);
 
-    const ConvStatus st = g_state->conversation_status.load(std::memory_order_relaxed);
+    const ConvStatus st = g_state->conv.status.load(std::memory_order_relaxed);
     const char* status_text = "?";
     std::uint16_t status_color = dim;
     switch (st) {
@@ -633,7 +633,7 @@ void draw_conversation()
     case ConvStatus::Reconnecting: status_text = "再接続中…"; status_color = warn; break;
     case ConvStatus::Error: status_text = "接続エラー"; status_color = err; break;
     }
-    const std::uint32_t reconnects = g_state->conversation_reconnects.load(std::memory_order_relaxed);
+    const std::uint32_t reconnects = g_state->conv.reconnects.load(std::memory_order_relaxed);
     char rc[16];
     std::snprintf(rc, sizeof(rc), "%u 回", static_cast<unsigned>(reconnects));
 
@@ -663,9 +663,9 @@ constexpr int kLtStartH = 38;
 
 void draw_lt_timer()
 {
-    const bool active = g_state->lt_active.load(std::memory_order_relaxed);
-    const std::int32_t remaining = g_state->lt_remaining_s.load(std::memory_order_relaxed);
-    const std::uint16_t total = g_state->lt_total_s.load(std::memory_order_relaxed);
+    const bool active = g_state->lt.active.load(std::memory_order_relaxed);
+    const std::int32_t remaining = g_state->lt.remaining_s.load(std::memory_order_relaxed);
+    const std::uint16_t total = g_state->lt.total_s.load(std::memory_order_relaxed);
 
     const std::uint16_t fg = g_cv->color565(235, 235, 235);
     const std::uint16_t dim = g_cv->color565(150, 150, 150);
@@ -798,7 +798,7 @@ void save_range_and_reboot()
     // Release range mode so the new limits aren't shadowed by the
     // "torque off / no goal writes" branch on the way down (servo task may
     // briefly re-engage between this call and esp_restart).
-    g_state->servo_range_mode.store(false, std::memory_order_relaxed);
+    g_state->servo.range_mode.store(false, std::memory_order_relaxed);
     config::DeviceConfig cfg = config::load();
     cfg.servo_limits_json = format_servo_limits(g_stage_limits);
     (void)config::store::save(cfg);
@@ -809,7 +809,7 @@ void save_range_and_reboot()
 // the 範囲 page. The servo task picks up the change on its next iteration.
 void update_range_mode_for_page(int page)
 {
-    g_state->servo_range_mode.store(page == kRange, std::memory_order_relaxed);
+    g_state->servo.range_mode.store(page == kRange, std::memory_order_relaxed);
 }
 
 } // namespace
@@ -886,7 +886,7 @@ bool handle_tap(int x, int y)
         // mute badge in this corner so the zone stays discoverable while
         // muted.
         if (x < 64 && y < 64) {
-            g_state->speaker_muted.store(!g_state->speaker_muted.load(std::memory_order_relaxed),
+            g_state->speaker.muted.store(!g_state->speaker.muted.load(std::memory_order_relaxed),
                                          std::memory_order_relaxed);
             return true;
         }
@@ -975,12 +975,12 @@ bool handle_tap(int x, int y)
         }
     } else if (page == kControl) {
         if (hit_row(0)) {
-            g_state->servo_enabled.store(!g_state->servo_enabled.load(std::memory_order_relaxed),
+            g_state->servo.enabled.store(!g_state->servo.enabled.load(std::memory_order_relaxed),
                                          std::memory_order_relaxed);
             g_dirty.store(true, std::memory_order_relaxed);
         } else if (hit_row(1)) {
-            g_state->target_yaw_deg.store(0.0f, std::memory_order_relaxed);
-            g_state->target_pitch_deg.store(0.0f, std::memory_order_relaxed);
+            g_state->servo.target_yaw_deg.store(0.0f, std::memory_order_relaxed);
+            g_state->servo.target_pitch_deg.store(0.0f, std::memory_order_relaxed);
         } else if (hit_row(2)) {
             // Speaker-volume row: left third = -10 %, right third = +10 %,
             // center = mute toggle. Bumps SharedState; demo_loop watches
@@ -988,19 +988,19 @@ bool handle_tap(int x, int y)
             // volume (the pct also persists to NVS; mute does not).
             int rx, ry, rw, rh;
             row_rect(2, rx, ry, rw, rh);
-            std::uint16_t pct = g_state->speaker_volume_pct.load(std::memory_order_relaxed);
+            std::uint16_t pct = g_state->speaker.volume_pct.load(std::memory_order_relaxed);
             const int local_x = x - rx;
             if (local_x < rw / 3) {
                 pct = (pct >= 10) ? (pct - 10) : 0;
-                g_state->speaker_volume_pct.store(pct, std::memory_order_relaxed);
+                g_state->speaker.volume_pct.store(pct, std::memory_order_relaxed);
                 g_dirty.store(true, std::memory_order_relaxed);
             } else if (local_x >= (2 * rw) / 3) {
                 pct = (pct <= 190) ? (pct + 10) : 200;
-                g_state->speaker_volume_pct.store(pct, std::memory_order_relaxed);
+                g_state->speaker.volume_pct.store(pct, std::memory_order_relaxed);
                 g_dirty.store(true, std::memory_order_relaxed);
             } else {
-                g_state->speaker_muted.store(
-                    !g_state->speaker_muted.load(std::memory_order_relaxed),
+                g_state->speaker.muted.store(
+                    !g_state->speaker.muted.load(std::memory_order_relaxed),
                     std::memory_order_relaxed);
                 g_dirty.store(true, std::memory_order_relaxed);
             }
@@ -1024,8 +1024,8 @@ bool handle_tap(int x, int y)
         auto hit_btn = [&](int bx, int by) {
             return in_rect(x, y, bx, by, bw, bh);
         };
-        const std::int16_t yr = g_state->servo_yaw_raw.load(std::memory_order_relaxed);
-        const std::int16_t pr = g_state->servo_pitch_raw.load(std::memory_order_relaxed);
+        const std::int16_t yr = g_state->servo.yaw_raw.load(std::memory_order_relaxed);
+        const std::int16_t pr = g_state->servo.pitch_raw.load(std::memory_order_relaxed);
         bool changed = false;
         if (hit_btn(x0, L.y_yaw_btns) && yr >= 0) {
             g_stage_limits.yaw_zero = static_cast<std::uint16_t>(yr);
@@ -1050,7 +1050,7 @@ bool handle_tap(int x, int y)
         }
         if (changed) g_dirty.store(true, std::memory_order_relaxed);
     } else if (page == kLtTimer) {
-        const bool active = g_state->lt_active.load(std::memory_order_relaxed);
+        const bool active = g_state->lt.active.load(std::memory_order_relaxed);
         const int gap = 6;
         const int bw = (kW - 24 - 2 * gap) / 3;
         // Presets — only while idle (see draw_lt_timer's greying).
@@ -1058,15 +1058,15 @@ bool handle_tap(int x, int y)
             for (int i = 0; i < 3; ++i) {
                 const int bx = 12 + i * (bw + gap);
                 if (x >= bx && x < bx + bw) {
-                    g_state->lt_total_s.store(kLtPresetsS[i], std::memory_order_relaxed);
-                    g_state->lt_remaining_s.store(kLtPresetsS[i], std::memory_order_relaxed);
+                    g_state->lt.total_s.store(kLtPresetsS[i], std::memory_order_relaxed);
+                    g_state->lt.remaining_s.store(kLtPresetsS[i], std::memory_order_relaxed);
                     g_dirty.store(true, std::memory_order_relaxed);
                     break;
                 }
             }
         } else if (in_rect(x, y, 12, kLtStartY, kW - 24, kLtStartH)) {
             // demo_loop's lt_timer.tick consumes the command within ~50 ms.
-            g_state->lt_command.store(active ? 2 : 1, std::memory_order_relaxed);
+            g_state->lt.command.store(active ? 2 : 1, std::memory_order_relaxed);
             g_dirty.store(true, std::memory_order_relaxed);
         }
     }
@@ -1087,7 +1087,7 @@ void handle_flick(int dx, int dy)
     // don't want a swipe to take the user away mid-talk.
     const int page = g_page.load(std::memory_order_relaxed);
     if (page == kRange) return;
-    if (page == kLtTimer && g_state->lt_active.load(std::memory_order_relaxed)) return;
+    if (page == kLtTimer && g_state->lt.active.load(std::memory_order_relaxed)) return;
 
     const int adx = dx < 0 ? -dx : dx;
     const int ady = dy < 0 ? -dy : dy;
