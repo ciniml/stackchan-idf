@@ -22,7 +22,6 @@
 #include <esp_ota_ops.h>
 #include <esp_heap_caps.h>
 
-#include "atom_status.hpp"
 #if CONFIG_STACKCHAN_AUDIO_STREAM_ENABLED
 #include "audio_stream_sink.hpp"
 #endif
@@ -46,6 +45,7 @@
 #include "mic_lip_sync_task.hpp"
 #include "qr_task.hpp"
 #include "render_task.hpp"
+#include "screens.hpp"
 #include "servo_limits.hpp"
 #include "servo_task.hpp"
 #include "settings_sinks.hpp"
@@ -646,10 +646,9 @@ extern "C" void app_main()
     // not needed in normal operation.
     // record_and_playback(2, "mic test");
 
-    // On-device UI flavour + servo-bus availability now come from the
-    // profile (the Module Audio override already revoked has_servo_bus
-    // where the I2S pin steal applies — see the probe block above).
-    const bool is_atom_nyan = profile.button_overlay_ui;
+    // Servo-bus availability comes from the profile (the Module Audio
+    // override already revoked has_servo_bus where the I2S pin steal
+    // applies — see the probe block above).
     const bool no_servo_bus = !profile.has_servo_bus;
 
     // Servo bring-up is only meaningful on boards that actually have a servo
@@ -737,14 +736,11 @@ extern "C" void app_main()
     (void)api_key; (void)xiaozhi_url; (void)xiaozhi_token;
 #endif
 
-    // On-device UI is per-board: CoreS3 gets the 5-tab touchscreen settings UI,
-    // Atom-nyan gets the minimal status overlay toggled by USER_BUT. Only one
-    // is initialised; render_task dispatches based on which one's active().
-    if (is_atom_nyan) {
-        stackchan::app::atom_status::init(*g_state);
-    } else {
-        stackchan::app::ui::init(*g_state);
-    }
+    // Overlay screen stack: SoftAP QR screen + the per-board settings UI
+    // flavour (device_ui on touch boards, atom_status on button-only ones —
+    // profile.button_overlay_ui decides). render_task and demo_loop
+    // dispatch through screens:: from here on.
+    stackchan::app::screens::init(board.display(), *g_state, profile);
     stackchan::app::start_render_task(*g_render_args);
     if (!no_servo_bus && cfg.servo_enabled && g_servo_args != nullptr) {
         stackchan::app::start_servo_task(*g_servo_args);
@@ -874,7 +870,6 @@ extern "C" void app_main()
         .touch = head_touch,
         .jtts_config_json = cfg.jtts_config_json,
         .has_battery = board.has_battery(),
-        .is_atom_nyan = is_atom_nyan,
         .btn_a_toggles_ui = profile.btn_a_toggles_ui,
         .touch_gaze_follow = profile.touch_gaze_follow,
         .conversation_enabled = cfg.openai_enabled,

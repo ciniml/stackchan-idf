@@ -12,13 +12,11 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-#include "ap_screen.hpp"
-#include "atom_status.hpp"
 #include "avatar/avatar.hpp"
 #include "avatar/canvas.hpp"
 #include "avatar/canvas_m5gfx.hpp"
-#include "device_ui.hpp"
 #include "face_config.hpp"
+#include "screens.hpp"
 
 namespace stackchan::app {
 
@@ -160,31 +158,17 @@ void render_task_entry(void* arg)
             continue;
         }
 
-        // SoftAP provisioning screen takes precedence over everything else:
-        // it draws straight to the panel (no canvas) because it needs
-        // M5GFX::qrcode(), which the Canvas abstraction doesn't expose. Once
-        // it paints, leaving the canvas untouched is fine — BufferedCanvas
-        // only overwrites the panel on its next end_frame, which we skip
-        // for as long as ap_screen::active() holds.
-        if (ap_screen::active()) {
-            ap_screen::draw(display);
-            ui_was_active = true; // force avatar full-repaint when AP ends
-            vTaskDelay(kPeriodTicks);
-            continue;
-        }
-
-        // Either of the two on-device overlays (CoreS3 5-tab settings UI or
-        // AtomS3R minimal status screen) takes over the display while shown.
-        // Only one is ever initialized in a given boot, so at most one is
-        // active(). Both render lazily and return whether they repainted.
-        const bool ui_on = ui::active();
-        const bool atom_on = atom_status::active();
-        if (ui_on || atom_on) {
-            const bool repainted = ui_on ? ui::draw(canvas) : atom_status::draw(canvas);
-            if (repainted) {
+        // A full-screen overlay (SoftAP QR screen > per-board settings UI —
+        // priority lives in screens::init) takes the panel over from the
+        // avatar. Canvas-based overlays render lazily and report whether
+        // they repainted (present only then); the AP screen paints the
+        // panel directly (M5GFX::qrcode isn't in the Canvas abstraction)
+        // and returns false so the stale canvas is never pushed over it.
+        if (screens::overlay_active()) {
+            if (screens::draw_overlay(canvas)) {
                 canvas.end_frame();
             }
-            ui_was_active = true;
+            ui_was_active = true; // force avatar full-repaint on exit
             vTaskDelay(kPeriodTicks);
             continue;
         }

@@ -46,6 +46,7 @@ set(_main_srcs
     "mic_lip_sync_task.cpp"
     "qr_task.cpp"
     "render_task.cpp"
+    "screens.cpp"
     "servo_limits.cpp"
     "servo_task.cpp"
     "settings_sinks.cpp"

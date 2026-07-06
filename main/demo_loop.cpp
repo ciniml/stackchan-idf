@@ -20,12 +20,11 @@
 #include <wifi_config_service/wifi_config_service.hpp>
 #include "config_service/config_service.hpp"
 
-#include "ap_screen.hpp"
-#include "atom_status.hpp"
 #include "avatar/expression.hpp"
 #include "battery.hpp"
 #include "device_ui.hpp"
 #include "lt_timer.hpp"
+#include "screens.hpp"
 #include "settings_sinks.hpp"
 #include "speech.hpp"
 #include "wifi_sta.hpp"
@@ -45,7 +44,6 @@ constexpr const char* kTag = "stackchan";
     stackchan::board::Si12tTouch* const g_touch = args.touch;
     const std::string& jtts_config_json = args.jtts_config_json;
     const bool has_battery = args.has_battery;
-    const bool is_atom_nyan = args.is_atom_nyan;
     const bool btn_a_toggles_ui = args.btn_a_toggles_ui;
     const bool touch_gaze_follow = args.touch_gaze_follow;
     const bool conversation_enabled = args.conversation_enabled;
@@ -238,8 +236,8 @@ constexpr const char* kTag = "stackchan";
         // (corners are within the visible circle but at the edge of the touch
         // pad), so a physical button is a more reliable opener. On other
         // boards BtnA either has no role (CoreS3 uses touch only) or is
-        // already claimed by atom_status::poll_button (AtomS3R / AtomS3 →
-        // is_atom_nyan branch above, which doesn't reach this path).
+        // already claimed by atom_status's gesture vocab (polled via
+        // screens::poll_inputs above; btn_a_toggles_ui is false there).
         if (btn_a_toggles_ui && g_board != nullptr && M5.BtnA.wasPressed()) {
             app::ui::toggle();
             (void)g_board->vibrate(20);
@@ -271,40 +269,31 @@ constexpr const char* kTag = "stackchan";
             }
         }
 
-        // LCD touch (M5.Touch — the screen's capacitive touch, distinct from
-        // the Si12T head sensor) drives the on-device UI. Forward every press
-        // to the UI module, which hit-tests it against the current page.
-        // Handled before the conversation/audio early-returns so the UI opens
-        // in every mode.
-        if (is_atom_nyan) {
-            // AtomS3R: no LCD touch, single USER_BUT toggles the status overlay.
-            app::atom_status::poll_button();
-        } else {
+        // On-device overlay input. Button-driven screens (atom_status's
+        // BtnA gesture vocab) poll every tick; the LCD-touch block below is
+        // inert on boards without a touch panel (M5.Touch reports nothing),
+        // so no per-board split is needed here.
+        app::screens::poll_inputs();
+        {
             const auto td = M5.Touch.getDetail();
             // Horizontal flick → next/prev tab. M5Unified emits this on the
             // release frame after a touch that travelled past the flick
             // threshold. We treat it independently of the press path so a
             // press that ends in a flick doesn't also fire the tap action.
             if (td.wasFlicked()) {
-                app::ui::handle_flick(td.distanceX(), td.distanceY());
+                app::screens::handle_flick(td.distanceX(), td.distanceY());
             }
             if (td.wasPressed()) {
-                // AP provisioning screen owns the touch while it's up —
-                // the on-screen "終了" button is how the user dismisses
-                // AP mode on touch boards (CoreS3 / StopWatch). A return
-                // of true swallows the tap so it doesn't leak through to
-                // the device_ui hit-test underneath.
-                if (app::ap_screen::handle_tap(td.x, td.y)) {
-                    continue;
-                }
-                const bool ui_consumed = app::ui::handle_tap(td.x, td.y);
-                // A tap the on-device UI didn't consume (didn't open / use
-                // the UI, didn't hit the mute corner), while the assistant is
-                // mid-reply, is a barge-in request: voice input is paused for
-                // the whole turn, so the screen tap is how the user
+                // Priority dispatch through the screen stack (AP screen
+                // swallows everything while up; device_ui owns its hot
+                // corners even when closed).
+                const bool consumed = app::screens::handle_tap(td.x, td.y);
+                // A tap no screen consumed, while the assistant is
+                // mid-reply, is a barge-in request: voice input is paused
+                // for the whole turn, so the screen tap is how the user
                 // interrupts. The conversation task consumes this during
                 // playback.
-                if (!ui_consumed &&
+                if (!consumed &&
                     g_state->barge_in_enabled.load(std::memory_order_relaxed) &&
                     g_state->conv.active.load(std::memory_order_relaxed) &&
                     !g_state->conv.idle.load(std::memory_order_relaxed)) {
@@ -328,7 +317,7 @@ constexpr const char* kTag = "stackchan";
                 constexpr float kGazeGain = 5.0f;          // DSL multiplier
                                                             // is *3 → 15 px peak
                 bool follow_active = false;
-                if (td.isPressed() && !app::ui::active()) {
+                if (td.isPressed() && !app::screens::overlay_active()) {
                     const float dx = static_cast<float>(td.x) - kCenter;
                     const float dy = static_cast<float>(td.y) - kCenter;
                     const float r  = std::sqrt(dx * dx + dy * dy);
