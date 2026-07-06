@@ -333,43 +333,45 @@ void apply_speaker_volume_persist(std::uint16_t pct)
     (void)stackchan::config::store::save_speaker_volume(pct);
 }
 
+// The one description of "which app functions serve the settings
+// transports". Both register_* functions below hand this same struct to
+// their transport, so adding a hook is a one-line change here instead of a
+// per-transport pair.
+static stackchan::config::SettingsHooks make_hooks(std::uint8_t board_kind)
+{
+    stackchan::config::SettingsHooks hooks;
+    hooks.face_config = &on_face_config;
+    hooks.lt_config = +[](std::string_view json) {
+        if (g_state != nullptr) g_state->set_lt_config(json);
+    };
+    hooks.servo_range_mode = &on_servo_range_mode;
+    hooks.servo_positions = &servo_positions;
+    hooks.audio_metrics = &audio_metrics_json;
+    hooks.led_state_get = &read_led_state;
+    hooks.led_state_set = &apply_led_patch;
+    hooks.mic_lip_gain_get = &read_mic_lip_gain;
+    hooks.mic_lip_gain_set = &apply_mic_lip_gain;
+    hooks.speaker_volume_get = &read_speaker_volume_pct;
+    hooks.speaker_volume_set = &apply_speaker_volume_persist;
+    // The web UIs hide sections that don't apply to the running hardware
+    // (e.g. servo config on Atom-nyan). For BLE this must be registered
+    // before config::start so the first central read sees the right value.
+    hooks.board_kind = board_kind;
+    return hooks;
+}
+
 void register_ble_sinks(std::uint8_t board_kind)
 {
-    stackchan::config::set_face_config_sink(&on_face_config);
-    stackchan::config::set_lt_config_sink(+[](std::string_view json) {
-        if (g_state != nullptr) g_state->set_lt_config(json);
-    });
-    stackchan::config::set_servo_range_mode_sink(&on_servo_range_mode);
-    stackchan::config::set_servo_positions_getter(&servo_positions);
-    stackchan::config::set_audio_metrics_getter(&audio_metrics_json);
-    stackchan::config::set_led_state_getter(&read_led_state);
-    stackchan::config::set_led_state_sink(&apply_led_patch);
-    stackchan::config::set_mic_lip_gain_getter(&read_mic_lip_gain);
-    stackchan::config::set_mic_lip_gain_sink(&apply_mic_lip_gain);
-    stackchan::config::set_speaker_volume_getter(&read_speaker_volume_pct);
-    stackchan::config::set_speaker_volume_sink(&apply_speaker_volume_persist);
-    // Tell the settings service which board we're on so the web UI can hide
-    // sections that don't apply (e.g. servo config on Atom-nyan). Must happen
-    // before config::start so the first central read sees the right value.
-    stackchan::config::set_board_kind(board_kind);
+    stackchan::config::set_settings_hooks(make_hooks(board_kind));
 }
 
 void register_http_sinks(std::uint8_t board_kind)
 {
-    // Same sink/getter set as BLE. The Wi-Fi service starts on a worker task
-    // after Wi-Fi STA gets an IP — these calls race that; the setters
-    // tolerate being called before the HTTP server is up (the values are
-    // cached in static storage and applied once the handlers register).
-    stackchan::wifi_config::set_servo_range_mode_sink(&on_servo_range_mode);
-    stackchan::wifi_config::set_servo_positions_getter(&servo_positions);
-    stackchan::wifi_config::set_audio_metrics_getter(&audio_metrics_json);
-    stackchan::wifi_config::set_led_state_getter(&read_led_state);
-    stackchan::wifi_config::set_led_state_sink(&apply_led_patch);
-    stackchan::wifi_config::set_mic_lip_gain_getter(&read_mic_lip_gain);
-    stackchan::wifi_config::set_mic_lip_gain_sink(&apply_mic_lip_gain);
-    stackchan::wifi_config::set_speaker_volume_getter(&read_speaker_volume_pct);
-    stackchan::wifi_config::set_speaker_volume_sink(&apply_speaker_volume_persist);
-    stackchan::wifi_config::set_board_kind(board_kind);
+    // Same hooks as BLE. The Wi-Fi service starts on a worker task after
+    // Wi-Fi STA gets an IP — this call races that; the transport tolerates
+    // registration before the HTTP server is up (values are cached in static
+    // storage and applied once the handlers register).
+    stackchan::wifi_config::set_settings_hooks(make_hooks(board_kind));
 }
 
 void register_avatar_bytecode_sinks()

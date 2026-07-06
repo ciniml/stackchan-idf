@@ -256,6 +256,20 @@ void set_battery(int millivolts, int milliamps, int percent)
     http::set_battery(millivolts, milliamps, percent);
 }
 
+void set_settings_hooks(const config::SettingsHooks& hooks)
+{
+    http::set_servo_range_mode_sink(hooks.servo_range_mode);
+    http::set_servo_positions_getter(hooks.servo_positions);
+    http::set_audio_metrics_getter(hooks.audio_metrics);
+    http::set_led_state_getter(hooks.led_state_get);
+    http::set_led_state_sink(hooks.led_state_set);
+    http::set_mic_lip_gain_getter(hooks.mic_lip_gain_get);
+    http::set_mic_lip_gain_sink(hooks.mic_lip_gain_set);
+    http::set_speaker_volume_getter(hooks.speaker_volume_get);
+    http::set_speaker_volume_sink(hooks.speaker_volume_set);
+    http::set_board_kind(hooks.board_kind);
+}
+
 void set_servo_range_mode_sink(config::ServoRangeModeSink sink)
 {
     http::set_servo_range_mode_sink(sink);

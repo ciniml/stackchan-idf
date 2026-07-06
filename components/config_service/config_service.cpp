@@ -431,6 +431,22 @@ void set_board_kind(std::uint8_t kind)
     gatt::set_board_kind(kind);
 }
 
+void set_settings_hooks(const SettingsHooks& hooks)
+{
+    gatt::set_face_config_sink(hooks.face_config);
+    gatt::set_lt_config_sink(hooks.lt_config);
+    gatt::set_servo_range_mode_sink(hooks.servo_range_mode);
+    gatt::set_servo_positions_getter(hooks.servo_positions);
+    gatt::set_audio_metrics_getter(hooks.audio_metrics);
+    gatt::set_led_state_getter(hooks.led_state_get);
+    gatt::set_led_state_sink(hooks.led_state_set);
+    gatt::set_mic_lip_gain_getter(hooks.mic_lip_gain_get);
+    gatt::set_mic_lip_gain_sink(hooks.mic_lip_gain_set);
+    gatt::set_speaker_volume_getter(hooks.speaker_volume_get);
+    gatt::set_speaker_volume_sink(hooks.speaker_volume_set);
+    gatt::set_board_kind(hooks.board_kind);
+}
+
 void notify_battery(int millivolts, int milliamps, int percent)
 {
     gatt::set_battery(millivolts, milliamps, percent);

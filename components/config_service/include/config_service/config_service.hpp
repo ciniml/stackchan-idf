@@ -425,6 +425,36 @@ void set_speaker_volume_sink(SpeakerVolumeSink sink);
 using JttsSayKanaSink = void (*)(std::string_view kana);
 void set_jtts_say_kana_sink(JttsSayKanaSink sink);
 
+// Application hooks shared by BOTH settings transports (the BLE GATT service
+// here and the HTTP service in wifi_config_service). main builds this once at
+// boot and hands the same struct to config::set_settings_hooks and
+// wifi_config::set_settings_hooks, so each hook is written once instead of
+// once per transport. nullptr fields unregister, same as the individual
+// setters (which remain and are what the fan-out calls internally).
+// face_config / lt_config are consumed by the BLE fan-out only — the HTTP
+// service has no face-config route and wires its LT sink through the MCP
+// registration path.
+struct SettingsHooks {
+    FaceConfigSink face_config = nullptr;
+    LtConfigSink lt_config = nullptr;
+    ServoRangeModeSink servo_range_mode = nullptr;
+    ServoPositionsGetter servo_positions = nullptr;
+    AudioMetricsJsonGetter audio_metrics = nullptr;
+    LedStateGetter led_state_get = nullptr;
+    LedStateSink led_state_set = nullptr;
+    MicLipGainGetter mic_lip_gain_get = nullptr;
+    MicLipGainSink mic_lip_gain_set = nullptr;
+    SpeakerVolumeGetter speaker_volume_get = nullptr;
+    SpeakerVolumeSink speaker_volume_set = nullptr;
+    // Mirrors board::BoardKind; surfaced read-only so the web UIs can hide
+    // sections that don't apply to the running hardware.
+    std::uint8_t board_kind = 0;
+};
+
+// Register every hook in one call (BLE transport). Equivalent to calling the
+// individual setters below plus set_board_kind.
+void set_settings_hooks(const SettingsHooks& hooks);
+
 // Avatar face bytecode live-apply sink — fires after a complete `.avbc` has
 // arrived over BLE chr 0x21 (op=commit) and has been validated + persisted
 // to NVS by config_service. len=0 (data=nullptr) means "revert to firmware

@@ -53,6 +53,13 @@ void set_provisioning_mode(bool active);
 // No-op until the HTTP server has started. Thread-safe.
 void set_battery(int millivolts, int milliamps, int percent);
 
+// Register every shared application hook in one call — the HTTP-side twin of
+// config::set_settings_hooks, taking the SAME struct so main builds it once.
+// Consumes everything except face_config / lt_config (no HTTP face-config
+// route; the LT sink is wired through set_lt_config_sink below). Equivalent
+// to calling the individual setters that follow plus set_board_kind.
+void set_settings_hooks(const config::SettingsHooks& hooks);
+
 // Register the servo range-setting mode sink and live-position getter. See
 // config_service.hpp for the contract; the Wi-Fi service shares the same
 // types. POST /api/servo-range-mode forwards to the sink; /api/status pulls
