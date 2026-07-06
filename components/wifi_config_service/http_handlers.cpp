@@ -68,7 +68,14 @@ std::atomic<bool> g_wifi_connected{false};
 // True while SoftAP provisioning is active — bypasses require_auth (physical
 // AP button = implicit trust; iOS captive portals don't reliably carry the
 // Basic auth prompt). Set/cleared from wifi_config::set_provisioning_mode.
-bool g_provisioning_mode = false;
+// Atomic for the same init-ordering reason as g_wifi_connected above: when
+// the stored SSID is gone, the FIRST wifi_config::start() happens on the
+// AP-enable path and set_provisioning_mode(true) arrives before the
+// cfg-wifi-init task has created g_mutex — the old mutex-guarded setter
+// dropped it (`if (g_mutex == nullptr) return;`), leaving every request
+// behind the Basic-auth gate (Android's captive WebView surfaces the 401
+// as ERR_HTTP_RESPONSE_CODE_FAILURE; observed on HW).
+std::atomic<bool> g_provisioning_mode{false};
 // Cached battery snapshot served by /api/status. -1 mV / percent → unknown.
 int g_battery_mv = -1;
 int g_battery_ma = 0;
@@ -152,9 +159,9 @@ bool constant_time_equals(std::string_view a, std::string_view b)
 // username field is ignored — Stack-chan has no concept of multiple users.
 bool require_auth(httpd_req_t* req)
 {
+    const bool ap_mode = g_provisioning_mode.load();
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     const std::string expected = g_active.auth_password;
-    const bool ap_mode = g_provisioning_mode;
     xSemaphoreGive(g_mutex);
     // SoftAP provisioning: trust the user — they had to physically tap the
     // on-device "AP モード" button to get here, and iOS's captive-portal flow
@@ -319,9 +326,9 @@ esp_err_t handle_status_get(httpd_req_t* req)
 {
     if (!require_auth(req)) return ESP_OK;
     const bool wifi_ok = g_wifi_connected.load();
+    const bool prov_mode = g_provisioning_mode.load();
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     const auto cfg = g_active;
-    const bool prov_mode = g_provisioning_mode;
     const int bat_mv = g_battery_mv;
     const int bat_ma = g_battery_ma;
     const int bat_pct = g_battery_pct;
@@ -1491,11 +1498,17 @@ esp_err_t handle_jtts_say_post(httpd_req_t* req)
 
 esp_err_t handle_root_get(httpd_req_t* req)
 {
-    if (!require_auth(req)) return ESP_OK;
+    if (!require_auth(req)) {
+        ESP_LOGW(kTag, "GET / -> 401 (auth)");
+        return ESP_OK;
+    }
     const std::size_t len = settings_wifi_html_end - settings_wifi_html_start;
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
-    return httpd_resp_send(req, settings_wifi_html_start, len);
+    const esp_err_t err = httpd_resp_send(req, settings_wifi_html_start, len);
+    ESP_LOGI(kTag, "GET / -> 200, %u B, send=%s",
+             static_cast<unsigned>(len), esp_err_to_name(err));
+    return err;
 }
 
 void add(httpd_handle_t s, const char* uri, httpd_method_t m, esp_err_t (*h)(httpd_req_t*))
@@ -1611,10 +1624,9 @@ void set_wifi_connected(bool connected)
 
 void set_provisioning_mode(bool active)
 {
-    if (g_mutex == nullptr) return;
-    xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_provisioning_mode = active;
-    xSemaphoreGive(g_mutex);
+    // No mutex gate: must stick even before register_handlers() runs (see
+    // the g_provisioning_mode declaration comment).
+    g_provisioning_mode.store(active);
 }
 
 void set_battery(int millivolts, int milliamps, int percent)
