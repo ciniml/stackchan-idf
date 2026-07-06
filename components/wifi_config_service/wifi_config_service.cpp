@@ -136,7 +136,7 @@ tl::expected<httpd_handle_t, Error> start_http_server()
     // internal RAM; the runtime cost is the slot count we actually register,
     // not the cap. add() now ESP_LOGEs on registration failure so a future
     // count/cap drift is loud instead of silent.
-    cfg.max_uri_handlers = 56;
+    cfg.max_uri_handlers = 64;
     // Stack MUST live in internal RAM: the OTA control handler calls
     // esp_ota_begin → esp_partition_mmap, which disables CPU cache while
     // remapping flash. PSRAM is cached, so a PSRAM-resident stack becomes

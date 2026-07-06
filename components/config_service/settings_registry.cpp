@@ -13,10 +13,11 @@ namespace {
 // of intent. Captureless lambdas decay to the plain function pointers the
 // descriptor stores.
 constexpr SettingDescriptor str_row(const char* id, const char* nvs_key, ApplyKind apply,
-                                    std::string DeviceConfig::* member, bool secret = false)
+                                    std::string DeviceConfig::* member,
+                                    std::uint16_t max_len, bool secret = false)
 {
     return SettingDescriptor{id, nvs_key, ValueType::Str, apply, secret,
-                             false, 0, member, nullptr, nullptr};
+                             false, 0, max_len, member, nullptr, nullptr};
 }
 
 constexpr SettingDescriptor num_row(const char* id, const char* nvs_key, ValueType type,
@@ -25,7 +26,7 @@ constexpr SettingDescriptor num_row(const char* id, const char* nvs_key, ValueTy
                                     void (*set)(DeviceConfig&, std::uint32_t))
 {
     return SettingDescriptor{id, nvs_key, type, apply, false,
-                             clamp, max_value, nullptr, get, set};
+                             clamp, max_value, 0, nullptr, get, set};
 }
 
 constexpr SettingDescriptor bool_row(const char* id, const char* nvs_key, ApplyKind apply,
@@ -41,21 +42,22 @@ constexpr SettingDescriptor bool_row(const char* id, const char* nvs_key, ApplyK
 // one exists (POST /api/<id>). Both columns are wire contracts.
 const std::array<SettingDescriptor, kSettingCount> kTable = {{
     // --- strings ---------------------------------------------------------
-    str_row("ssid",           "wifi_ssid",  ApplyKind::Staged, &DeviceConfig::wifi_ssid),
-    str_row("password",       "wifi_pass",  ApplyKind::Staged, &DeviceConfig::wifi_password, true),
-    str_row("api-key",        "openai_key", ApplyKind::Staged, &DeviceConfig::openai_api_key, true),
-    str_row("gemini-api-key", "gemini_key", ApplyKind::Staged, &DeviceConfig::gemini_api_key, true),
-    str_row("xiaozhi-url",    "xz_url",     ApplyKind::Staged, &DeviceConfig::xiaozhi_url),
-    str_row("xiaozhi-token",  "xz_token",   ApplyKind::Staged, &DeviceConfig::xiaozhi_token, true),
-    str_row("jtts-config",    "jtts_cfg",   ApplyKind::Staged, &DeviceConfig::jtts_config_json),
-    str_row("system-prompt",  "sys_prompt", ApplyKind::Staged, &DeviceConfig::system_prompt),
-    str_row("conv-headers",   "conv_hdrs",  ApplyKind::Staged, &DeviceConfig::conv_extra_headers, true),
-    str_row("face-config",    "face_cfg",   ApplyKind::Both,   &DeviceConfig::face_config_json),
-    str_row("servo-limits",   "srv_lim",    ApplyKind::Staged, &DeviceConfig::servo_limits_json),
-    str_row("mcp-token",      "mcp_token",  ApplyKind::Staged, &DeviceConfig::mcp_api_token, true),
-    str_row("lt-config",      "lt_cfg",     ApplyKind::Both,   &DeviceConfig::lt_config_json),
-    str_row("device-name",    "dev_name",   ApplyKind::Staged, &DeviceConfig::device_name),
-    str_row("auth-password",  "auth_pwd",   ApplyKind::Staged, &DeviceConfig::auth_password, true),
+    // max_len mirrors the HTTP kMax* / BLE plaintext caps for each field.
+    str_row("ssid",           "wifi_ssid",  ApplyKind::Staged, &DeviceConfig::wifi_ssid, 32),
+    str_row("password",       "wifi_pass",  ApplyKind::Staged, &DeviceConfig::wifi_password, 64, true),
+    str_row("api-key",        "openai_key", ApplyKind::Staged, &DeviceConfig::openai_api_key, 256, true),
+    str_row("gemini-api-key", "gemini_key", ApplyKind::Staged, &DeviceConfig::gemini_api_key, 256, true),
+    str_row("xiaozhi-url",    "xz_url",     ApplyKind::Staged, &DeviceConfig::xiaozhi_url, 256),
+    str_row("xiaozhi-token",  "xz_token",   ApplyKind::Staged, &DeviceConfig::xiaozhi_token, 256, true),
+    str_row("jtts-config",    "jtts_cfg",   ApplyKind::Staged, &DeviceConfig::jtts_config_json, 768),
+    str_row("system-prompt",  "sys_prompt", ApplyKind::Staged, &DeviceConfig::system_prompt, 2048),
+    str_row("conv-headers",   "conv_hdrs",  ApplyKind::Staged, &DeviceConfig::conv_extra_headers, 1024, true),
+    str_row("face-config",    "face_cfg",   ApplyKind::Both,   &DeviceConfig::face_config_json, 768),
+    str_row("servo-limits",   "srv_lim",    ApplyKind::Staged, &DeviceConfig::servo_limits_json, 768),
+    str_row("mcp-token",      "mcp_token",  ApplyKind::Staged, &DeviceConfig::mcp_api_token, 128, true),
+    str_row("lt-config",      "lt_cfg",     ApplyKind::Both,   &DeviceConfig::lt_config_json, 768),
+    str_row("device-name",    "dev_name",   ApplyKind::Staged, &DeviceConfig::device_name, 24),
+    str_row("auth-password",  "auth_pwd",   ApplyKind::Staged, &DeviceConfig::auth_password, 64, true),
     // --- bools ------------------------------------------------------------
     bool_row("openai-enabled",    "openai_en",  ApplyKind::Staged,
              [](const DeviceConfig& c) -> std::uint32_t { return c.openai_enabled ? 1 : 0; },

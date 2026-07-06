@@ -55,6 +55,9 @@ struct SettingDescriptor {
     bool clamp;
     // Inclusive numeric ceiling; 0 = unbounded (full width accepted).
     std::uint32_t max_value;
+    // Str rows: maximum plaintext byte length accepted over the wire.
+    // Mirrors the per-transport kMax* constants; 0 for numeric rows.
+    std::uint16_t max_len;
     // Str fields use the member pointer; numeric fields (Bool/U8/U16/U32)
     // round-trip through u32 via the accessor pair. Exactly one side is set.
     std::string DeviceConfig::* str_member;

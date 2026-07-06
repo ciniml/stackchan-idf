@@ -748,6 +748,133 @@ esp_err_t handle_auth_password_post(httpd_req_t* req)
     return send_empty(req);
 }
 
+// --- Batch settings API: one GET/POST pair over the whole registry. The
+// per-key POST routes above remain for compatibility (existing settings
+// pages and external clients); new clients can read and stage everything
+// in two round-trips. ---
+
+// GET /api/settings — every staged-domain setting (ApplyKind Staged/Both)
+// from the active config, keyed by registry id. Secret rows come back as
+// "has_<id>" booleans only. Live rows (LED / mic gain / speaker volume) are
+// deliberately absent: g_active only knows their boot values, so their
+// dedicated GET routes (which read the runtime state) stay authoritative.
+esp_err_t handle_settings_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    const auto cfg = g_active;
+    xSemaphoreGive(g_mutex);
+
+    using config::registry::ApplyKind;
+    using config::registry::ValueType;
+    std::string body = "{";
+    bool first = true;
+    for (const auto& d : config::registry::table()) {
+        if (d.apply == ApplyKind::Live) continue;
+        if (!first) body += ",";
+        first = false;
+        if (d.type == ValueType::Str) {
+            const std::string& v = cfg.*(d.str_member);
+            if (d.secret) {
+                body += "\"has_" + std::string(d.id) + "\":" + (v.empty() ? "false" : "true");
+            } else {
+                body += "\"" + std::string(d.id) + "\":\"" + escape_json(v) + "\"";
+            }
+        } else if (d.type == ValueType::Bool) {
+            body += "\"" + std::string(d.id) + "\":" + (d.num_get(cfg) != 0 ? "true" : "false");
+        } else {
+            body += "\"" + std::string(d.id) + "\":" + std::to_string(d.num_get(cfg));
+        }
+    }
+    body += "}";
+    return send_json(req, body);
+}
+
+// POST /api/settings — JSON object of {<registry id>: value, …} staged as a
+// batch. Validated in full before anything is staged, so a 400 leaves
+// staging untouched; /api/apply commits as usual. Unknown ids and live rows
+// are rejected (typos must not silently no-op; live rows have their own
+// immediate-apply routes).
+esp_err_t handle_settings_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, kMaxBodyBytes) != ESP_OK) return ESP_OK;
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (root == nullptr || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return send_error(req, "400 Bad Request", "expected a JSON object");
+    }
+
+    using config::registry::ApplyKind;
+    using config::registry::ValueType;
+    // Pass 1: validate every member against its descriptor.
+    std::string err;
+    for (const cJSON* item = root->child; item != nullptr; item = item->next) {
+        const char* id = item->string != nullptr ? item->string : "";
+        const auto* d = config::registry::find(id);
+        if (d == nullptr) {
+            err = std::string("unknown setting: ") + id;
+            break;
+        }
+        if (d->apply == ApplyKind::Live) {
+            err = std::string(id) + ": live setting, use /api/" + id;
+            break;
+        }
+        if (d->type == ValueType::Str) {
+            if (!cJSON_IsString(item)) {
+                err = std::string(id) + ": expected string";
+                break;
+            }
+            if (std::strlen(item->valuestring) > d->max_len) {
+                err = std::string(id) + ": longer than " + std::to_string(d->max_len) + " bytes";
+                break;
+            }
+        } else if (d->type == ValueType::Bool) {
+            if (!cJSON_IsBool(item) && !cJSON_IsNumber(item)) {
+                err = std::string(id) + ": expected boolean";
+                break;
+            }
+        } else {
+            if (!cJSON_IsNumber(item) || item->valuedouble < 0 ||
+                (d->max_value != 0 && item->valuedouble > d->max_value)) {
+                err = std::string(id) + ": expected integer 0.." + std::to_string(d->max_value);
+                break;
+            }
+        }
+    }
+    if (!err.empty()) {
+        cJSON_Delete(root);
+        return send_error(req, "400 Bad Request", err.c_str());
+    }
+
+    // Pass 2: stage the whole batch under one lock.
+    LtConfigSink lt_sink = nullptr;
+    std::string lt_json;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    for (const cJSON* item = root->child; item != nullptr; item = item->next) {
+        const auto* d = config::registry::find(item->string);
+        if (d->type == ValueType::Str) {
+            g_staging.set_str(*d, item->valuestring);
+            // lt-config is ApplyKind::Both: mirror the per-key route and fire
+            // the live sink so the timekeeper updates without waiting for the
+            // Apply reboot.
+            if (std::strcmp(d->id, "lt-config") == 0 && g_lt_config_sink != nullptr) {
+                lt_sink = g_lt_config_sink;
+                lt_json = item->valuestring;
+            }
+        } else if (d->type == ValueType::Bool) {
+            g_staging.set_num(*d, cJSON_IsTrue(item) || (cJSON_IsNumber(item) && item->valuedouble != 0) ? 1 : 0);
+        } else {
+            g_staging.set_num(*d, static_cast<std::uint32_t>(item->valuedouble));
+        }
+    }
+    xSemaphoreGive(g_mutex);
+    cJSON_Delete(root);
+    if (lt_sink != nullptr) lt_sink(lt_json);
+    return send_empty(req);
+}
+
 esp_err_t handle_apply_post(httpd_req_t* req)
 {
     if (!require_auth(req)) return ESP_OK;
@@ -1440,6 +1567,8 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/servo-range-mode", HTTP_POST, handle_servo_range_mode_post);
     add(server, "/api/system-prompt",   HTTP_POST, handle_system_prompt_post);
     add(server, "/api/conv-headers",     HTTP_POST, handle_conv_headers_post);
+    add(server, "/api/settings",        HTTP_GET,  handle_settings_get);
+    add(server, "/api/settings",        HTTP_POST, handle_settings_post);
     add(server, "/api/apply",           HTTP_POST, handle_apply_post);
     add(server, "/api/ota/status",      HTTP_GET,  handle_ota_status_get);
     add(server, "/api/ota/control",     HTTP_POST, handle_ota_control_post);
