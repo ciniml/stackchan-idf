@@ -7,6 +7,7 @@
 #include <avatar_vm/storage.hpp>
 #include <config_service/config_store.hpp>
 #include <config_service/ota.hpp>
+#include <config_service/staged_config.hpp>
 #include <wifi_config_service/mcp_events.hpp>
 
 #include <algorithm>
@@ -50,30 +51,9 @@ constexpr const char* kTag = "cfg-http";
 // from the worker and reads from notify_wifi_connected() (esp_event task).
 SemaphoreHandle_t g_mutex = nullptr;
 
-struct StagingBuffer {
-    std::optional<std::string> ssid, password, api_key, jtts_config, gemini_api_key, servo_limits;
-    std::optional<std::string> xiaozhi_url, xiaozhi_token, system_prompt, conv_headers;
-    std::optional<bool> openai_enabled;
-    std::optional<bool> rtp_audio_enabled;
-    std::optional<bool> jtts_idle_enabled;
-    std::optional<bool> battery_gauge_enabled;
-    std::optional<bool> startup_arpeggio_enabled;
-    std::optional<bool> servo_enabled;
-    std::optional<bool> led_mouth_sync_enabled;
-    std::optional<std::string> mcp_api_token;
-    std::optional<std::string> lt_config;
-    std::optional<config::Provider> provider;
-    std::optional<config::OperationMode> operation_mode;
-    std::optional<config::AudioOutput> audio_output;
-    std::optional<config::LipSyncMode> lip_sync_mode;
-    std::optional<bool> mic_lip_agc_enabled;
-    std::optional<bool> barge_in_enabled;
-    std::optional<std::string> device_name;
-    std::optional<std::string> auth_password;
-};
 
 config::DeviceConfig g_active;
-StagingBuffer g_staging;
+config::StagedConfig g_staging;
 // STA-connected flag. Deliberately std::atomic and NOT guarded by g_mutex:
 // notify_wifi_connected(true) fires from the IP_EVENT_STA_GOT_IP handler,
 // which lands during a ~4 s window BEFORE the cfg-wifi-init task has run
@@ -415,7 +395,7 @@ esp_err_t handle_ssid_post(httpd_req_t* req)
     std::string body;
     if (read_body_str(req, body, kMaxSsid) != ESP_OK) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.ssid = std::move(body);
+    g_staging.set_str("ssid", std::move(body));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -426,7 +406,7 @@ esp_err_t handle_password_post(httpd_req_t* req)
     std::string body;
     if (read_body_str(req, body, kMaxPassword) != ESP_OK) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.password = std::move(body);
+    g_staging.set_str("password", std::move(body));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -437,7 +417,7 @@ esp_err_t handle_api_key_post(httpd_req_t* req)
     std::string body;
     if (read_body_str(req, body, kMaxApiKey) != ESP_OK) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.api_key = std::move(body);
+    g_staging.set_str("api-key", std::move(body));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -448,7 +428,7 @@ esp_err_t handle_gemini_api_key_post(httpd_req_t* req)
     std::string body;
     if (read_body_str(req, body, kMaxApiKey) != ESP_OK) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.gemini_api_key = std::move(body);
+    g_staging.set_str("gemini-api-key", std::move(body));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -459,7 +439,7 @@ esp_err_t handle_xiaozhi_url_post(httpd_req_t* req)
     std::string body;
     if (read_body_str(req, body, kMaxApiKey) != ESP_OK) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.xiaozhi_url = std::move(body);
+    g_staging.set_str("xiaozhi-url", std::move(body));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -470,7 +450,7 @@ esp_err_t handle_xiaozhi_token_post(httpd_req_t* req)
     std::string body;
     if (read_body_str(req, body, kMaxApiKey) != ESP_OK) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.xiaozhi_token = std::move(body);
+    g_staging.set_str("xiaozhi-token", std::move(body));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -482,7 +462,7 @@ esp_err_t handle_openai_enabled_post(httpd_req_t* req)
     if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
     const bool enabled = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.openai_enabled = enabled;
+    g_staging.set_num("openai-enabled", enabled ? 1 : 0);
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -494,7 +474,7 @@ esp_err_t handle_rtp_enabled_post(httpd_req_t* req)
     if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
     const bool enabled = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.rtp_audio_enabled = enabled;
+    g_staging.set_num("rtp-enabled", enabled ? 1 : 0);
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -506,7 +486,7 @@ esp_err_t handle_jtts_idle_enabled_post(httpd_req_t* req)
     if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
     const bool enabled = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.jtts_idle_enabled = enabled;
+    g_staging.set_num("jtts-idle-enabled", enabled ? 1 : 0);
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -518,7 +498,7 @@ esp_err_t handle_led_mouth_sync_post(httpd_req_t* req)
     if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
     const bool enabled = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.led_mouth_sync_enabled = enabled;
+    g_staging.set_num("led-mouth-sync", enabled ? 1 : 0);
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -538,7 +518,7 @@ esp_err_t handle_operation_mode_post(httpd_req_t* req)
         return send_text(req, "operation_mode out of range");
     }
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.operation_mode = static_cast<config::OperationMode>(v);
+    g_staging.set_num("operation-mode", static_cast<std::uint32_t>(v));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -558,7 +538,7 @@ esp_err_t handle_audio_output_post(httpd_req_t* req)
         return send_text(req, "audio_output out of range");
     }
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.audio_output = static_cast<config::AudioOutput>(v);
+    g_staging.set_num("audio-output", static_cast<std::uint32_t>(v));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -578,7 +558,7 @@ esp_err_t handle_lip_sync_mode_post(httpd_req_t* req)
         return send_text(req, "lip_sync_mode out of range");
     }
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.lip_sync_mode = static_cast<config::LipSyncMode>(v);
+    g_staging.set_num("lip-sync-mode", static_cast<std::uint32_t>(v));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -590,7 +570,7 @@ esp_err_t handle_mic_lip_agc_post(httpd_req_t* req)
     if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
     const bool enabled = !body.empty() && body[0] == '1';
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.mic_lip_agc_enabled = enabled;
+    g_staging.set_num("mic-lip-agc", enabled ? 1 : 0);
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -602,7 +582,7 @@ esp_err_t handle_barge_in_enabled_post(httpd_req_t* req)
     if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
     const bool enabled = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.barge_in_enabled = enabled;
+    g_staging.set_num("barge-in", enabled ? 1 : 0);
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -614,7 +594,7 @@ esp_err_t handle_battery_gauge_post(httpd_req_t* req)
     if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
     const bool enabled = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.battery_gauge_enabled = enabled;
+    g_staging.set_num("battery-gauge", enabled ? 1 : 0);
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -626,7 +606,7 @@ esp_err_t handle_startup_arpeggio_post(httpd_req_t* req)
     if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
     const bool enabled = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.startup_arpeggio_enabled = enabled;
+    g_staging.set_num("startup-arpeggio", enabled ? 1 : 0);
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -638,7 +618,7 @@ esp_err_t handle_servo_enabled_post(httpd_req_t* req)
     if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
     const bool enabled = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.servo_enabled = enabled;
+    g_staging.set_num("servo-enabled", enabled ? 1 : 0);
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -651,7 +631,7 @@ esp_err_t handle_lt_config_post(httpd_req_t* req)
     std::string body;
     if (read_body_str(req, body, kMaxJttsConfig) != ESP_OK) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.lt_config = body;
+    g_staging.set_str("lt-config", body);
     LtConfigSink sink = g_lt_config_sink;
     xSemaphoreGive(g_mutex);
     if (sink) sink(body);
@@ -668,7 +648,7 @@ esp_err_t handle_mcp_token_post(httpd_req_t* req)
     std::string body;
     if (read_body_str(req, body, 128) != ESP_OK) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.mcp_api_token = std::move(body);
+    g_staging.set_str("mcp-token", std::move(body));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -683,7 +663,7 @@ esp_err_t handle_provider_post(httpd_req_t* req)
     if (v == static_cast<int>(config::Provider::Gemini)) p = config::Provider::Gemini;
     else if (v == static_cast<int>(config::Provider::XiaoZhi)) p = config::Provider::XiaoZhi;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.provider = p;
+    g_staging.set_num("provider", static_cast<std::uint32_t>(p));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -694,7 +674,7 @@ esp_err_t handle_jtts_config_post(httpd_req_t* req)
     std::string body;
     if (read_body_str(req, body, kMaxJttsConfig) != ESP_OK) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.jtts_config = std::move(body);
+    g_staging.set_str("jtts-config", std::move(body));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -705,7 +685,7 @@ esp_err_t handle_servo_limits_post(httpd_req_t* req)
     std::string body;
     if (read_body_str(req, body, kMaxJttsConfig) != ESP_OK) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.servo_limits = std::move(body);
+    g_staging.set_str("servo-limits", std::move(body));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -716,7 +696,7 @@ esp_err_t handle_system_prompt_post(httpd_req_t* req)
     std::string body;
     if (read_body_str(req, body, kMaxSystemPrompt) != ESP_OK) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.system_prompt = std::move(body);
+    g_staging.set_str("system-prompt", std::move(body));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -727,7 +707,7 @@ esp_err_t handle_conv_headers_post(httpd_req_t* req)
     std::string body;
     if (read_body_str(req, body, kMaxConvHeaders) != ESP_OK) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.conv_headers = std::move(body);
+    g_staging.set_str("conv-headers", std::move(body));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -752,7 +732,7 @@ esp_err_t handle_device_name_post(httpd_req_t* req)
     std::string body;
     if (read_body_str(req, body, kMaxDeviceName) != ESP_OK) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.device_name = std::move(body);
+    g_staging.set_str("device-name", std::move(body));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -763,7 +743,7 @@ esp_err_t handle_auth_password_post(httpd_req_t* req)
     std::string body;
     if (read_body_str(req, body, kMaxAuthPassword) != ESP_OK) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.auth_password = std::move(body);
+    g_staging.set_str("auth-password", std::move(body));
     xSemaphoreGive(g_mutex);
     return send_empty(req);
 }
@@ -773,33 +753,7 @@ esp_err_t handle_apply_post(httpd_req_t* req)
     if (!require_auth(req)) return ESP_OK;
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     config::DeviceConfig merged = g_active;
-    if (g_staging.ssid)            merged.wifi_ssid = *g_staging.ssid;
-    if (g_staging.password)        merged.wifi_password = *g_staging.password;
-    if (g_staging.api_key)         merged.openai_api_key = *g_staging.api_key;
-    if (g_staging.openai_enabled)  merged.openai_enabled = *g_staging.openai_enabled;
-    if (g_staging.rtp_audio_enabled) merged.rtp_audio_enabled = *g_staging.rtp_audio_enabled;
-    if (g_staging.jtts_idle_enabled) merged.jtts_idle_enabled = *g_staging.jtts_idle_enabled;
-    if (g_staging.led_mouth_sync_enabled) merged.led_mouth_sync_enabled = *g_staging.led_mouth_sync_enabled;
-    if (g_staging.operation_mode) merged.operation_mode = *g_staging.operation_mode;
-    if (g_staging.audio_output) merged.audio_output = *g_staging.audio_output;
-    if (g_staging.lip_sync_mode) merged.lip_sync_mode = *g_staging.lip_sync_mode;
-    if (g_staging.mic_lip_agc_enabled) merged.mic_lip_agc_enabled = *g_staging.mic_lip_agc_enabled;
-    if (g_staging.barge_in_enabled) merged.barge_in_enabled = *g_staging.barge_in_enabled;
-    if (g_staging.battery_gauge_enabled) merged.battery_gauge_enabled = *g_staging.battery_gauge_enabled;
-    if (g_staging.startup_arpeggio_enabled) merged.startup_arpeggio_enabled = *g_staging.startup_arpeggio_enabled;
-    if (g_staging.servo_enabled)   merged.servo_enabled = *g_staging.servo_enabled;
-    if (g_staging.mcp_api_token)   merged.mcp_api_token = *g_staging.mcp_api_token;
-    if (g_staging.lt_config)       merged.lt_config_json = *g_staging.lt_config;
-    if (g_staging.jtts_config)     merged.jtts_config_json = *g_staging.jtts_config;
-    if (g_staging.servo_limits)    merged.servo_limits_json = *g_staging.servo_limits;
-    if (g_staging.gemini_api_key)  merged.gemini_api_key = *g_staging.gemini_api_key;
-    if (g_staging.xiaozhi_url)     merged.xiaozhi_url = *g_staging.xiaozhi_url;
-    if (g_staging.xiaozhi_token)   merged.xiaozhi_token = *g_staging.xiaozhi_token;
-    if (g_staging.system_prompt)   merged.system_prompt = *g_staging.system_prompt;
-    if (g_staging.conv_headers)    merged.conv_extra_headers = *g_staging.conv_headers;
-    if (g_staging.provider)        merged.provider = *g_staging.provider;
-    if (g_staging.device_name)     merged.device_name = *g_staging.device_name;
-    if (g_staging.auth_password)   merged.auth_password = *g_staging.auth_password;
+    g_staging.merge_into(merged);
     xSemaphoreGive(g_mutex);
 
     auto result = config::store::save(merged);

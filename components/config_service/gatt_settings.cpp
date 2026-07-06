@@ -5,6 +5,7 @@
 #include <config_service/config_store.hpp>
 #include <config_service/crypto.hpp>
 #include <config_service/ota.hpp>
+#include <config_service/staged_config.hpp>
 #include <avatar_vm/storage.hpp>
 
 #include <array>
@@ -356,30 +357,9 @@ static const ble_uuid128_t kAuthPasswordUuid = BLE_UUID128_INIT(
 // --- Mutable state guarded by g_mutex ---
 static SemaphoreHandle_t g_mutex = nullptr;
 
-struct StagingBuffer {
-    std::optional<std::string> ssid, password, api_key, jtts_config, gemini_api_key;
-    std::optional<std::string> xiaozhi_url, xiaozhi_token, face_config, servo_limits;
-    std::optional<bool> openai_enabled;
-    std::optional<bool> rtp_audio_enabled;
-    std::optional<bool> jtts_idle_enabled;
-    std::optional<bool> battery_gauge_enabled;
-    std::optional<bool> startup_arpeggio_enabled;
-    std::optional<bool> servo_enabled;
-    std::optional<bool> led_mouth_sync_enabled;
-    std::optional<std::string> mcp_api_token;
-    std::optional<std::string> lt_config;
-    std::optional<Provider> provider;
-    std::optional<OperationMode> operation_mode;
-    std::optional<AudioOutput> audio_output;
-    std::optional<LipSyncMode> lip_sync_mode;
-    std::optional<bool> mic_lip_agc_enabled;
-    std::optional<bool> barge_in_enabled;
-    std::optional<std::string> device_name;
-    std::optional<std::string> auth_password;
-};
 
 static DeviceConfig g_active;
-static StagingBuffer g_staging;
+static StagedConfig g_staging;
 static bool g_wifi_connected = false;
 static uint16_t g_status_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static bool g_status_subscribed = false;
@@ -1150,7 +1130,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (pt.size() > 32) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.ssid = std::move(val);
+            g_staging.set_str("ssid", std::move(val));
             xSemaphoreGive(g_mutex);
             return 0;
         }
@@ -1158,7 +1138,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (pt.size() > 64) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.password = std::move(val);
+            g_staging.set_str("password", std::move(val));
             xSemaphoreGive(g_mutex);
             return 0;
         }
@@ -1166,35 +1146,35 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (pt.size() > 256) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.api_key = std::move(val);
+            g_staging.set_str("api-key", std::move(val));
             xSemaphoreGive(g_mutex);
             return 0;
         }
         if (attr_handle == g_enabled_handle) {
             if (pt.size() != 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.openai_enabled = (pt[0] != 0);
+            g_staging.set_num("openai-enabled", pt[0] != 0 ? 1 : 0);
             xSemaphoreGive(g_mutex);
             return 0;
         }
         if (attr_handle == g_rtp_enabled_handle) {
             if (pt.size() != 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.rtp_audio_enabled = (pt[0] != 0);
+            g_staging.set_num("rtp-enabled", pt[0] != 0 ? 1 : 0);
             xSemaphoreGive(g_mutex);
             return 0;
         }
         if (attr_handle == g_jtts_idle_enabled_handle) {
             if (pt.size() != 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.jtts_idle_enabled = (pt[0] != 0);
+            g_staging.set_num("jtts-idle-enabled", pt[0] != 0 ? 1 : 0);
             xSemaphoreGive(g_mutex);
             return 0;
         }
         if (attr_handle == g_led_mouth_sync_handle) {
             if (pt.size() != 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.led_mouth_sync_enabled = (pt[0] != 0);
+            g_staging.set_num("led-mouth-sync", pt[0] != 0 ? 1 : 0);
             xSemaphoreGive(g_mutex);
             return 0;
         }
@@ -1204,14 +1184,14 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
                 return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             }
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.lip_sync_mode = static_cast<LipSyncMode>(pt[0]);
+            g_staging.set_num("lip-sync-mode", pt[0]);
             xSemaphoreGive(g_mutex);
             return 0;
         }
         if (attr_handle == g_mic_lip_agc_handle) {
             if (pt.size() != 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.mic_lip_agc_enabled = (pt[0] != 0);
+            g_staging.set_num("mic-lip-agc", pt[0] != 0 ? 1 : 0);
             xSemaphoreGive(g_mutex);
             return 0;
         }
@@ -1221,7 +1201,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
                 return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             }
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.operation_mode = static_cast<OperationMode>(pt[0]);
+            g_staging.set_num("operation-mode", pt[0]);
             xSemaphoreGive(g_mutex);
             return 0;
         }
@@ -1231,14 +1211,14 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
                 return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             }
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.audio_output = static_cast<AudioOutput>(pt[0]);
+            g_staging.set_num("audio-output", pt[0]);
             xSemaphoreGive(g_mutex);
             return 0;
         }
         if (attr_handle == g_barge_in_enabled_handle) {
             if (pt.size() != 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.barge_in_enabled = (pt[0] != 0);
+            g_staging.set_num("barge-in", pt[0] != 0 ? 1 : 0);
             xSemaphoreGive(g_mutex);
             return 0;
         }
@@ -1246,7 +1226,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (pt.size() > 24) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.device_name = std::move(val);
+            g_staging.set_str("device-name", std::move(val));
             xSemaphoreGive(g_mutex);
             return 0;
         }
@@ -1255,28 +1235,28 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (pt.size() > 64) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.auth_password = std::move(val);
+            g_staging.set_str("auth-password", std::move(val));
             xSemaphoreGive(g_mutex);
             return 0;
         }
         if (attr_handle == g_bat_gauge_handle) {
             if (pt.size() != 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.battery_gauge_enabled = (pt[0] != 0);
+            g_staging.set_num("battery-gauge", pt[0] != 0 ? 1 : 0);
             xSemaphoreGive(g_mutex);
             return 0;
         }
         if (attr_handle == g_boot_arp_handle) {
             if (pt.size() != 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.startup_arpeggio_enabled = (pt[0] != 0);
+            g_staging.set_num("startup-arpeggio", pt[0] != 0 ? 1 : 0);
             xSemaphoreGive(g_mutex);
             return 0;
         }
         if (attr_handle == g_servo_enabled_handle) {
             if (pt.size() != 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.servo_enabled = (pt[0] != 0);
+            g_staging.set_num("servo-enabled", pt[0] != 0 ? 1 : 0);
             xSemaphoreGive(g_mutex);
             return 0;
         }
@@ -1285,7 +1265,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (pt.size() > 128) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.mcp_api_token = std::move(val);
+            g_staging.set_str("mcp-token", std::move(val));
             xSemaphoreGive(g_mutex);
             return 0;
         }
@@ -1293,7 +1273,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (pt.size() > kMaxJttsConfigBytes) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.jtts_config = std::move(val);
+            g_staging.set_str("jtts-config", std::move(val));
             xSemaphoreGive(g_mutex);
             return 0;
         }
@@ -1317,7 +1297,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (pt[0] == static_cast<std::uint8_t>(Provider::Gemini)) p = Provider::Gemini;
             else if (pt[0] == static_cast<std::uint8_t>(Provider::XiaoZhi)) p = Provider::XiaoZhi;
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.provider = p;
+            g_staging.set_num("provider", static_cast<std::uint32_t>(p));
             xSemaphoreGive(g_mutex);
             return 0;
         }
@@ -1325,7 +1305,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (pt.size() > 256) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.gemini_api_key = std::move(val);
+            g_staging.set_str("gemini-api-key", std::move(val));
             xSemaphoreGive(g_mutex);
             return 0;
         }
@@ -1333,7 +1313,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (pt.size() > 256) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.xiaozhi_url = std::move(val);
+            g_staging.set_str("xiaozhi-url", std::move(val));
             xSemaphoreGive(g_mutex);
             return 0;
         }
@@ -1341,7 +1321,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (pt.size() > 256) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.xiaozhi_token = std::move(val);
+            g_staging.set_str("xiaozhi-token", std::move(val));
             xSemaphoreGive(g_mutex);
             return 0;
         }
@@ -1349,7 +1329,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (pt.size() > kMaxJttsConfigBytes) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.face_config = val; // stage for Apply (NVS persist)
+            g_staging.set_str("face-config", val); // stage for Apply (NVS persist)
             FaceConfigSink sink = g_face_config_sink;
             xSemaphoreGive(g_mutex);
             // Live apply (no reboot). Hand the raw JSON to the app; it must not
@@ -1361,7 +1341,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (pt.size() > kMaxJttsConfigBytes) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.lt_config = val; // stage for Apply (NVS persist)
+            g_staging.set_str("lt-config", val); // stage for Apply (NVS persist)
             LtConfigSink sink = g_lt_config_sink;
             xSemaphoreGive(g_mutex);
             // Live apply: demo_loop polls the version and re-parses off this
@@ -1373,7 +1353,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (pt.size() > kMaxJttsConfigBytes) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             std::string val(reinterpret_cast<const char*>(pt.data()), pt.size());
             xSemaphoreTake(g_mutex, portMAX_DELAY);
-            g_staging.servo_limits = std::move(val); // stage for Apply (reboot reloads)
+            g_staging.set_str("servo-limits", std::move(val)); // stage for Apply (reboot reloads)
             xSemaphoreGive(g_mutex);
             return 0;
         }
@@ -1559,32 +1539,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
 
             xSemaphoreTake(g_mutex, portMAX_DELAY);
             DeviceConfig merged = g_active;
-            if (g_staging.ssid) merged.wifi_ssid = *g_staging.ssid;
-            if (g_staging.password) merged.wifi_password = *g_staging.password;
-            if (g_staging.api_key) merged.openai_api_key = *g_staging.api_key;
-            if (g_staging.openai_enabled) merged.openai_enabled = *g_staging.openai_enabled;
-            if (g_staging.rtp_audio_enabled) merged.rtp_audio_enabled = *g_staging.rtp_audio_enabled;
-            if (g_staging.jtts_idle_enabled) merged.jtts_idle_enabled = *g_staging.jtts_idle_enabled;
-            if (g_staging.led_mouth_sync_enabled) merged.led_mouth_sync_enabled = *g_staging.led_mouth_sync_enabled;
-            if (g_staging.operation_mode) merged.operation_mode = *g_staging.operation_mode;
-            if (g_staging.audio_output) merged.audio_output = *g_staging.audio_output;
-            if (g_staging.lip_sync_mode) merged.lip_sync_mode = *g_staging.lip_sync_mode;
-            if (g_staging.mic_lip_agc_enabled) merged.mic_lip_agc_enabled = *g_staging.mic_lip_agc_enabled;
-            if (g_staging.barge_in_enabled) merged.barge_in_enabled = *g_staging.barge_in_enabled;
-            if (g_staging.device_name) merged.device_name = *g_staging.device_name;
-            if (g_staging.auth_password) merged.auth_password = *g_staging.auth_password;
-            if (g_staging.battery_gauge_enabled) merged.battery_gauge_enabled = *g_staging.battery_gauge_enabled;
-            if (g_staging.startup_arpeggio_enabled) merged.startup_arpeggio_enabled = *g_staging.startup_arpeggio_enabled;
-            if (g_staging.servo_enabled) merged.servo_enabled = *g_staging.servo_enabled;
-            if (g_staging.mcp_api_token) merged.mcp_api_token = *g_staging.mcp_api_token;
-            if (g_staging.lt_config) merged.lt_config_json = *g_staging.lt_config;
-            if (g_staging.jtts_config) merged.jtts_config_json = *g_staging.jtts_config;
-            if (g_staging.gemini_api_key) merged.gemini_api_key = *g_staging.gemini_api_key;
-            if (g_staging.xiaozhi_url) merged.xiaozhi_url = *g_staging.xiaozhi_url;
-            if (g_staging.xiaozhi_token) merged.xiaozhi_token = *g_staging.xiaozhi_token;
-            if (g_staging.face_config) merged.face_config_json = *g_staging.face_config;
-            if (g_staging.servo_limits) merged.servo_limits_json = *g_staging.servo_limits;
-            if (g_staging.provider) merged.provider = *g_staging.provider;
+            g_staging.merge_into(merged);
             xSemaphoreGive(g_mutex);
 
             auto result = store::save(merged);

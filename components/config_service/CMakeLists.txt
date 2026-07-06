@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "config_service.cpp" "gatt_settings.cpp" "config_store.cpp" "settings_registry.cpp" "crypto.cpp" "dis.cpp" "ota.cpp"
+    SRCS "config_service.cpp" "gatt_settings.cpp" "config_store.cpp" "settings_registry.cpp" "staged_config.cpp" "crypto.cpp" "dis.cpp" "ota.cpp"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES tl_expected
