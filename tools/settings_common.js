@@ -535,7 +535,48 @@
     }
   }
 
+  // --- LT timekeeper config form -------------------------------------------
+  // Shared form <-> compact-JSON mapping for the #lt-section inputs
+  // (lt-total / lt-warn / lt-soon / lt-repeat numbers + the four
+  // text/reading announcement pairs). See main/lt_timer.hpp for the schema.
+
+  // Build the compact JSON from whichever fields are filled. Empty form →
+  // null (= nothing to send; firmware keeps current values).
+  function buildLtConfigJson() {
+    const $id = (id) => document.getElementById(id);
+    const num = (id) => { const v = $id(id).value.trim(); return v === '' ? null : Number(v); };
+    const str = (id) => { const v = $id(id).value.trim(); return v === '' ? null : v; };
+    const o = {};
+    const total = num('lt-total');   if (total  != null && total  > 0) o.total_s  = total;
+    const warn  = num('lt-warn');    if (warn   != null && warn   > 0) o.warn_s   = warn;
+    const soon  = num('lt-soon');    if (soon   != null && soon   >= 0) o.soon_s   = soon;
+    const rep   = num('lt-repeat');  if (rep    != null && rep    >= 0) o.repeat_s = rep;
+    for (const key of ['warn', 'soon', 'just', 'over']) {
+      const t = str(`lt-${key}-text`), r = str(`lt-${key}-reading`);
+      if (t || r) { o[key] = {}; if (t) o[key].text = t; if (r) o[key].reading = r; }
+    }
+    return Object.keys(o).length ? JSON.stringify(o) : null;
+  }
+
+  // Populate the form from the device-reported JSON. Missing / unparsable
+  // JSON leaves the form untouched (placeholders show the firmware defaults).
+  function seedLtConfigForm(json) {
+    if (!json) return;
+    let o;
+    try { o = JSON.parse(json); } catch { return; }
+    const $id = (id) => document.getElementById(id);
+    if (o.total_s  != null) $id('lt-total').value  = o.total_s;
+    if (o.warn_s   != null) $id('lt-warn').value   = o.warn_s;
+    if (o.soon_s   != null) $id('lt-soon').value   = o.soon_s;
+    if (o.repeat_s != null) $id('lt-repeat').value = o.repeat_s;
+    for (const key of ['warn', 'soon', 'just', 'over']) {
+      if (!o[key]) continue;
+      if (o[key].text) $id(`lt-${key}-text`).value = o[key].text;
+      if (o[key].reading) $id(`lt-${key}-reading`).value = o[key].reading;
+    }
+  }
+
   window.StackchanSettings = { BOARDS, boardLabel, boardSlug, log, setupTabs, init,
                                setupDslEditor, SERVO_DEFAULTS, setupServoCalibration,
-                               setupSecretFields };
+                               setupSecretFields, buildLtConfigJson, seedLtConfigForm };
 })();

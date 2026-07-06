@@ -2798,23 +2798,8 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       try {
         const ltBytes = await readEncrypted(chrLtConfig);
         const ltJson = dec.decode(ltBytes);
-        if (ltJson) {
-          try {
-            const o = JSON.parse(ltJson);
-            if (o.total_s  != null) document.getElementById('lt-total').value  = o.total_s;
-            if (o.warn_s   != null) document.getElementById('lt-warn').value   = o.warn_s;
-            if (o.soon_s   != null) document.getElementById('lt-soon').value   = o.soon_s;
-            if (o.repeat_s != null) document.getElementById('lt-repeat').value = o.repeat_s;
-            if (o.warn) { if (o.warn.text) document.getElementById('lt-warn-text').value = o.warn.text;
-                          if (o.warn.reading) document.getElementById('lt-warn-reading').value = o.warn.reading; }
-            if (o.soon) { if (o.soon.text) document.getElementById('lt-soon-text').value = o.soon.text;
-                          if (o.soon.reading) document.getElementById('lt-soon-reading').value = o.soon.reading; }
-            if (o.just) { if (o.just.text) document.getElementById('lt-just-text').value = o.just.text;
-                          if (o.just.reading) document.getElementById('lt-just-reading').value = o.just.reading; }
-            if (o.over) { if (o.over.text) document.getElementById('lt-over-text').value = o.over.text;
-                          if (o.over.reading) document.getElementById('lt-over-reading').value = o.over.reading; }
-          } catch (_) { /* malformed stored JSON — leave placeholders */ }
-        }
+        // Malformed stored JSON leaves the placeholders (seed no-ops).
+        StackchanSettings.seedLtConfigForm(ltJson);
         log(ltJson ? `LT 設定を読み込み: ${ltBytes.length}B` : 'LT 設定: ファーム既定値');
       } catch (e) {
         log(`LT 設定の取得失敗: ${e.message}`, 'err');
@@ -3172,24 +3157,10 @@ document.getElementById('btn-apply').addEventListener('click', async () => {
     }
 
     // LT timekeeper: write whatever's in the form (live apply + staged).
+    // Form -> JSON mapping shared with the Wi-Fi page (settings_common.js).
     if (chrLtConfig) {
-      const num = (id) => { const v = document.getElementById(id).value.trim(); return v === '' ? null : Number(v); };
-      const str = (id) => { const v = document.getElementById(id).value.trim(); return v === '' ? null : v; };
-      const o = {};
-      const lt_total = num('lt-total');  if (lt_total  != null && lt_total  > 0) o.total_s  = lt_total;
-      const lt_warn  = num('lt-warn');   if (lt_warn   != null && lt_warn   > 0) o.warn_s   = lt_warn;
-      const lt_soon  = num('lt-soon');   if (lt_soon   != null && lt_soon   >= 0) o.soon_s   = lt_soon;
-      const lt_rep   = num('lt-repeat'); if (lt_rep    != null && lt_rep    >= 0) o.repeat_s = lt_rep;
-      const lt_wt = str('lt-warn-text'), lt_wr = str('lt-warn-reading');
-      if (lt_wt || lt_wr) { o.warn = {}; if (lt_wt) o.warn.text = lt_wt; if (lt_wr) o.warn.reading = lt_wr; }
-      const lt_st = str('lt-soon-text'), lt_sr = str('lt-soon-reading');
-      if (lt_st || lt_sr) { o.soon = {}; if (lt_st) o.soon.text = lt_st; if (lt_sr) o.soon.reading = lt_sr; }
-      const lt_jt = str('lt-just-text'), lt_jr = str('lt-just-reading');
-      if (lt_jt || lt_jr) { o.just = {}; if (lt_jt) o.just.text = lt_jt; if (lt_jr) o.just.reading = lt_jr; }
-      const lt_ot = str('lt-over-text'), lt_or = str('lt-over-reading');
-      if (lt_ot || lt_or) { o.over = {}; if (lt_ot) o.over.text = lt_ot; if (lt_or) o.over.reading = lt_or; }
-      if (Object.keys(o).length) {
-        const ltJson = JSON.stringify(o);
+      const ltJson = StackchanSettings.buildLtConfigJson();
+      if (ltJson) {
         await writeEncrypted(chrLtConfig, strToBytes(ltJson));
         log(`LT 設定 書き込み完了 (${ltJson.length}B)`, 'ok');
       }
