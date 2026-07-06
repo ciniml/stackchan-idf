@@ -339,7 +339,7 @@ private:
         const std::uint32_t total = tx_evicted_total_.fetch_add(1, std::memory_order_relaxed) + 1;
         const std::uint32_t now_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
         if (last_evict_log_ms_ == 0 || now_ms - last_evict_log_ms_ >= kEvictLogIntervalMs) {
-            ESP_LOGW(kTag, "audio tx queue full; evicting oldest chunks (%u evicted this session)",
+            ESP_LOGD(kTag, "audio tx queue full; evicting oldest chunks (%u evicted this session)",
                      static_cast<unsigned>(total));
             last_evict_log_ms_ = now_ms;
         }
@@ -466,9 +466,10 @@ private:
                      static_cast<unsigned long>(audio_seq_),
                      static_cast<unsigned long>(dt), n, send_rc);
         } else if (dt >= 100 || (audio_seq_ % 100) == 1) {
-            // Light periodic / slow-send heartbeat.
+            // Debug-only heartbeat — per-send lines flood the log on a
+            // congested uplink; aggregates live in the per-turn metrics.
             const UBaseType_t queued = uxQueueMessagesWaiting(audio_tx_queue_);
-            ESP_LOGI(kTag, "audio send seq=%lu dt=%lums queued=%u",
+            ESP_LOGD(kTag, "audio send seq=%lu dt=%lums queued=%u",
                      static_cast<unsigned long>(audio_seq_),
                      static_cast<unsigned long>(dt),
                      static_cast<unsigned>(queued));

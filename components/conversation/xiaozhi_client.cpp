@@ -273,7 +273,7 @@ private:
         const std::uint32_t total = tx_evicted_total_.fetch_add(1, std::memory_order_relaxed) + 1;
         const std::uint32_t now_ms = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
         if (last_evict_log_ms_ == 0 || now_ms - last_evict_log_ms_ >= kEvictLogIntervalMs) {
-            ESP_LOGW(kTag, "audio tx queue full; evicting oldest chunks (%u evicted this session)",
+            ESP_LOGD(kTag, "audio tx queue full; evicting oldest chunks (%u evicted this session)",
                      static_cast<unsigned>(total));
             last_evict_log_ms_ = now_ms;
         }
@@ -801,7 +801,8 @@ private:
             ESP_LOGW(kTag, "audio send failed seq=%lu rc=%d",
                      static_cast<unsigned long>(audio_seq_), rc);
         } else if ((audio_seq_ % 100) == 1) {
-            ESP_LOGI(kTag, "audio send seq=%lu bytes=%u",
+            // Debug-only heartbeat — see gemini/openai counterparts.
+            ESP_LOGD(kTag, "audio send seq=%lu bytes=%u",
                      static_cast<unsigned long>(audio_seq_),
                      static_cast<unsigned>(out.encoded_bytes));
         }
