@@ -50,6 +50,45 @@ static_assert(static_cast<int>(BoardKind::M5Base) == 0 &&
               static_cast<int>(BoardKind::StopWatch) == 4,
               "BoardKind numbering is a BLE/OTA wire contract — append only");
 
+// Per-board static traits, resolved once from the detected BoardKind. This
+// collects every "which board am I?" decision that used to live as scattered
+// kind() switches across main/ — speaker gain policy, UI flavour, input
+// gestures, peripheral presence. Runtime discoveries that cut across the
+// board kind (currently only the Module Audio ES8388 probe) are folded in by
+// the boot code mutating its profile copy in ONE place (see app_main), so
+// downstream consumers never re-derive two-axis decisions.
+struct BoardProfile {
+    // M5Unified spk_cfg.magnification override; 0 = keep the factory value
+    // (M5Unified tunes CoreS3 / AtomNyan per their codec+amp pair).
+    // StopWatch needs 16: the ES8311 → AW8737A path has a 200 kΩ input
+    // attenuator eating ~-8 dB.
+    std::uint8_t speaker_magnification = 0;
+    // Per-board factory speaker volume — the "100 %" reference the user
+    // gain slider multiplies. Weak downstream paths (StopWatch, Module
+    // Audio line-out) ship at full digital scale.
+    std::uint8_t speaker_base_volume = 128;
+    // Round panel (StopWatch AMOLED): render inside the inscribed circle.
+    bool circular_display = false;
+    // On-device UI flavour: true = atom_status button overlay (no LCD
+    // touch), false = the touch-driven device_ui tab screen.
+    bool button_overlay_ui = false;
+    // BtnA toggles the device_ui (StopWatch: corner hot-zone on a round
+    // panel is awkward, the physical button is the reliable opener).
+    bool btn_a_toggles_ui = false;
+    // Outer-ring touch drags the avatar's gaze (StopWatch round panel).
+    bool touch_gaze_follow = false;
+    // SCS servo bus wired (M5/Takao base). Runtime conditions can still
+    // revoke it (Module Audio steals G6/G7 — see app_main).
+    bool has_servo_bus = false;
+    // GC0308 DVP camera wired (CoreS3 mainboard on the M5 base). The
+    // CONFIG_STACKCHAN_CAMERA_ENABLED compile gate applies on top.
+    bool has_camera = false;
+};
+
+// The static profile for a detected board. Pure function of the enum — the
+// single place new per-board decisions should land.
+BoardProfile profile_for(BoardKind kind) noexcept;
+
 // SCS servo bus wiring for the detected board. Maps 1:1 onto scs_servo::ScsBus::Config.
 struct ServoBusConfig {
     uart_port_t uart;

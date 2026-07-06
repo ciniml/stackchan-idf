@@ -188,6 +188,10 @@ extern "C" void app_main()
         }
     }
     auto& board = *board_result;
+    // Static per-board traits. Runtime discoveries that cut across the board
+    // kind (the Module Audio probe below) are folded into this local copy in
+    // one place; everything downstream reads the profile, not board.kind().
+    stackchan::board::BoardProfile profile = stackchan::board::profile_for(board.kind());
 
     // Reserve the conversation task's internal-RAM speaker ring *now*, before
     // anything else has a chance to chew up DRAM. The conversation task itself
@@ -295,6 +299,21 @@ extern "C" void app_main()
     // Keep the old name available so the rest of this block (still using
     // has_audio_module) reads naturally. Equivalent to effective_audio_module.
     const bool has_audio_module = effective_audio_module;
+    if (has_audio_module) {
+        // ES8388 has no amp; its LOUT1/2 jack drive is line-level. The
+        // factory CoreS3 magnification (4) assumed the internal speaker —
+        // Module Audio's TRRS load needs more digital pre-gain (8 doubles
+        // the headroom without soft-clipping the mixer), and ships at full
+        // digital scale like the other weak downstream paths.
+        profile.speaker_magnification = 8;
+        profile.speaker_base_volume = 255;
+        // Module Audio's I2S output overrides the SCS bus pads (G6 = WS,
+        // G7 = MCLK; 1-signal-per-pad GPIO matrix), so the servo bus is
+        // unusable while it is active — hard-gate everything servo-related
+        // off so the user gets a predictable "silent head" state. Picking
+        // audio_output=Internal recovers the servos.
+        profile.has_servo_bus = false;
+    }
     // Always run the MCU-side RGB diagnostic when EITHER the codec OR the
     // MCU shows up. The MCU lives at 0x33 (LED strip + buttons) and is on
     // the same M-BUS I2C as the codec but doesn't depend on it — useful for
@@ -323,26 +342,10 @@ extern "C" void app_main()
         // audio playback, which drops BLE RX throughput from ~22 KiB/s
         // to ~10 KiB/s and turns BLE audio streaming choppy.
         spk.task_pinned_core = 1;
-        // StopWatch (C152) needs a software gain bump: the M5Unified default
-        // spk_cfg.magnification = 1 leaves audio inaudibly quiet through the
-        // ES8311 → AW8737A path (R57/R58 = 200 kΩ input attenuator on the
-        // amp side eats ~-8 dB before the speaker). Other boards keep the
-        // factory magnification (CoreS3 / AtomNyan tune theirs in M5Unified
-        // per their codec / amp pair).
-        if (board.kind() == stackchan::board::BoardKind::StopWatch) {
-            spk.magnification = 16;
-        }
-        if (has_audio_module) {
-            // ES8388 has no amp; its LOUT1/2 jack drive is line-level.
-            // The factory CoreS3 magnification (4) plus AW88298's class-D
-            // gain assumed the internal speaker downstream — Module
-            // Audio's TRRS load needs more digital pre-gain to reach the
-            // same perceived loudness through a passive headphone or a
-            // typical 0.5 W powered speaker. 8 doubles the headroom
-            // without pushing every sample to full scale (which would
-            // soft-clip the M5Unified mixer when multiple sources
-            // overlap, e.g. JTTS + LT chime).
-            spk.magnification = 8;
+        // Per-board / per-path software gain (see BoardProfile + the Module
+        // Audio override above). 0 = keep M5Unified's factory value.
+        if (profile.speaker_magnification != 0) {
+            spk.magnification = profile.speaker_magnification;
         }
         // Module Audio (ES8388) uses a COMPLETELY DIFFERENT I2S pinout from
         // CoreS3's internal AW88298 / ES7210, so when the module is fitted
@@ -418,10 +421,7 @@ extern "C" void app_main()
     // Per-board factory volume (the "100%" reference for the user gain
     // slider). StopWatch / Module Audio paths are weaker downstream so
     // they ship at full digital scale; everything else starts at half.
-    const std::uint8_t spk_base_volume =
-        (board.kind() == stackchan::board::BoardKind::StopWatch || has_audio_module)
-            ? 255
-            : 128;
+    const std::uint8_t spk_base_volume = profile.speaker_base_volume;
     stackchan::app::settings_sinks::set_speaker_base_volume(spk_base_volume);
     // Apply the user's gain (cfg already loaded above). 0..200 % → byte
     // is clamped at 255 so boards already at 255 are unchanged at 100 %.
@@ -646,35 +646,11 @@ extern "C" void app_main()
     // not needed in normal operation.
     // record_and_playback(2, "mic test");
 
-    // is_atom_nyan: legacy predicate covering "no servo bus + no LCD touch
-    // → use atom_status button overlay UI". AtomS3R / AtomS3 fall here.
-    // StopWatch ALSO has no servo bus but DOES have a CST820B touch panel,
-    // so it gets the CoreS3-style touch UI (ui::handle_tap) below — kept
-    // separate from this flag. Servo gating uses the wider no_servo_bus
-    // below; only the on-device UI choice keys off is_atom_nyan.
-    const bool is_atom_nyan =
-        board.kind() == stackchan::board::BoardKind::AtomNyan ||
-        board.kind() == stackchan::board::BoardKind::AtomS3;
-    // Boards without an SCS servo bus. Covers Atom family + StopWatch (no
-    // M5 base wiring) — used to gate servo-power bring-up, servo task
-    // start-up, and barge-in touch hit-tests that assume a head with
-    // servos.
-    //
-    // Module Audio (M144) is also lumped in here: M5Base's SCS bus uses
-    // UART1 on G6 (TX) / G7 (RX), and the Module Audio I2S output we
-    // configure overrides those same pads (G6 = WS, G7 = MCLK). The
-    // ESP32-S3 GPIO matrix is 1-signal-per-pad, so once M5.Speaker.begin
-    // claims the pins (boot arpeggio, then every jtts / conv / MCP say)
-    // the servo bus stops responding — ping / read_present_position /
-    // torque-enable all fail, range mode never publishes positions and
-    // can't re-engage torque on exit. Hard-gate everything servo-related
-    // off when the Module Audio path is active so the user is left in a
-    // predictable "silent head" state rather than partially-broken
-    // servos. The user can pick audio_output=Internal to recover servo.
-    const bool no_servo_bus =
-        is_atom_nyan ||
-        board.kind() == stackchan::board::BoardKind::StopWatch ||
-        effective_audio_module;
+    // On-device UI flavour + servo-bus availability now come from the
+    // profile (the Module Audio override already revoked has_servo_bus
+    // where the I2S pin steal applies — see the probe block above).
+    const bool is_atom_nyan = profile.button_overlay_ui;
+    const bool no_servo_bus = !profile.has_servo_bus;
 
     // Servo bring-up is only meaningful on boards that actually have a servo
     // bus (CoreS3 + M5/Takao). Atom-nyan has no servos in Phase 1 scope; skip
@@ -703,12 +679,10 @@ extern "C" void app_main()
         ESP_LOGW(kTag, "servo VM rail OFF: cfg.servo_enabled=false (set via settings UI)");
     }
 
-    const bool is_circular_display =
-        board.kind() == stackchan::board::BoardKind::StopWatch;
     g_render_args = new stackchan::app::RenderTaskArgs{
         .display = &board.display(),
         .state = g_state,
-        .circular_display = is_circular_display,
+        .circular_display = profile.circular_display,
     };
     const auto servo_limits = stackchan::app::parse_servo_limits(cfg.servo_limits_json);
     if (!no_servo_bus) {
@@ -901,6 +875,8 @@ extern "C" void app_main()
         .jtts_config_json = cfg.jtts_config_json,
         .has_battery = board.has_battery(),
         .is_atom_nyan = is_atom_nyan,
+        .btn_a_toggles_ui = profile.btn_a_toggles_ui,
+        .touch_gaze_follow = profile.touch_gaze_follow,
         .conversation_enabled = cfg.openai_enabled,
         .jtts_idle_enabled = cfg.jtts_idle_enabled,
         .limits = servo_limits,

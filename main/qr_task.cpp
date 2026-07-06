@@ -219,7 +219,7 @@ bool start_qr_scan(board::Board& board)
     // Board-kind gate. Only the M5 CoreS3 base wires the GC0308 in; on
     // Takao base / Atom-nyan the camera doesn't exist and the SCCB probe
     // would NACK forever.
-    if (board.kind() != board::BoardKind::M5Base) {
+    if (!stackchan::board::profile_for(board.kind()).has_camera) {
         ESP_LOGW(kTag, "start_qr_scan: board kind %d has no GC0308 — skipping",
                  static_cast<int>(board.kind()));
         return false;

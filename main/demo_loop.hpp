@@ -24,6 +24,8 @@ struct DemoLoopArgs {
     std::string jtts_config_json;              // babble voice options
     bool has_battery = false;                  // poll INA226 every 5 s
     bool is_atom_nyan = false;                 // button overlay UI instead of LCD touch
+    bool btn_a_toggles_ui = false;             // StopWatch: BtnA opens/closes device_ui
+    bool touch_gaze_follow = false;            // StopWatch: outer-ring gaze following
     bool conversation_enabled = false;         // gates the Wi-Fi-disconnected balloon
     bool jtts_idle_enabled = false;            // idle babble + mouth envelope
     ServoLimits limits;                        // random-pose ranges

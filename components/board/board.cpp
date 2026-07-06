@@ -221,6 +221,34 @@ BoardKind Board::kind() const noexcept
     return impl_->kind();
 }
 
+BoardProfile profile_for(BoardKind kind) noexcept
+{
+    BoardProfile p{};
+    switch (kind) {
+    case BoardKind::M5Base:
+        p.has_servo_bus = true;
+        p.has_camera = true; // GC0308 on the CoreS3 mainboard
+        break;
+    case BoardKind::TakaoBase:
+        p.has_servo_bus = true;
+        // CoreS3 SE (the usual Takao host) has no camera; keep it off until
+        // a camera-equipped Takao build shows up.
+        break;
+    case BoardKind::AtomNyan:
+    case BoardKind::AtomS3:
+        p.button_overlay_ui = true; // 128×128, no LCD touch → atom_status
+        break;
+    case BoardKind::StopWatch:
+        p.speaker_magnification = 16; // ES8311 → AW8737A input attenuator
+        p.speaker_base_volume = 255;  // weak downstream path, full scale
+        p.circular_display = true;
+        p.btn_a_toggles_ui = true;
+        p.touch_gaze_follow = true;
+        break;
+    }
+    return p;
+}
+
 ServoBusConfig Board::servo_bus_config() const noexcept
 {
     if (impl_->kind() == BoardKind::AtomNyan ||

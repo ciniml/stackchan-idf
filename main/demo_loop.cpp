@@ -46,6 +46,8 @@ constexpr const char* kTag = "stackchan";
     const std::string& jtts_config_json = args.jtts_config_json;
     const bool has_battery = args.has_battery;
     const bool is_atom_nyan = args.is_atom_nyan;
+    const bool btn_a_toggles_ui = args.btn_a_toggles_ui;
+    const bool touch_gaze_follow = args.touch_gaze_follow;
     const bool conversation_enabled = args.conversation_enabled;
     const bool jtts_idle_enabled = args.jtts_idle_enabled;
     const ServoLimits& limits = args.limits;
@@ -238,9 +240,7 @@ constexpr const char* kTag = "stackchan";
         // boards BtnA either has no role (CoreS3 uses touch only) or is
         // already claimed by atom_status::poll_button (AtomS3R / AtomS3 →
         // is_atom_nyan branch above, which doesn't reach this path).
-        if (g_board != nullptr &&
-            g_board->kind() == stackchan::board::BoardKind::StopWatch &&
-            M5.BtnA.wasPressed()) {
+        if (btn_a_toggles_ui && g_board != nullptr && M5.BtnA.wasPressed()) {
             app::ui::toggle();
             (void)g_board->vibrate(20);
         }
@@ -321,7 +321,7 @@ constexpr const char* kTag = "stackchan";
             // naturally around the commanded direction rather than
             // locking dead-stop. Released → reset to (0, 0) and the
             // saccade-only behaviour resumes.
-            if (g_board != nullptr && g_board->kind() == stackchan::board::BoardKind::StopWatch) {
+            if (touch_gaze_follow) {
                 constexpr float kCenter = 233.0f;          // 466 / 2
                 constexpr float kOuterR = 233.0f;          // panel edge
                 constexpr float kInnerR = 180.0f;          // ring inner edge

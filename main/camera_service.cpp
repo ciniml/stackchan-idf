@@ -184,7 +184,7 @@ void init_resident(stackchan::board::Board& board)
     // QVGA streaming bounce bandwidth, in exchange for full-resolution
     // photos and (crucially) an intact Bayer mosaic for the RAW capture
     // path, which the QVGA subsampling would scramble.
-    if (board.kind() != stackchan::board::BoardKind::M5Base) {
+    if (!stackchan::board::profile_for(board.kind()).has_camera) {
         return;
     }
     if (auto r = g_camera.begin(stackchan::board::CameraPixelFormat::Rgb565,
