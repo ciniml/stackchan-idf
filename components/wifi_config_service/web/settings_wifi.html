@@ -1679,159 +1679,41 @@ async function startReleaseOta() {
 
 // --- Avatar DSL editor + send -------------------------------------------
 
-(function setupDslEditor() {
-  const srcEl = $('dsl-src');
-  const msg = $('dsl-msg');
-  const sendBtn = $('btn-dsl-send');
-  const setMsg = (txt, kind = '') => { msg.textContent = txt; msg.className = kind; };
-
-  if (!window.AvatarDsl || typeof window.AvatarDsl.compile !== 'function') {
-    setMsg('DSL コンパイラ バンドルが読込み失敗 (firmware ビルド不一致の可能性)', 'err');
-    return;
-  }
-  // Populate preset selector. First entry = initial textarea value.
-  const presetEl = $('dsl-preset');
-  const presets = Array.isArray(window.AVATAR_DSL_PRESETS) ? window.AVATAR_DSL_PRESETS : [];
-  const presetMap = {};
-  presets.forEach((p, idx) => {
-    presetMap[p.name] = p.source;
-    const opt = document.createElement('option');
-    opt.value = p.name;
-    opt.textContent = (idx === 0 ? '↻ ' : '✎ ') + p.name;
-    presetEl.appendChild(opt);
-  });
-  srcEl.value = (presets[0] && presets[0].source) || window.AVATAR_DSL_DEFAULT_SOURCE || '';
-  setMsg('準備完了 — Ctrl/Cmd+Enter または「コンパイル & 送信」で反映');
-
-  let lastBuf = null; // last successfully-compiled bytecode (for download)
-
-  function compileNow() {
-    const t0 = performance.now();
-    let buf;
-    try { buf = window.AvatarDsl.compile(srcEl.value); }
-    catch (e) {
-      setMsg('コンパイル エラー: ' + e.message, 'err');
-      return null;
+// Editor UI (compile / presets / downloads / .avdsl load) is shared with the
+// BLE page via settings_common.js (inlined above) — this page only supplies
+// the HTTP transport adapter. The POST /api/avatar-dsl response ({ok, saved,
+// live}) is normalised to the shared {ok, saved, note, raw} shape here.
+StackchanSettings.setupDslEditor({
+  isConnected: () => true,
+  notConnectedMsg: '未接続',
+  compilerMissingMsg: 'DSL コンパイラ バンドルが読込み失敗 (firmware ビルド不一致の可能性)',
+  async send(u8) {
+    const r = await fetch('/api/avatar-dsl', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: u8,
+    });
+    const body = await r.text();
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${body || r.statusText}`);
+    let parsed;
+    try { parsed = JSON.parse(body); } catch { parsed = null; }
+    if (parsed && parsed.ok) {
+      return {
+        ok: true,
+        saved: parsed.saved,
+        note: parsed.live === false ? ' (NVS のみ書込、live 反映は失敗)' : '',
+        raw: body,
+      };
     }
-    const compileMs = performance.now() - t0;
-    setMsg(`OK — ${buf.byteLength} bytes, コンパイル ${compileMs.toFixed(1)} ms`, 'ok');
-    lastBuf = buf;
-    return buf;
-  }
-
-  async function compileAndSend() {
-    const buf = compileNow();
-    if (!buf) return;
-    sendBtn.disabled = true;
-    const oldText = sendBtn.textContent;
-    sendBtn.textContent = '送信中…';
-    try {
-      const r = await fetch('/api/avatar-dsl', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
-        body: buf,
-      });
-      const body = await r.text();
-      if (!r.ok) throw new Error(`HTTP ${r.status}: ${body || r.statusText}`);
-      let parsed;
-      try { parsed = JSON.parse(body); } catch { parsed = null; }
-      if (parsed && parsed.ok) {
-        const live = parsed.live === false ? ' (NVS のみ書込、live 反映は失敗)' : '';
-        setMsg(`送信完了 — NVS に ${parsed.saved} バイト保存${live}`, 'ok');
-        log(`Avatar DSL 送信 (${buf.byteLength} → NVS ${parsed.saved})`, 'ok');
-      } else {
-        setMsg('送信完了 — レスポンス: ' + body, 'ok');
-        log('Avatar DSL 送信 OK', 'ok');
-      }
-    } catch (e) {
-      setMsg('送信エラー: ' + e.message, 'err');
-      log('Avatar DSL 送信 失敗: ' + e.message, 'err');
-    } finally {
-      sendBtn.textContent = oldText;
-      sendBtn.disabled = false;
-    }
-  }
-
-  sendBtn.addEventListener('click', compileAndSend);
-  // Ctrl/Cmd+Enter inside the textarea triggers compile+send.
-  srcEl.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      compileAndSend();
-    }
-  });
-
-  // Preset selector: load source + send. For the first preset (which is the
-  // firmware-embedded default) we POST /api/avatar-dsl/reset instead of
-  // re-uploading the same bytecode — leaves the NVS slot empty so future
-  // boots use the embedded copy without any persisted override.
-  presetEl.addEventListener('change', async () => {
-    const name = presetEl.value;
-    const src = presetMap[name];
-    if (src == null) return;
-    srcEl.value = src;
-    lastBuf = null;
-    if (presets[0] && name === presets[0].name) {
-      try {
-        const r = await fetch('/api/avatar-dsl/reset', { method: 'POST' });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        setMsg(`プリセット「${name}」を読込み — 実機を内蔵デフォルトに復帰`, 'ok');
-        log(`Avatar DSL プリセット ${name} (reset)`, 'ok');
-      } catch (e) {
-        setMsg('リセット失敗: ' + e.message, 'err');
-      }
-    } else {
-      await compileAndSend();
-    }
-  });
-
-  $('btn-dsl-reset').addEventListener('click', async () => {
-    if (!confirm('実機の顔を firmware 内蔵 デフォルトに戻します (NVS の override を削除)。よろしいですか?')) return;
-    try {
-      const r = await fetch('/api/avatar-dsl/reset', { method: 'POST' });
-      const body = await r.text();
-      if (!r.ok) throw new Error(`HTTP ${r.status}: ${body || r.statusText}`);
-      setMsg('実機をデフォルト顔に戻しました', 'ok');
-      log('Avatar DSL リセット', 'ok');
-    } catch (e) {
-      setMsg('リセット失敗: ' + e.message, 'err');
-      log('Avatar DSL リセット失敗: ' + e.message, 'err');
-    }
-  });
-
-  $('btn-dsl-download').addEventListener('click', () => {
-    let buf = lastBuf;
-    if (!buf) buf = compileNow();
-    if (!buf) return;
-    const blob = new Blob([buf], { type: 'application/octet-stream' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'face.avbc';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  });
-
-  $('btn-dsl-download-src').addEventListener('click', () => {
-    const blob = new Blob([srcEl.value], { type: 'text/plain;charset=utf-8' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'face.avdsl';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  });
-
-  $('dsl-load').addEventListener('change', (e) => {
-    const f = e.target.files[0];
-    if (!f) return;
-    const r = new FileReader();
-    r.onload = () => {
-      srcEl.value = r.result;
-      setMsg('読込みました — 「コンパイル & 送信」で実機に反映してください');
-    };
-    r.readAsText(f);
-    e.target.value = '';
-  });
-})();
+    return { ok: true, saved: null, raw: body };
+  },
+  async reset() {
+    const r = await fetch('/api/avatar-dsl/reset', { method: 'POST' });
+    const body = await r.text();
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${body || r.statusText}`);
+    return { raw: '' };
+  },
+});
 
 // --- Wire up ---
 
