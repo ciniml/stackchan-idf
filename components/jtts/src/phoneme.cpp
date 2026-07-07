@@ -17,8 +17,11 @@ FormantFrame silent_frame(float f0) {
     return s;
 }
 
+// prenasal_zero_hz > 0 のとき、後続モーラが「ん」なので母音末尾 ~30 ms で
+// nasal を 0→0.5 に立ち上げる (先行母音の鼻音化。ん への移行でスペクトルが
+// 急変するのを防ぎ、自然な渡りになる)。値は後続の鼻音ゼロ周波数。
 void add_cv_segments(Consonant c, Vowel v, bool palatalized, bool devoiced, float mora_ms,
-                     float f0, std::vector<Segment>& out) {
+                     float f0, float prenasal_zero_hz, std::vector<Segment>& out) {
     FormantFrame vowel = vowel_frame(v, palatalized);
     vowel.f0_hz = f0;
 
@@ -32,8 +35,27 @@ void add_cv_segments(Consonant c, Vowel v, bool palatalized, bool devoiced, floa
         vowel.a3 *= 0.55f;
     }
 
+    // 母音末尾セグメントを積む。prenasal (次モーラが「ん」) なら末尾 ~30 ms
+    // で nasal を 0→0.5 に上げて先行母音を鼻音化する。
+    auto push_vowel_tail = [&](float consumed) {
+        float v_ms = std::max(20.0f, mora_ms - consumed);
+        if (prenasal_zero_hz > 0.0f) {
+            FormantFrame nasalized = vowel;
+            nasalized.nasal = 0.5f;
+            nasalized.nasal_zero_hz = prenasal_zero_hz;
+            const float ramp_ms = std::min(30.0f, v_ms);
+            if (v_ms > ramp_ms) {
+                out.push_back({vowel, vowel, v_ms - ramp_ms});
+            }
+            FormantFrame head = vowel;
+            out.push_back({head, nasalized, ramp_ms});
+            return;
+        }
+        out.push_back({vowel, vowel, v_ms});
+    };
+
     if (c == Consonant::None) {
-        out.push_back({vowel, vowel, mora_ms});
+        push_vowel_tail(0.0f);
         return;
     }
 
@@ -45,20 +67,44 @@ void add_cv_segments(Consonant c, Vowel v, bool palatalized, bool devoiced, floa
 
     const FormantFrame silence = silent_frame(f0);
 
-    auto push_vowel_tail = [&](float consumed) {
-        float v_ms = std::max(20.0f, mora_ms - consumed);
-        out.push_back({vowel, vowel, v_ms});
-    };
-
     if (is_voiceless_stop(c)) {
+        // 閉鎖 → 短い破裂バースト → 帯気 (VOT) → 有声立ち上がり。
+        // VOT は調音位置依存 (唇音ほど短く軟口蓋音ほど長い): p=15, t=25, k=45 ms。
+        // 帯気区間は声帯振動なしで後続母音のフォルマント (カスケード) を
+        // ノイズ駆動する — /ka/ の「はぁ」っぽい立ち上がりの正体。
+        const float vot_ms = (c == Consonant::P) ? 15.0f : (c == Consonant::T) ? 25.0f : 45.0f;
         out.push_back({silence, silence, 30.0f});
-        out.push_back({burst, burst, 10.0f});
-        out.push_back({burst, vowel, 30.0f});
-        push_vowel_tail(70.0f);
+        out.push_back({burst, burst, 5.0f});
+        FormantFrame asp = vowel;
+        asp.voicing = 0.0f;
+        asp.frication = 0.0f;
+        asp.aspiration = 0.6f;
+        FormantFrame asp_end = asp;
+        asp_end.aspiration = 0.4f;
+        out.push_back({asp, asp_end, vot_ms});
+        // 有声の立ち上がり: voicing 0→1、帯気の残りは消える。
+        FormantFrame onset = vowel;
+        onset.voicing = 0.0f;
+        onset.aspiration = 0.4f;
+        out.push_back({onset, vowel, 20.0f});
+        push_vowel_tail(55.0f + vot_ms);
     } else if (is_voiced_stop(c)) {
-        out.push_back({burst, burst, 15.0f});
-        out.push_back({burst, vowel, 30.0f});
-        push_vowel_tail(45.0f);
+        // 有声破裂音は閉鎖中も声帯が振動する (voice bar): 低い F1 だけが
+        // 壁越しに漏れる低振幅の唸り。これが無いと /g d b/ が /k t p/ の
+        // 弱い版にしか聞こえない。
+        FormantFrame voice_bar = silent_frame(f0);
+        voice_bar.f1 = 200.0f;
+        voice_bar.bw1 = 100.0f;
+        voice_bar.f2 = vowel.f2;
+        voice_bar.f3 = vowel.f3;
+        voice_bar.bw2 = 300.0f;  // 高次は広帯域幅でぼかす (カスケードでは
+        voice_bar.bw3 = 400.0f;  // a2=a3=0 にできないため)
+        voice_bar.voicing = 0.6f;
+        voice_bar.a1 = 0.25f;
+        out.push_back({voice_bar, voice_bar, 35.0f});
+        out.push_back({burst, burst, 5.0f});
+        out.push_back({burst, vowel, 25.0f});
+        push_vowel_tail(65.0f);
     } else if (is_voiceless_fric(c)) {
         // 立ち上がりを 25 ms かけて滑らかに上げる。
         // これを入れないと /ʃ/ /s/ のノイズが突然全振幅で出て破擦音 /tʃ/
@@ -103,22 +149,42 @@ void build_segments(std::span<const Mora> moras, std::vector<Segment>& out, cons
     const float f0 = opt.f0_hz;
     const float mora_ms = opt.mora_ms;
 
+    // i 番目が「ん」のときのフレーム。次モーラの子音への調音位置同化:
+    // m/b/p の前では両唇鼻音 [m]、それ以外は歯茎〜口蓋垂。単独・語末の
+    // 「ん」は口蓋垂鼻音 [N] で鼻音ゼロがさらに高い (1800 Hz)。
+    auto moraic_n_frame = [&](std::size_t i) {
+        Consonant nasal_c = Consonant::N;
+        bool assimilated = false;
+        if (i + 1 < moras.size() && moras[i + 1].kind == MoraKind::CV) {
+            Consonant nc = moras[i + 1].c;
+            if (nc == Consonant::M || nc == Consonant::B || nc == Consonant::P) {
+                nasal_c = Consonant::M;
+                assimilated = true;
+            }
+        }
+        FormantFrame nf = nasal_frame(nasal_c);
+        if (!assimilated) {
+            nf.nasal_zero_hz = 1800.0f;
+        }
+        nf.f0_hz = f0;
+        return nf;
+    };
+
     for (std::size_t i = 0; i < moras.size(); ++i) {
         const Mora& m = moras[i];
         switch (m.kind) {
-            case MoraKind::CV:
-                add_cv_segments(m.c, m.v, m.palatalized, m.devoiced, mora_ms, f0, out);
-                break;
-            case MoraKind::MoraicN: {
-                Consonant nasal_c = Consonant::N;
-                if (i + 1 < moras.size() && moras[i + 1].kind == MoraKind::CV) {
-                    Consonant nc = moras[i + 1].c;
-                    if (nc == Consonant::M || nc == Consonant::B || nc == Consonant::P) {
-                        nasal_c = Consonant::M;
-                    }
+            case MoraKind::CV: {
+                // 次が「ん」なら母音末尾を鼻音化する (ゼロ周波数は ん 側と揃える)。
+                float prenasal_zero_hz = 0.0f;
+                if (i + 1 < moras.size() && moras[i + 1].kind == MoraKind::MoraicN) {
+                    prenasal_zero_hz = moraic_n_frame(i + 1).nasal_zero_hz;
                 }
-                FormantFrame nf = nasal_frame(nasal_c);
-                nf.f0_hz = f0;
+                add_cv_segments(m.c, m.v, m.palatalized, m.devoiced, mora_ms, f0,
+                                prenasal_zero_hz, out);
+                break;
+            }
+            case MoraKind::MoraicN: {
+                FormantFrame nf = moraic_n_frame(i);
                 out.push_back({nf, nf, mora_ms});
                 break;
             }

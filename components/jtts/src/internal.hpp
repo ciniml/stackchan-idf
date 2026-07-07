@@ -12,6 +12,21 @@
 
 namespace stackchan::jtts::internal {
 
+// V2 レンダラの鼻音極 (固定)。鼻音ゼロは nasal=0 のときこの周波数に置かれて
+// 極と厳密に打ち消し合う (Klatt 流)。FormantFrame::nasal_zero_hz の既定値も
+// これに合わせておくと、非鼻音フレームとの補間中もゼロが極位置から動かない。
+constexpr float kNasalPoleHz = 280.0f;
+constexpr float kNasalBwHz = 100.0f;
+
+// 摩擦ノイズのスペクトル整形クラス (V2 のみ)。調音位置ごとにノイズの
+// 帯域が違う: 歯茎の /s z ts/ は 4 kHz 以上、後部歯茎の /sh ch j/ は
+// 2.5–3.5 kHz。Formant は従来通り母音フォルマント BPF で整形 (/h/ 系)。
+enum class FricationShape : std::uint8_t {
+    Formant = 0,   // 母音フォルマント BPF ×3 (従来動作)
+    Sibilant = 1,  // /s z ts/: HPF 4 kHz + 6.5 kHz 広帯域ピーク
+    Palatal = 2,   // /sh ch j/: HPF 2 kHz + 3 kHz 帯域 (bw 1500)
+};
+
 struct FormantFrame {
     float f1 = 500.0f, f2 = 1500.0f, f3 = 2500.0f;
     float bw1 = 70.0f, bw2 = 100.0f, bw3 = 150.0f;
@@ -19,7 +34,18 @@ struct FormantFrame {
     float voicing = 1.0f;
     float frication = 0.0f;
     float f0_hz = 130.0f;
+    // 鼻音化度 0..1。0 = 鼻音ゼロが極を打ち消して透過、1 = ゼロが
+    // nasal_zero_hz まで移動して口腔外の反共振が現れる。
     float nasal = 0.0f;
+    // nasal > 0 のときの鼻音ゼロの目標周波数 [Hz] (/m/=1000, /n/=1500,
+    // /N/(ん)=1800)。既定は極位置 (= 打ち消し) にしておき、補間で乱れない
+    // ようにする。
+    float nasal_zero_hz = kNasalPoleHz;
+    // 帯気 0..1。声帯振動なしでカスケード (後続母音のフォルマント) を
+    // ノイズ駆動する。無声破裂音の VOT 区間で使う。
+    float aspiration = 0.0f;
+    // 摩擦ノイズの整形クラス (セグメント単位、start 側の値を使う)。
+    FricationShape fric_shape = FricationShape::Formant;
 };
 
 struct Segment {

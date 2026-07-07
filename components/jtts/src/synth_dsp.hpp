@@ -110,6 +110,93 @@ private:
     float y1_ = 0, y2_ = 0;
 };
 
+// Klatt 型 anti-resonator (2-zero、DC ゲイン 1)。Resonator の厳密な逆特性:
+//   Resonator     H(z) = a / (1 - b z^-1 - c z^-2)
+//   AntiResonator H(z) = (1/a) (1 - b z^-1 - c z^-2)
+// なので同じ f/bw を与えた Resonator と直列にすると恒等になる (鼻音ゼロを
+// 「打ち消し位置」に置いたとき V2 カスケードが完全に透過になる — 母音の
+// フォルマントを一切乱さない)。係数は Resonator と同じく per-sample の
+// 線形補間 (set_target) で更新し、ゼロ周波数の移動でクリックを出さない。
+class AntiResonator {
+public:
+    // 即時設定 (初期化用)。
+    void set(float f, float bw, float fs) {
+        compute(f, bw, fs, a_, b_, c_);
+        ramp_left_ = 0;
+    }
+    // ramp_samples かけて目標係数へ線形補間する。
+    void set_target(float f, float bw, float fs, int ramp_samples) {
+        float ta, tb, tc;
+        compute(f, bw, fs, ta, tb, tc);
+        if (ramp_samples <= 1) {
+            a_ = ta;
+            b_ = tb;
+            c_ = tc;
+            ramp_left_ = 0;
+            return;
+        }
+        const float inv = 1.0f / static_cast<float>(ramp_samples);
+        da_ = (ta - a_) * inv;
+        db_ = (tb - b_) * inv;
+        dc_ = (tc - c_) * inv;
+        ramp_left_ = ramp_samples;
+    }
+    float process(float x) {
+        if (ramp_left_ > 0) {
+            a_ += da_;
+            b_ += db_;
+            c_ += dc_;
+            --ramp_left_;
+        }
+        float y = a_ * x + b_ * x1_ + c_ * x2_;
+        x2_ = x1_;
+        x1_ = x;
+        return y;
+    }
+    void reset() { x1_ = x2_ = 0.0f; }
+
+private:
+    static void compute(float f, float bw, float fs, float& a, float& b, float& c) {
+        // Resonator::compute と同じ極公式から a' = 1/a, b' = -b/a, c' = -c/a。
+        if (f < 50.0f) f = 50.0f;
+        if (f > fs * 0.47f) f = fs * 0.47f;
+        if (bw < 30.0f) bw = 30.0f;
+        const float T = 1.0f / fs;
+        const float rc = -std::exp(-2.0f * kPi * bw * T);
+        const float rb = 2.0f * std::exp(-kPi * bw * T) * std::cos(2.0f * kPi * f * T);
+        const float ra = 1.0f - rb - rc;
+        a = 1.0f / ra;
+        b = -rb / ra;
+        c = -rc / ra;
+    }
+    float a_ = 1.0f, b_ = 0, c_ = 0;
+    float da_ = 0, db_ = 0, dc_ = 0;
+    int ramp_left_ = 0;
+    float x1_ = 0, x2_ = 0;
+};
+
+// 1-pole ハイパス (y = a (y1 + x - x1))。歯擦音の摩擦ノイズから低域を落とす
+// 用途 (母音フォルマント BPF ×3 だけでは /s/ の 4 kHz 以上のエネルギー集中を
+// 作れないため)。
+class HighPass1 {
+public:
+    void set(float fc, float fs) {
+        if (fc < 10.0f) fc = 10.0f;
+        if (fc > fs * 0.45f) fc = fs * 0.45f;
+        a_ = std::exp(-2.0f * kPi * fc / fs);
+    }
+    float process(float x) {
+        y1_ = a_ * (y1_ + x - x1_);
+        x1_ = x;
+        return y1_;
+    }
+    void reset() { x1_ = y1_ = 0.0f; }
+
+private:
+    float a_ = 0.0f;
+    float x1_ = 0, y1_ = 0;
+};
+
 // Rosenberg 声門流の微分 (V2 の励起源)。開大期のゆるい山 + 閉鎖時の鋭い
 // 負スパイクという形で、自然な -6 dB/oct 程度のスペクトル傾斜が得られる。
 //   flow g(ph):  0 ≤ ph < Tp : 0.5 (1 - cos(π ph / Tp))       (開大)
@@ -139,6 +226,18 @@ public:
         if (phase_ < tc) {
             return -(kPi / (2.0f * tn_)) *
                    std::sin(kPi * (phase_ - tp_) / (2.0f * tn_));
+        }
+        return 0.0f;
+    }
+    // 現在位相での声門流 (0..1)。有声摩擦音 /z/ /j/ のノイズ振幅変調用
+    // (声門が開いている間だけ乱流が出る、という物理の安価な模倣)。
+    float openness() const {
+        if (phase_ < tp_) {
+            return 0.5f * (1.0f - std::cos(kPi * phase_ / tp_));
+        }
+        const float tc = tp_ + tn_;
+        if (phase_ < tc) {
+            return std::cos(kPi * (phase_ - tp_) / (2.0f * tn_));
         }
         return 0.0f;
     }

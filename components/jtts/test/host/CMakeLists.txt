@@ -44,6 +44,10 @@ add_executable(jtts_synth_demo main.cpp wav_writer.cpp)
 target_link_libraries(jtts_synth_demo PRIVATE jtts)
 target_compile_options(jtts_synth_demo PRIVATE -Wall -Wextra)
 
+add_executable(jtts_gen_formant_t1 gen_formant_t1.cpp wav_writer.cpp)
+target_link_libraries(jtts_gen_formant_t1 PRIVATE jtts)
+target_compile_options(jtts_gen_formant_t1 PRIVATE -Wall -Wextra)
+
 add_executable(jtts_test_vowels test_vowels.cpp wav_writer.cpp)
 target_link_libraries(jtts_test_vowels PRIVATE jtts)
 target_compile_options(jtts_test_vowels PRIVATE -Wall -Wextra)

@@ -66,6 +66,9 @@ void apply_formant_scale(std::vector<internal::Segment>& segs, float scale) {
         f.bw1 *= scale;
         f.bw2 *= scale;
         f.bw3 *= scale;
+        // 鼻音ゼロも声道長に追従させる (V2 の鼻音極は render 側で同率スケール
+        // されるため、ここで揃えないと nasal=0 の打ち消しが崩れる)。
+        f.nasal_zero_hz *= scale;
     };
     for (auto& s : segs) {
         scale_frame(s.start);

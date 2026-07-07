@@ -55,10 +55,16 @@ FormantFrame nasal_frame(Consonant c) {
     f.a1 = 0.55f;
     f.a2 = 0.25f;
     f.a3 = 0.10f;
+    // 鼻音ゼロの目標周波数は調音位置で決まる (口腔側枝の長さに反比例):
+    // 両唇 /m/ は枝が長くゼロが低い、歯茎 /n/ は高い。V2 レンダラが
+    // nasal=1 でゼロをここへ動かし、口腔共鳴の抜けた「鼻にかかった」
+    // スペクトルを作る (ん = 口蓋垂鼻音はさらに高く phoneme.cpp で上書き)。
     if (c == Consonant::M) {
         f.f1 = 250; f.f2 = 1100; f.f3 = 2400;
+        f.nasal_zero_hz = 1000.0f;
     } else {
         f.f1 = 300; f.f2 = 1700; f.f3 = 2700;
+        f.nasal_zero_hz = 1500.0f;
     }
     return f;
 }
@@ -109,36 +115,42 @@ FormantFrame consonant_burst(Consonant c, Vowel next_v) {
             f.bw3 = 600;
             f.voicing = 0.0f; f.frication = 1.0f;
             f.a1 = 0.05f; f.a2 = 0.1f; f.a3 = 1.0f;
+            f.fric_shape = FricationShape::Sibilant;
             break;
         case Consonant::Z:
             f.f1 = 300; f.f2 = 1500; f.f3 = 4500;
             f.bw3 = 600;
             f.voicing = 0.7f; f.frication = 0.7f;
             f.a1 = 0.2f; f.a2 = 0.15f; f.a3 = 0.8f;
+            f.fric_shape = FricationShape::Sibilant;
             break;
         case Consonant::Sh:
             f.f1 = 350; f.f2 = 1900; f.f3 = 2800;
             f.bw3 = 500;
             f.voicing = 0.0f; f.frication = 1.0f;
             f.a1 = 0.05f; f.a2 = 0.2f; f.a3 = 1.0f;
+            f.fric_shape = FricationShape::Palatal;
             break;
         case Consonant::J:
             f.f1 = 350; f.f2 = 1900; f.f3 = 2800;
             f.bw3 = 500;
             f.voicing = 0.7f; f.frication = 0.6f;
             f.a1 = 0.2f; f.a2 = 0.25f; f.a3 = 0.8f;
+            f.fric_shape = FricationShape::Palatal;
             break;
         case Consonant::Ts:
             f.f1 = 300; f.f2 = 1500; f.f3 = 4500;
             f.bw3 = 600;
             f.voicing = 0.0f; f.frication = 1.0f;
             f.a1 = 0.05f; f.a2 = 0.1f; f.a3 = 1.0f;
+            f.fric_shape = FricationShape::Sibilant;
             break;
         case Consonant::Ch:
             f.f1 = 350; f.f2 = 1900; f.f3 = 2800;
             f.bw3 = 500;
             f.voicing = 0.0f; f.frication = 1.0f;
             f.a1 = 0.05f; f.a2 = 0.2f; f.a3 = 1.0f;
+            f.fric_shape = FricationShape::Palatal;
             break;
         case Consonant::H:
         case Consonant::F: {
