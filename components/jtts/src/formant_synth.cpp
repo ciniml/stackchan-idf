@@ -75,8 +75,8 @@ void render_v2(std::span<const Segment> segs, std::vector<std::int16_t>& out,
     // 歯擦音整形パスの較正ゲイン。従来 (母音フォルマント BPF ×3) の /s/ /sh/
     // 出力 RMS と同程度になるようホストで実測して合わせた値 (BPF は帯域幅が
     // 狭くノイズ電力の通過率が低いのに対し、HPF はほぼ半帯域を通すため)。
-    constexpr float kSibilantGain = 0.45f;
-    constexpr float kPalatalGain = 0.55f;
+    constexpr float kSibilantGain = 0.35f;
+    constexpr float kPalatalGain = 0.45f;
     // 6.5 kHz / 3 kHz ピークを HPF 出力に足し込む混合率。
     constexpr float kFricPeakMix = 1.0f;
 
@@ -86,13 +86,18 @@ void render_v2(std::span<const Segment> segs, std::vector<std::int16_t>& out,
 
         // 摩擦整形はセグメント単位 (補間しない — 調音位置は離散量)。
         const FricationShape fshape = seg.start.fric_shape;
+        // formant_scale (female 既定 1.30) を掛けると歯擦音ピークが Nyquist を
+        // 超え (6500×1.3 = 8.45 kHz > 8 kHz)、共振器が破綻して耳障りな全帯域
+        // ノイズになる。整形フィルタの周波数は Nyquist の手前でクランプする。
+        const float fric_fmax = 0.45f * fs;
+        auto fclamp = [fric_fmax](float f) { return f < fric_fmax ? f : fric_fmax; };
         if (fshape == FricationShape::Sibilant) {
-            fric_hp.set(4000.0f * fscale, fs);
-            fric_hp2.set(4000.0f * fscale, fs);
-            fric_peak.set_bpf(6500.0f * fscale, 2000.0f, fs);
+            fric_hp.set(fclamp(4000.0f * fscale), fs);
+            fric_hp2.set(fclamp(4000.0f * fscale), fs);
+            fric_peak.set_bpf(fclamp(6500.0f * fscale), 2000.0f, fs);
         } else if (fshape == FricationShape::Palatal) {
-            fric_hp.set(2000.0f * fscale, fs);
-            fric_peak.set_bpf(3000.0f * fscale, 1500.0f, fs);
+            fric_hp.set(fclamp(2000.0f * fscale), fs);
+            fric_peak.set_bpf(fclamp(3000.0f * fscale), 1500.0f, fs);
         }
 
         std::size_t k = 0;
