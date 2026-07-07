@@ -3,7 +3,7 @@
 //
 // HMM (hts_engine) 合成エンジン。flash mmap / PSRAM 上の .htsvoice イメージを
 // ロードし、かな→full-context ラベル (hts_label.cpp) で合成する。
-// 48 kHz ボイスでも出力レート (16 kHz) でボコーダを直接回す (α 再設定)。
+// 48 kHz ボイスはネイティブ合成 → FIR 1/3 デシメーションで 16 kHz 化。
 //
 // CONFIG_JTTS_ENABLE_HMM が無効なボード (flash に voice を置けない 8 MB 構成)
 // ではスタブになり、hts_engine のコードはリンクされない。
@@ -25,10 +25,12 @@
 
 #ifdef JTTS_HMM_AVAILABLE
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <mutex>
+#include <numbers>
 
 #include "HTS_engine.h"
 
@@ -72,26 +74,50 @@ bool hmm_voice_loaded() {
 
 namespace internal {
 
+namespace {
+
+// 48 kHz → 16 kHz 用 1/3 デシメータ (45-tap Hamming 窓 sinc、fc = 7.2 kHz)
+constexpr std::size_t kDecimTaps = 45;
+
+const std::array<float, kDecimTaps>& decim_coeffs() {
+    static const std::array<float, kDecimTaps> coeffs = [] {
+        std::array<float, kDecimTaps> h{};
+        constexpr float fc = 7200.0f / 48000.0f;  // 正規化カットオフ
+        constexpr int mid = static_cast<int>(kDecimTaps) / 2;
+        float sum = 0.0f;
+        for (int i = 0; i < static_cast<int>(kDecimTaps); ++i) {
+            const int k = i - mid;
+            const float x = 2.0f * std::numbers::pi_v<float> * fc;
+            const float sinc = (k == 0) ? 2.0f * fc : std::sin(x * k) / (std::numbers::pi_v<float> * k);
+            const float w = 0.54f - 0.46f * std::cos(2.0f * std::numbers::pi_v<float> * i / (kDecimTaps - 1));
+            h[i] = sinc * w;
+            sum += h[i];
+        }
+        for (auto& v : h) v /= sum;  // DC ゲイン 1
+        return h;
+    }();
+    return coeffs;
+}
+
+}  // namespace
+
 bool render_hmm(std::u32string_view text, std::vector<std::int16_t>& out, const Options& opt) {
     std::lock_guard<std::mutex> lock(g_engine_mutex);
     if (!g_loaded) return false;
 
-    // ボイスのネイティブ レート (48 kHz) と出力レート (16 kHz) が異なる場合は
-    // ボコーダを出力レートで直接回す (α をメル尺度に合わせて再設定)。
-    // デシメーションより 3 倍速く、スペクトル差は ~0.8 dB (ホスト検証)。
+    // ボイスはネイティブ レート (48 kHz) のまま合成し、出力レート (16 kHz) へは
+    // FIR 1/3 デシメーションで落とす。ボコーダを 16 kHz で直接回す (α 再設定)
+    // 近似も試したが、メルケプの周波数軸はどの α でも 48 kHz 分析軸と一致せず
+    // フォルマントが下方に歪む (声が暗く低く聞こえる) ため不採用。
     const std::size_t voice_rate = g_engine.ms.sampling_frequency;
-    const std::size_t voice_fperiod = g_engine.ms.frame_period;
-    float alpha;
+    std::size_t decim;
     if (opt.sample_rate_hz == voice_rate) {
-        alpha = g_engine.condition.alpha;
-    } else if (voice_rate == 48000 && opt.sample_rate_hz == 16000) {
-        alpha = 0.42f;  // 16 kHz のメル尺度近似 (HTS 慣例値)
+        decim = 1;
+    } else if (voice_rate == 3 * opt.sample_rate_hz) {
+        decim = 3;
     } else {
         return false;  // 対応外レート → フォールバック
     }
-    HTS_Engine_set_sampling_frequency(&g_engine, opt.sample_rate_hz);
-    HTS_Engine_set_fperiod(&g_engine, voice_fperiod * opt.sample_rate_hz / voice_rate);
-    HTS_Engine_set_alpha(&g_engine, alpha);
 
     std::vector<std::string> labels;
     if (!build_hts_labels(text, labels)) return false;
@@ -117,12 +143,40 @@ bool render_hmm(std::u32string_view text, std::vector<std::int16_t>& out, const 
     const std::size_t nsamples = HTS_Engine_get_nsamples(&g_engine);
     const float* speech = g_engine.gss.gspeech;  // per-sample getter は高いので直接参照
     const float gain = opt.gain;
-    out.reserve(out.size() + nsamples);
-    for (std::size_t i = 0; i < nsamples; ++i) {
-        float v = speech[i] * gain;
-        if (v > 32767.0f) v = 32767.0f;
-        if (v < -32768.0f) v = -32768.0f;
-        out.push_back(static_cast<std::int16_t>(v));
+    if (decim == 1) {
+        out.reserve(out.size() + nsamples);
+        for (std::size_t i = 0; i < nsamples; ++i) {
+            float v = speech[i] * gain;
+            if (v > 32767.0f) v = 32767.0f;
+            if (v < -32768.0f) v = -32768.0f;
+            out.push_back(static_cast<std::int16_t>(v));
+        }
+    } else {
+        // 1/3 ポリフェーズ デシメーション (45-tap Hamming sinc、fc=7.2 kHz)。
+        // 出力サンプルあたり実質 15 MAC なので合成コストに対して無視できる。
+        const auto& h = decim_coeffs();
+        constexpr int mid = static_cast<int>(kDecimTaps) / 2;
+        const std::size_t nout = nsamples / 3;
+        out.reserve(out.size() + nout);
+        for (std::size_t n = 0; n < nout; ++n) {
+            const long center = static_cast<long>(n) * 3;
+            long lo = center - mid;
+            long hi = center + mid;  // inclusive
+            int skip = 0;
+            if (lo < 0) {
+                skip = static_cast<int>(-lo);
+                lo = 0;
+            }
+            if (hi >= static_cast<long>(nsamples)) hi = static_cast<long>(nsamples) - 1;
+            float acc = 0.0f;
+            const float* hp = h.data() + skip;
+            const float* sp = speech + lo;
+            for (long i = lo; i <= hi; ++i) acc += *hp++ * *sp++;
+            acc *= gain;
+            if (acc > 32767.0f) acc = 32767.0f;
+            if (acc < -32768.0f) acc = -32768.0f;
+            out.push_back(static_cast<std::int16_t>(acc));
+        }
     }
     const auto t2 = std::chrono::steady_clock::now();
 

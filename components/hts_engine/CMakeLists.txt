@@ -12,7 +12,9 @@ idf_component_register(
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "lib"
 )
-target_compile_definitions(${COMPONENT_LIB} PRIVATE AUDIO_PLAY_NONE)
+# HTS_EMBEDDED: upstream 公式の組み込みモード (M 系列ノイズ + Padé 4 次)。
+# 標準モードとのスペクトル差 0.09 dB (ホスト実測) で ~25% 速い。
+target_compile_definitions(${COMPONENT_LIB} PRIVATE AUDIO_PLAY_NONE HTS_EMBEDDED)
 # vendored C ソース: upstream 由来の警告は黙らせる (改変は最小限に留める)。
 # ボコーダはサンプル毎の float 演算が支配的なので -Ofast (NaN/Inf は扱わない)。
 target_compile_options(${COMPONENT_LIB} PRIVATE

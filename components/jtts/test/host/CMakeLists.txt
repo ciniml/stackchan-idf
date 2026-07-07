@@ -17,7 +17,7 @@ set(HTS_ROOT ${JTTS_ROOT}/../hts_engine)
 file(GLOB HTS_SRCS ${HTS_ROOT}/lib/*.c)
 add_library(hts_engine STATIC ${HTS_SRCS})
 target_include_directories(hts_engine PUBLIC ${HTS_ROOT}/include PRIVATE ${HTS_ROOT}/lib)
-target_compile_definitions(hts_engine PRIVATE AUDIO_PLAY_NONE)
+target_compile_definitions(hts_engine PRIVATE AUDIO_PLAY_NONE HTS_EMBEDDED)
 
 add_library(jtts STATIC
     ${JTTS_ROOT}/src/kana_table.cpp
