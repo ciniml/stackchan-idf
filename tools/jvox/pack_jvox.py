@@ -31,6 +31,19 @@ def load_wav(path: Path) -> tuple[np.ndarray, int]:
     return x.astype(np.float64), fs
 
 
+def norm_autocorr(seg: np.ndarray) -> np.ndarray:
+    """ラグ長で正規化した自己相関 (score[lag] ≈ 相関係数)。
+
+    無正規化の np.correlate は長いラグほど重なりサンプル数が減って値が
+    系統的に小さくなり、低い男声 (周期 ~140 サンプル @16k) の真の周期より
+    倍音側のラグを拾ってしまう (nitech m001 で被覆率崩壊を実測)。
+    """
+    n = len(seg)
+    ac = np.correlate(seg, seg, "full")[n - 1 :]
+    denom = ac[0] * (np.arange(n, 0, -1) / n)
+    return ac / (denom + 1e-9)
+
+
 def estimate_f0(x: np.ndarray, fs: int, lo=70.0, hi=450.0) -> float:
     """フレームごとの自己相関 F0 の中央値。無声なら 0。
 
@@ -38,7 +51,7 @@ def estimate_f0(x: np.ndarray, fs: int, lo=70.0, hi=450.0) -> float:
     薄まって推定に失敗する。30 ms フレームで周期性の高い (正規化相関 >0.5)
     フレームだけ集めて中央値を取る。
     """
-    fl = int(fs * 0.030)
+    fl = int(fs * 0.040)
     lag_lo, lag_hi = int(fs / hi), int(fs / lo)
     f0s = []
     for i in range(0, len(x) - fl, fl // 2):
@@ -46,12 +59,12 @@ def estimate_f0(x: np.ndarray, fs: int, lo=70.0, hi=450.0) -> float:
         e = float((seg * seg).sum())
         if e < 1.0:
             continue
-        ac = np.correlate(seg, seg, "full")[fl - 1 :]
-        hi_l = min(lag_hi, len(ac) - 1)
+        sc = norm_autocorr(seg)
+        hi_l = min(lag_hi, len(sc) - 1)
         if hi_l <= lag_lo:
             continue
-        pk = lag_lo + int(np.argmax(ac[lag_lo:hi_l]))
-        if ac[pk] > 0.5 * ac[0]:
+        pk = lag_lo + int(np.argmax(sc[lag_lo:hi_l]))
+        if sc[pk] > 0.5:
             f0s.append(fs / pk)
     if not f0s:
         return 0.0
@@ -83,20 +96,26 @@ def pitch_marks(x: np.ndarray, fs: int, f0: float) -> list[int]:
     # ヘッドとして残るのが正しい。歩進周期はそのフレームの局所周期から
     # 始める (単発モーラは単位内で F0 が滑るので、単位中央値との一致は
     # 要求しない — 適応歩進が追従する)。
-    fl = int(fs * 0.030)
+    fl = int(fs * 0.040)
     p_min, p_max = int(fs / 450), int(fs / 70)
+    # 開始スキャンの探索範囲は単位中央値 F0 の ±1 オクターブに絞る。
+    # 全域だと無声破裂の気息音が探索下限の縁 (高い擬似周期) にマッチして
+    # しまい、誤った周期でアンカーして歩進が即死する (nitech の け/きょ 等で
+    # 実測)。
+    s_min = max(p_min, int(fs / (f0 * 2.0)))
+    s_max = min(p_max, int(fs / (f0 * 0.5)))
     pos = -1
     for i in range(0, len(x) - fl, fl // 2):
         seg = x[i : i + fl] - x[i : i + fl].mean()
         e = float((seg * seg).sum())
         if e < 1.0 or rms[min(i + fl // 2, len(rms) - 1)] <= thresh:
             continue
-        ac = np.correlate(seg, seg, "full")[fl - 1 :]
-        hi_l = min(p_max, len(ac) - 1)
-        if hi_l <= p_min:
+        sc = norm_autocorr(seg)
+        hi_l = min(s_max, len(sc) - 1)
+        if hi_l <= s_min:
             continue
-        pk = p_min + int(np.argmax(ac[p_min:hi_l]))
-        if ac[pk] > 0.5 * ac[0]:
+        pk = s_min + int(np.argmax(sc[s_min:hi_l]))
+        if sc[pk] > 0.5:
             pos = i + fl // 2  # rms 検査を通ったフレーム中点をアンカーにする
             period = pk  # 局所周期で歩き始める
             break
@@ -138,6 +157,14 @@ def pitch_marks(x: np.ndarray, fs: int, f0: float) -> list[int]:
         gap = 0
         anchor = m
         marks.append(m)
+    # 語尾のきしみ声 (creak) 刈り: 男声は単発発話の末尾で F0 が 70 Hz 台まで
+    # 落ち、その区間のグレインを合成に使うとモーラ末が濁って途切れ感になる
+    # (nitech m001 で実測)。マーク間隔が中央値の 1.6 倍を超える末尾を捨てる。
+    if len(marks) >= 5:
+        iv = np.diff(marks)
+        med = float(np.median(iv))
+        while len(marks) >= 5 and marks[-1] - marks[-2] > 1.6 * med:
+            marks.pop()
     # u16 に収まることを検査 (unit ≤ ~65k サンプル)。
     if marks and marks[-1] > 0xFFFF:
         raise ValueError("unit too long for u16 pitch marks")
