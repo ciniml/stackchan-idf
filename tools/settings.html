@@ -724,11 +724,14 @@
 
       <label for="jtts-engine">エンジン</label>
       <select id="jtts-engine">
-        <option value="auto">自動 (音声 DB があれば単位連結)</option>
-        <option value="formant">フォルマント合成のみ</option>
+        <option value="auto">自動 (HMM ボイス &gt; 音声 DB &gt; フォルマント)</option>
+        <option value="hmm">HMM 合成 (ボイス必須、無ければフォールバック)</option>
         <option value="unit">単位連結 (DB 必須、無ければフォルマント)</option>
+        <option value="formant">フォルマント合成のみ</option>
       </select>
-      <p class="hint">単位連結用の音声 DB (.jvox) のアップロードは WiFi 設定ページから行えます。</p>
+      <label for="jtts-halftone">HMM ピッチシフト [半音]</label>
+      <input type="number" id="jtts-halftone" min="-12" max="12" step="0.5" placeholder="0">
+      <p class="hint">HMM ボイス (.htsvoice) / 単位連結 音声 DB (.jvox) のアップロードは WiFi 設定ページから行えます。</p>
 
       <div class="grid2">
         <div>
@@ -1716,6 +1719,7 @@ const JTTS_NUM_FIELDS = {
   glottal_oq:      'jtts-oq',
   tilt_db:         'jtts-tilt',
   bw_scale:        'jtts-bwscale',
+  hmm_half_tone:   'jtts-halftone',
 };
 
 function readJttsForm() {
@@ -1761,7 +1765,7 @@ function writeJttsForm(json) {
   if (obj.synth === 'classic' || obj.synth === 'v2') {
     document.getElementById('jtts-synth').value = obj.synth;
   }
-  if (obj.engine === 'auto' || obj.engine === 'formant' || obj.engine === 'unit') {
+  if (['auto', 'formant', 'unit', 'hmm'].includes(obj.engine)) {
     document.getElementById('jtts-engine').value = obj.engine;
   }
   for (const [key, id] of Object.entries(JTTS_NUM_FIELDS)) {

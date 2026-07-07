@@ -52,6 +52,7 @@ set(_main_srcs
     "settings_sinks.cpp"
     "speech.cpp"
     "voice_db.cpp"
+    "hmm_voice.cpp"
     "wifi_sta.cpp"
 )
 if(CONFIG_STACKCHAN_CONVERSATION_ENABLED)

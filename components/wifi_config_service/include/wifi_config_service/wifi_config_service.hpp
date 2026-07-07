@@ -123,6 +123,21 @@ using VoiceDbStatusGetter = std::function<VoiceDbStatus()>;
 void set_voice_db_sink(VoiceDbSink sink);
 void set_voice_db_status_getter(VoiceDbStatusGetter getter);
 
+// HMM 合成の .htsvoice ボイス (16 MB flash ボードの voice パーティション):
+//   POST /api/hmm-voice        — body = .htsvoice。sink が検証 + flash 保存 +
+//                                live ロード。nullptr = 成功。
+//   POST /api/hmm-voice/clear  — data=nullptr / len=0 で呼ばれる (削除)。
+//   GET  /api/hmm-voice        — status getter の内容を JSON で返す。
+using HmmVoiceSink = std::function<const char*(const std::uint8_t* data, std::size_t len)>;
+struct HmmVoiceStatus {
+    bool loaded = false;
+    std::uint32_t stored_bytes = 0;
+    std::uint32_t capacity = 0;  // 0 = voice パーティションなし
+};
+using HmmVoiceStatusGetter = std::function<HmmVoiceStatus()>;
+void set_hmm_voice_sink(HmmVoiceSink sink);
+void set_hmm_voice_status_getter(HmmVoiceStatusGetter getter);
+
 // One-shot camera capture for `GET /api/camera/capture`. The sink fills
 // `out` with a raw row-major frame, reports its dimensions, and names the
 // pixel encoding in `format` — served verbatim as the X-Frame-Format

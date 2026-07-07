@@ -578,10 +578,29 @@
 
       <label for="jtts-engine">エンジン</label>
       <select id="jtts-engine">
-        <option value="auto">自動 (音声 DB があれば単位連結)</option>
-        <option value="formant">フォルマント合成のみ</option>
+        <option value="auto">自動 (HMM ボイス &gt; 音声 DB &gt; フォルマント)</option>
+        <option value="hmm">HMM 合成 (ボイス必須、無ければフォールバック)</option>
         <option value="unit">単位連結 (DB 必須、無ければフォルマント)</option>
+        <option value="formant">フォルマント合成のみ</option>
       </select>
+
+      <label for="jtts-halftone">HMM ピッチシフト [半音]</label>
+      <input type="number" id="jtts-halftone" min="-12" max="12" step="0.5" placeholder="0">
+
+      <h2 class="section-title" style="margin-top:1rem">HMM ボイス (.htsvoice)</h2>
+      <p class="hint" style="margin-bottom:0.5rem">
+        HTS ボイス (.htsvoice、~1-2 MB) をアップロードすると jtts の発話が
+        HMM 合成になります (16 MB flash ボードのみ)。読みに
+        <code>'</code> (アクセント核) と <code>/</code> (アクセント句切り) を
+        書けます。CC BY のボイス例: Mei / tohoku-f01 / nitech m001。
+        反映は即時、flash 保存で再起動後も有効。
+      </p>
+      <p class="hint" id="hmm-voice-status" style="margin-bottom:0.5rem">状態: —</p>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
+        <input type="file" id="hmm-voice-file" accept=".htsvoice,application/octet-stream" style="flex:1 1 12rem">
+        <button type="button" id="btn-hmm-voice-upload">アップロード</button>
+        <button type="button" id="btn-hmm-voice-clear" class="danger">削除</button>
+      </div>
 
       <h2 class="section-title" style="margin-top:1rem">単位連結 音声 DB (.jvox)</h2>
       <p class="hint" style="margin-bottom:0.5rem">
@@ -1056,6 +1075,7 @@ const JTTS_NUM_FIELDS = {
   glottal_oq:      'jtts-oq',
   tilt_db:         'jtts-tilt',
   bw_scale:        'jtts-bwscale',
+  hmm_half_tone:   'jtts-halftone',
 };
 
 function readJttsForm() {
@@ -1082,7 +1102,7 @@ function applyJttsToForm(json) {
   try { obj = JSON.parse(json); } catch { return; }
   if (obj.voice) $('jtts-voice').value = obj.voice;
   if (obj.synth === 'classic' || obj.synth === 'v2') $('jtts-synth').value = obj.synth;
-  if (obj.engine === 'auto' || obj.engine === 'formant' || obj.engine === 'unit') {
+  if (['auto', 'formant', 'unit', 'hmm'].includes(obj.engine)) {
     $('jtts-engine').value = obj.engine;
   }
   for (const [key, id] of Object.entries(JTTS_NUM_FIELDS)) {
@@ -1182,6 +1202,59 @@ $('btn-voice-db-clear').addEventListener('click', async () => {
   refreshVoiceDbStatus();
 });
 refreshVoiceDbStatus();
+
+// --- HMM ボイス (.htsvoice) ---
+
+async function refreshHmmVoiceStatus() {
+  try {
+    const st = await fetchJSON('/api/hmm-voice');
+    if (st.capacity === 0) {
+      $('hmm-voice-status').textContent = '状態: voice パーティションなし (8 MB ボード / 旧パーティション表)';
+    } else if (st.loaded) {
+      $('hmm-voice-status').textContent = `状態: ロード済み (${Math.round(st.stored/1024)} KiB / 上限 ${Math.round(st.capacity/1024)} KiB)`;
+    } else {
+      $('hmm-voice-status').textContent = st.stored > 0
+        ? '状態: 保存済み・未ロード (メモリ不足?)' : '状態: 未登録';
+    }
+  } catch (e) { $('hmm-voice-status').textContent = '状態: 取得失敗'; }
+}
+$('btn-hmm-voice-upload').addEventListener('click', async () => {
+  const f = $('hmm-voice-file').files[0];
+  if (!f) { log('HMM ボイス: ファイルを選択してください', 'err'); return; }
+  const btn = $('btn-hmm-voice-upload');
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = '送信中…';
+  try {
+    const r = await fetch('/api/hmm-voice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: await f.arrayBuffer(),
+    });
+    const body = await r.text();
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${body}`);
+    const st = JSON.parse(body);
+    log(`HMM ボイス登録 (${Math.round(st.stored/1024)} KiB)`, 'ok');
+  } catch (e) {
+    log('HMM ボイス登録失敗: ' + e.message, 'err');
+  } finally {
+    btn.textContent = old;
+    btn.disabled = false;
+    refreshHmmVoiceStatus();
+  }
+});
+$('btn-hmm-voice-clear').addEventListener('click', async () => {
+  if (!confirm('HMM ボイスを削除します。よろしいですか?')) return;
+  try {
+    const r = await fetch('/api/hmm-voice/clear', { method: 'POST' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    log('HMM ボイス削除', 'ok');
+  } catch (e) {
+    log('HMM ボイス削除失敗: ' + e.message, 'err');
+  }
+  refreshHmmVoiceStatus();
+});
+refreshHmmVoiceStatus();
 
 // --- Status refresh ---
 

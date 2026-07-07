@@ -80,6 +80,15 @@ tl::expected<void, Error> synthesize(std::u32string_view kana,
     out.clear();
     Options opt = resolve_defaults(opt_in);
 
+    // HMM エンジン: ボイスがロード済みなら最優先 (品質最良)。
+    // アクセント記号 (' と /) は HMM のみ解釈し、他エンジンでは
+    // parse_kana が読み飛ばす。
+    if (opt.engine == Engine::Auto || opt.engine == Engine::Hmm) {
+        if (internal::render_hmm(kana, out, opt)) {
+            return {};
+        }
+    }
+
     std::vector<Mora> moras;
     if (!internal::parse_kana(kana, moras)) {
         return tl::make_unexpected(Error::InvalidKana);

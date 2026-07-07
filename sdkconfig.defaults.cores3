@@ -77,3 +77,11 @@ CONFIG_SC030IOT_SUPPORT=n
 CONFIG_HM1055_SUPPORT=n
 CONFIG_HM0360_SUPPORT=n
 CONFIG_MEGA_CCM_SUPPORT=n
+
+# 16 MB flash: 末尾に HMM 合成の voice パーティション (4 MB) を追加した
+# パーティション表を使う。先頭は共通表と一致 (既存データ引き継ぎ)。
+# 旧表の機体では voice パーティションが見えず HMM はフォールバック動作。
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_16mb.csv"
+
+# HMM (hts_engine) 音声合成エンジン
+CONFIG_JTTS_ENABLE_HMM=y

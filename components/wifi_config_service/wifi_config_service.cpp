@@ -340,6 +340,16 @@ void set_voice_db_status_getter(VoiceDbStatusGetter getter)
     http::set_voice_db_status_getter(std::move(getter));
 }
 
+void set_hmm_voice_sink(HmmVoiceSink sink)
+{
+    http::set_hmm_voice_sink(std::move(sink));
+}
+
+void set_hmm_voice_status_getter(HmmVoiceStatusGetter getter)
+{
+    http::set_hmm_voice_status_getter(std::move(getter));
+}
+
 void set_camera_capture_sink(CameraCaptureSink sink)
 {
     http::set_camera_capture_sink(std::move(sink));

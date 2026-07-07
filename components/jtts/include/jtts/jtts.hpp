@@ -29,14 +29,18 @@ enum class SynthVariant : std::uint8_t {
 
 // 合成エンジンの選択 (SynthVariant はフォルマント エンジン内の音色バリアント、
 // こちらはエンジンそのものの軸)。
-//   Auto    — 音声 DB (set_voice_db) がロード済みなら Unit、無ければ Formant
+//   Auto    — HMM ボイス (set_hmm_voice) があれば Hmm、次に音声 DB
+//             (set_voice_db) があれば Unit、どちらも無ければ Formant
 //   Formant — 常にフォルマント合成
 //   Unit    — 単位連結 (TD-PSOLA)。DB 未ロード / 必要単位の欠けは
 //             Formant へ自動フォールバック
+//   Hmm     — HMM 合成 (hts_engine)。ボイス未ロード時は Unit → Formant へ
+//             フォールバック
 enum class Engine : std::uint8_t {
     Auto = 0,
     Formant = 1,
     Unit = 2,
+    Hmm = 3,
 };
 
 struct Options {
@@ -72,8 +76,12 @@ struct Options {
     float bw_scale = 1.0f;
     // 合成方式。既定 V2。
     SynthVariant synth = SynthVariant::V2;
-    // エンジン選択。既定 Auto (音声 DB があれば単位連結)。
+    // エンジン選択。既定 Auto (HMM ボイス > 音声 DB > フォルマントの順)。
     Engine engine = Engine::Auto;
+
+    // ----- HMM エンジンのみ -----
+    // ピッチシフト [半音]。ボイス既定ピッチからの相対 (+ で高く)。
+    float hmm_half_tone = 0.0f;
 };
 
 enum class Error {
@@ -95,5 +103,15 @@ bool set_voice_db(std::span<const std::uint8_t> jvox_blob);
 
 // ロード済み DB の単位数 (未ロードなら 0)。
 std::uint16_t voice_db_units();
+
+// HMM エンジン用の .htsvoice イメージを登録する。blob の寿命は呼び出し側が
+// 保証する (flash mmap / PSRAM)。ロード完了後はパース済み構造がヒープに
+// 展開されるが、再ロードに備えて blob は生かしておくこと。空 span で解除。
+// パース失敗時は false (未ロード状態のまま)。スレッド安全ではない。
+// CONFIG_JTTS_ENABLE_HMM 無効ビルドでは常に false。
+bool set_hmm_voice(std::span<const std::uint8_t> htsvoice);
+
+// HMM ボイスがロード済みか。
+bool hmm_voice_loaded();
 
 }  // namespace stackchan::jtts

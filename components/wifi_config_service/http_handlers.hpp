@@ -61,6 +61,8 @@ void set_avatar_bytecode_sink(AvatarBytecodeSink sink);
 // 音声 DB (/api/voice-db) の sink / status getter。See wifi_config_service.hpp.
 void set_voice_db_sink(VoiceDbSink sink);
 void set_voice_db_status_getter(VoiceDbStatusGetter getter);
+void set_hmm_voice_sink(HmmVoiceSink sink);
+void set_hmm_voice_status_getter(HmmVoiceStatusGetter getter);
 
 // Register the one-shot camera capture sink (GET /api/camera/capture).
 // See wifi_config_service.hpp for the contract.

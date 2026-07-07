@@ -25,3 +25,11 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # StopWatch has no DVP camera. Make sure CONFIG_STACKCHAN_CAMERA_ENABLED
 # stays off (the cores3 profile is the only one that flips it to y).
 CONFIG_STACKCHAN_CAMERA_ENABLED=n
+
+# 16 MB flash: 末尾に HMM 合成の voice パーティション (4 MB) を追加した
+# パーティション表を使う。先頭は共通表と一致 (既存データ引き継ぎ)。
+# 旧表の機体では voice パーティションが見えず HMM はフォールバック動作。
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_16mb.csv"
+
+# HMM (hts_engine) 音声合成エンジン
+CONFIG_JTTS_ENABLE_HMM=y

@@ -10,8 +10,11 @@ idf_component_register(
         "src/jvox.cpp"
         "src/jvox_adpcm.cpp"
         "src/unit_synth.cpp"
+        "src/hts_label.cpp"
+        "src/hmm_synth.cpp"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "src"
     REQUIRES tl_expected
+    PRIV_REQUIRES hts_engine
 )
 target_compile_features(${COMPONENT_LIB} PUBLIC cxx_std_20)

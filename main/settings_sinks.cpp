@@ -4,6 +4,7 @@
 #include "settings_sinks.hpp"
 
 #include "voice_db.hpp"
+#include "hmm_voice.hpp"
 
 #include <cstdio>
 #include <memory>
@@ -396,6 +397,18 @@ void register_avatar_bytecode_sinks()
         []() -> stackchan::wifi_config::VoiceDbStatus {
             const auto st = voice_db::status();
             return {st.loaded, st.units, st.stored_bytes};
+        });
+
+    // HMM ボイス (/api/hmm-voice、HTTP のみ — ~2 MB は BLE には大きすぎる)。
+    stackchan::wifi_config::set_hmm_voice_sink(
+        [](const std::uint8_t* data, std::size_t len) -> const char* {
+            if (data == nullptr || len == 0) return hmm_voice::clear();
+            return hmm_voice::store({data, len});
+        });
+    stackchan::wifi_config::set_hmm_voice_status_getter(
+        []() -> stackchan::wifi_config::HmmVoiceStatus {
+            const auto st = hmm_voice::status();
+            return {st.loaded, st.stored_bytes, st.capacity};
         });
 }
 

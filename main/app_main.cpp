@@ -52,6 +52,7 @@
 #include "shared_state.hpp"
 #include "speech.hpp"
 #include "voice_db.hpp"
+#include "hmm_voice.hpp"
 #if CONFIG_STACKCHAN_WIFI_AUDIO_ENABLED
 #include "wifi_audio.hpp"
 #endif
@@ -624,6 +625,12 @@ extern "C" void app_main()
     // アップロード sink は register_avatar_bytecode_sinks 内で登録済み。
     if (const auto units = stackchan::app::voice_db::init(); units > 0) {
         ESP_LOGI(kTag, "jvox: voice DB active (%u units) — unit-concat TTS enabled", units);
+    }
+
+    // HMM ボイス: voice パーティション (16 MB flash ボード) から flash mmap で
+    // ロード (無いボード / 未書き込みなら false → 他エンジンへフォールバック)。
+    if (stackchan::app::hmm_voice::init()) {
+        ESP_LOGI(kTag, "hts: HMM voice active — HMM TTS enabled");
     }
 
     // Camera capture / register sinks (no-op when the resident camera did

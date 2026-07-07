@@ -1,0 +1,14 @@
+# ESP-IDF Partition Table (16 MB flash ボード: CoreS3 / stopwatch)
+# 8 MB 共通表 (partitions.csv) とはレイアウトが異なる — この表への移行は
+# USB 書き込み必須で、storage 上のデータ (顔バイトコード / 音声 DB) は
+# 引き継がれない (再アップロードが必要)。nvs / otadata / phy_init は
+# ブートローダが参照する固定オフセットなので変えないこと。
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x4000,
+otadata,  data, ota,     0xd000,   0x2000,
+phy_init, data, phy,     0xf000,   0x1000,
+ota_0,    app,  ota_0,   0x10000,  0x400000,
+ota_1,    app,  ota_1,   0x410000, 0x400000,
+storage,  data, spiffs,  0x810000, 0x100000,
+# HMM 合成の .htsvoice 置き場 (raw、先頭に hmm_voice のヘッダ)
+voice,    data, spiffs,  0x910000, 0x400000,

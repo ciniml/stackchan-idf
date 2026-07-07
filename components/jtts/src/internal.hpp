@@ -78,4 +78,16 @@ namespace stackchan::jtts::internal {
 bool render_units(std::span<const Mora> moras, const jvox::Db& db,
                   std::vector<std::int16_t>& out, const Options& opt);
 
+// ---- HMM (hts_engine) エンジン ----
+
+// かな文字列 (アクセント記号 `'` = 直前モーラが核、`/` = アクセント句境界、
+// 「、」「。」= 呼気段落境界) から HTS full-context ラベルを生成する
+// (hts_label.cpp)。品詞情報なし・無指定アクセントは平板型。
+// 検証リファレンス: tools/jvox/hts_label_kana.py
+bool build_hts_labels(std::u32string_view text, std::vector<std::string>& labels);
+
+// HMM エンジン本体 (hmm_synth.cpp)。ボイス未ロード・ラベル生成失敗・
+// レート非対応時は out を触らず false (呼び出し側がフォールバック)。
+bool render_hmm(std::u32string_view text, std::vector<std::int16_t>& out, const Options& opt);
+
 }  // namespace stackchan::jtts::internal

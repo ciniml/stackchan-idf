@@ -100,6 +100,8 @@ config::JttsSayKanaSink g_jtts_say_sink = nullptr;
 AvatarBytecodeSink g_avatar_bytecode_sink = nullptr;
 VoiceDbSink g_voice_db_sink = nullptr;
 VoiceDbStatusGetter g_voice_db_status_getter = nullptr;
+HmmVoiceSink g_hmm_voice_sink = nullptr;
+HmmVoiceStatusGetter g_hmm_voice_status_getter = nullptr;
 CameraCaptureSink g_camera_capture_sink = nullptr;
 CameraRegSink g_camera_reg_sink = nullptr;
 McpSayKanaSink g_mcp_say_sink = nullptr;
@@ -1278,6 +1280,84 @@ esp_err_t handle_voice_db_clear_post(httpd_req_t* req)
     return send_json(req, R"({"ok":true})");
 }
 
+// --- HMM ボイス (.htsvoice) -------------------------------------------------
+// body は最大 ~2 MB。PSRAM に受けて sink (main/hmm_voice) が flash の voice
+// パーティションへ書く。
+
+esp_err_t handle_hmm_voice_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    HmmVoiceSink sink = g_hmm_voice_sink;
+    xSemaphoreGive(g_mutex);
+    if (!sink) return send_error(req, "503 Service Unavailable", "hmm-voice sink not ready");
+
+    constexpr std::size_t kMax = 4 * 1024 * 1024 - 16;  // voice パーティション上限
+    const int len = req->content_len;
+    if (len <= 0 || static_cast<std::size_t>(len) > kMax) {
+        return send_error(req, "413 Payload Too Large", "htsvoice must be 1 B .. 4 MiB");
+    }
+    std::uint8_t* buf =
+        static_cast<std::uint8_t*>(heap_caps_malloc(static_cast<std::size_t>(len),
+                                                    MALLOC_CAP_SPIRAM));
+    if (buf == nullptr) {
+        return send_error(req, "507 Insufficient Storage", "no PSRAM for upload buffer");
+    }
+    std::size_t off = 0;
+    while (off < static_cast<std::size_t>(len)) {
+        const int got = httpd_req_recv(req, reinterpret_cast<char*>(buf + off),
+                                       static_cast<std::size_t>(len) - off);
+        if (got <= 0) {
+            heap_caps_free(buf);
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_send(req, nullptr, 0);
+            return ESP_OK;
+        }
+        off += static_cast<std::size_t>(got);
+    }
+    const char* err = sink(buf, static_cast<std::size_t>(len));
+    heap_caps_free(buf);
+    if (err != nullptr) {
+        ESP_LOGE(kTag, "hmm-voice store: %s", err);
+        return send_error(req, "400 Bad Request", err);
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    HmmVoiceStatusGetter getter = g_hmm_voice_status_getter;
+    xSemaphoreGive(g_mutex);
+    const HmmVoiceStatus st = getter ? getter() : HmmVoiceStatus{};
+    char body[96];
+    std::snprintf(body, sizeof(body), R"({"ok":true,"stored":%u})",
+                  static_cast<unsigned>(st.stored_bytes));
+    return send_json(req, body);
+}
+
+esp_err_t handle_hmm_voice_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    HmmVoiceStatusGetter getter = g_hmm_voice_status_getter;
+    xSemaphoreGive(g_mutex);
+    const HmmVoiceStatus st = getter ? getter() : HmmVoiceStatus{};
+    char body[128];
+    std::snprintf(body, sizeof(body),
+                  R"({"loaded":%s,"stored":%u,"capacity":%u})",
+                  st.loaded ? "true" : "false", static_cast<unsigned>(st.stored_bytes),
+                  static_cast<unsigned>(st.capacity));
+    return send_json(req, body);
+}
+
+esp_err_t handle_hmm_voice_clear_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    HmmVoiceSink sink = g_hmm_voice_sink;
+    xSemaphoreGive(g_mutex);
+    if (!sink) return send_error(req, "503 Service Unavailable", "hmm-voice sink not ready");
+    const char* err = sink(nullptr, 0);
+    if (err != nullptr) return send_error(req, "500 Internal Server Error", err);
+    return send_json(req, R"({"ok":true})");
+}
+
 // --- /mcp/* (Claude Code Channel adapter API, Bearer-auth) -------------
 //
 // Designed for exposure via Cloudflare Tunnel. Every request must carry
@@ -1677,6 +1757,9 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/voice-db",         HTTP_GET,  handle_voice_db_get);
     add(server, "/api/voice-db",         HTTP_POST, handle_voice_db_post);
     add(server, "/api/voice-db/clear",   HTTP_POST, handle_voice_db_clear_post);
+    add(server, "/api/hmm-voice",        HTTP_GET,  handle_hmm_voice_get);
+    add(server, "/api/hmm-voice",        HTTP_POST, handle_hmm_voice_post);
+    add(server, "/api/hmm-voice/clear",  HTTP_POST, handle_hmm_voice_clear_post);
     add(server, "/api/metrics/audio",    HTTP_GET,  handle_audio_metrics_get);
     add(server, "/api/led-state",        HTTP_GET,  handle_led_state_get);
     add(server, "/api/led-state",        HTTP_POST, handle_led_state_post);
@@ -1854,6 +1937,28 @@ void set_voice_db_status_getter(VoiceDbStatusGetter getter)
     }
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     g_voice_db_status_getter = std::move(getter);
+    xSemaphoreGive(g_mutex);
+}
+
+void set_hmm_voice_sink(HmmVoiceSink sink)
+{
+    if (g_mutex == nullptr) {
+        g_hmm_voice_sink = std::move(sink);
+        return;
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_hmm_voice_sink = std::move(sink);
+    xSemaphoreGive(g_mutex);
+}
+
+void set_hmm_voice_status_getter(HmmVoiceStatusGetter getter)
+{
+    if (g_mutex == nullptr) {
+        g_hmm_voice_status_getter = std::move(getter);
+        return;
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_hmm_voice_status_getter = std::move(getter);
     xSemaphoreGive(g_mutex);
 }
 

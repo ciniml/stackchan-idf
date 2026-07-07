@@ -1,0 +1,12 @@
+menu "jtts (Japanese TTS)"
+
+config JTTS_ENABLE_HMM
+    bool "Enable HMM (hts_engine) synthesis engine"
+    default n
+    help
+        HMM 音声合成 (hts_engine) を有効にする。.htsvoice ボイス (~1-2 MB) を
+        flash の voice パーティションに置ける 16 MB flash + PSRAM ボード
+        (CoreS3 / stopwatch) 向け。無効時は render_hmm がスタブになり
+        hts_engine のコードはリンクされない。
+
+endmenu
