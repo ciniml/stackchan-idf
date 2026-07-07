@@ -13,6 +13,9 @@ namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
 
+// 定 peak-gain バンドパス biquad。無声 (摩擦) 成分の並列パス用。
+// 並列構成はフォルマントごとの振幅 (a1..a3) を直接制御できるので、
+// 子音テーブルのチューニング (「した」vs「ちた」問題など) をそのまま活かす。
 class Biquad {
 public:
     void set_bpf(float f0, float bw, float fs) {
@@ -46,18 +49,59 @@ private:
     float x1_ = 0, x2_ = 0, y1_ = 0, y2_ = 0;
 };
 
-// f0 の周期ごとに高さ ≈ sqrt(Fs/f0) のインパルスを出す励起源。
-// BPF resonator (peak gain ≈ 0 dB) を通したときの出力 RMS が f0 に対して
-// だいたい一定になるよう正規化している。
-class ImpulseSource {
+// Klatt 型 2-pole 共振器 (DC ゲイン 1)。有声パスのカスケード接続用。
+// カスケードにするとフォルマント間の相対振幅が声道の物理と同じ形で自動的に
+// 決まり、並列構成で起きるフォルマント間の位相打ち消しの谷が出ないため、
+// 母音の了解性が上がる (Klatt 1980 のカスケード分岐と同じ考え方)。
+class Resonator {
+public:
+    void set(float f, float bw, float fs) {
+        if (f < 50.0f) f = 50.0f;
+        if (f > fs * 0.47f) f = fs * 0.47f;
+        if (bw < 30.0f) bw = 30.0f;
+        const float T = 1.0f / fs;
+        c_ = -std::exp(-2.0f * kPi * bw * T);
+        b_ = 2.0f * std::exp(-kPi * bw * T) * std::cos(2.0f * kPi * f * T);
+        a_ = 1.0f - b_ - c_;
+    }
+    float process(float x) {
+        float y = a_ * x + b_ * y1_ + c_ * y2_;
+        y2_ = y1_;
+        y1_ = y;
+        return y;
+    }
+    void reset() { y1_ = y2_ = 0.0f; }
+
+private:
+    float a_ = 0, b_ = 0, c_ = 0;
+    float y1_ = 0, y2_ = 0;
+};
+
+// Rosenberg 声門流の微分 (glottal flow derivative) を励起源にする。
+// 旧実装のインパルス列は全帯域フラットなスペクトルでブザー的な耳障りさの
+// 主因だった。声門流微分は開大期のゆるい山 + 閉鎖時の鋭い負スパイクという
+// 形をしており、自然な -6 dB/oct 程度のスペクトル傾斜 (放射特性込み) が
+// 得られる。フォルマント合成の「機械のブザー」感がここで一番減る。
+//   flow g(ph):  0 ≤ ph < Tp : 0.5 (1 - cos(π ph / Tp))       (開大)
+//                Tp ≤ ph < Tc : cos(π (ph - Tp) / (2 Tn))      (閉小)
+//                Tc ≤ ph < 1  : 0                              (閉鎖)
+//   励起は dg/dph。Tp = 0.40, Tn = 0.16 (open quotient 0.56)。
+class GlottalSource {
 public:
     float tick(float f0_hz, float fs) {
         if (f0_hz <= 1.0f) return 0.0f;
-        float inc = f0_hz / fs;
-        phase_ += inc;
-        if (phase_ >= 1.0f) {
-            phase_ -= 1.0f;
-            return std::sqrt(fs / f0_hz);
+        phase_ += f0_hz / fs;
+        if (phase_ >= 1.0f) phase_ -= 1.0f;
+
+        constexpr float kTp = 0.40f;
+        constexpr float kTn = 0.16f;
+        constexpr float kTc = kTp + kTn;
+        if (phase_ < kTp) {
+            return (kPi / (2.0f * kTp)) * std::sin(kPi * phase_ / kTp);
+        }
+        if (phase_ < kTc) {
+            return -(kPi / (2.0f * kTn)) *
+                   std::sin(kPi * (phase_ - kTp) / (2.0f * kTn));
         }
         return 0.0f;
     }
@@ -80,13 +124,24 @@ inline std::int16_t to_i16(float x) {
 void render_segments(std::span<const Segment> segs, std::vector<std::int16_t>& out,
                      const Options& opt) {
     const float fs = static_cast<float>(opt.sample_rate_hz);
-    Biquad r1, r2, r3;
-    ImpulseSource voice;
+
+    // 有声パス: 声門波 → R1→R2→R3→R4→R5 カスケード。
+    Resonator c1, c2, c3, c4, c5;
+    // 無声パス: ノイズ → 並列 BPF ×3 (従来どおり、a1..a3 で振幅制御)。
+    Biquad p1, p2, p3;
+    GlottalSource voice;
     std::mt19937 rng(0xC0DECAFEu);
     auto noise = [&]() {
         std::uint32_t v = rng();
         return (static_cast<float>(v) / static_cast<float>(0xFFFFFFFFu)) * 2.0f - 1.0f;
     };
+
+    // F4/F5 は母音間でほとんど動かないので固定共振器として置く。3 フォルマント
+    // では 3 kHz 以上がごっそり欠けて「こもった電話声」になるのを埋める。
+    // 声道長の違い (formant_scale) には追従させる。
+    const float fscale = (opt.formant_scale > 0.0f) ? opt.formant_scale : 1.0f;
+    c4.set(3300.0f * fscale, 280.0f, fs);
+    c5.set(3850.0f * fscale, 320.0f, fs);
 
     constexpr float step_ms = 5.0f;
     const std::size_t step_samples =
@@ -95,9 +150,12 @@ void render_segments(std::span<const Segment> segs, std::vector<std::int16_t>& o
     const bool vibrato_on = opt.vibrato_rate_hz > 0.0f && opt.vibrato_cents > 0.0f;
     const float vib_inc = opt.vibrato_rate_hz / fs;
     float vib_phase = 0.0f;
-    // ノイズは impulse train (RMS≈1) と振幅を揃えるため √3 倍する (一様乱数 [-1,1]
-    // の RMS = 1/√3)。これで breathiness の知覚的ミックスが線形になる。
+    // ノイズ (一様乱数 [-1,1]、RMS = 1/√3) を声門波の実効振幅と揃えるための係数。
     constexpr float kNoiseGain = 1.73205081f;
+    // カスケード出力の全体ゲイン。声門波振幅 (≈π/2Tn) とカスケードの帯域圧縮を
+    // 込みで、旧実装 (並列 + インパルス) と同程度の出力 RMS になるよう
+    // ホストの母音テスト (test_vowels) で合わせた値。
+    constexpr float kVoicedMakeup = 0.015f;
 
     for (const Segment& seg : segs) {
         std::size_t total = static_cast<std::size_t>(std::lround(seg.duration_ms * 0.001f * fs));
@@ -121,9 +179,17 @@ void render_segments(std::span<const Segment> segs, std::vector<std::int16_t>& o
             float frication = lerp(seg.start.frication, seg.end.frication, t);
             float f0_base = lerp(seg.start.f0_hz, seg.end.f0_hz, t);
 
-            r1.set_bpf(f1, bw1, fs);
-            r2.set_bpf(f2, bw2, fs);
-            r3.set_bpf(f3, bw3, fs);
+            c1.set(f1, bw1, fs);
+            c2.set(f2, bw2, fs);
+            c3.set(f3, bw3, fs);
+            p1.set_bpf(f1, bw1, fs);
+            p2.set_bpf(f2, bw2, fs);
+            p3.set_bpf(f3, bw3, fs);
+
+            // カスケードは相対振幅を構造が決めるので、フォルマント別振幅の
+            // 代わりに a1 を「その区間の有声マスター音量」として使う (母音 1.0、
+            // 鼻音 0.55、無声化母音 0.55 などテーブルの意図はそのまま活きる)。
+            const float voiced_amp = a1;
 
             for (std::size_t j = 0; j < n; ++j) {
                 float f0_mod = f0_base;
@@ -138,10 +204,16 @@ void render_segments(std::span<const Segment> segs, std::vector<std::int16_t>& o
                 float n1 = noise() * kNoiseGain;
                 float n2 = noise() * kNoiseGain;
                 float voiced_src = (1.0f - opt.breathiness) * pulse + opt.breathiness * n1;
-                float ex = voicing * voiced_src * opt.voicing_mul +
-                           frication * n2 * opt.frication_mul;
-                float y = a1 * r1.process(ex) + a2 * r2.process(ex) + a3 * r3.process(ex);
-                y *= opt.gain;
+
+                float voiced =
+                    c5.process(c4.process(c3.process(c2.process(c1.process(voiced_src)))));
+                voiced *= voicing * voiced_amp * opt.voicing_mul * kVoicedMakeup;
+
+                float fric_src = frication * n2 * opt.frication_mul;
+                float fric = a1 * p1.process(fric_src) + a2 * p2.process(fric_src) +
+                             a3 * p3.process(fric_src);
+
+                float y = (voiced + fric) * opt.gain;
                 out.push_back(to_i16(y));
             }
             k += n;
