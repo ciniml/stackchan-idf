@@ -13,5 +13,8 @@ idf_component_register(
     PRIV_INCLUDE_DIRS "lib"
 )
 target_compile_definitions(${COMPONENT_LIB} PRIVATE AUDIO_PLAY_NONE)
-# vendored C ソース: upstream 由来の警告は黙らせる (改変は最小限に留める)
-target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error=maybe-uninitialized -Wno-unused-but-set-variable)
+# vendored C ソース: upstream 由来の警告は黙らせる (改変は最小限に留める)。
+# ボコーダはサンプル毎の float 演算が支配的なので -Ofast (NaN/Inf は扱わない)。
+target_compile_options(${COMPONENT_LIB} PRIVATE
+    -Wno-error=maybe-uninitialized -Wno-unused-but-set-variable
+    -Ofast -fno-strict-aliasing)

@@ -552,10 +552,19 @@ void *HTS_calloc(const size_t num, const size_t size)
 #ifdef FESTIVAL
    mem = (void *) safe_wcalloc(n);
 #elif defined(ESP_PLATFORM)
-   /* stackchan: prefer PSRAM; model data / work buffers are large and not latency-critical */
-   mem = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-   if (mem == NULL)
+   /* stackchan: 大きい確保 (PDF テーブル / パラメータ行列 / 波形バッファ) は
+    * PSRAM、小さい確保 (ボコーダのリング バッファ等、サンプル毎に触る) は
+    * 内部 RAM。全部 PSRAM にすると MLSA の内側ループがキャッシュ ミスだらけに
+    * なり実測 RTF 6.0 (11.8 s / 2 s 音声) まで落ちる。 */
+   if (n >= 32768) {
+      mem = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      if (mem == NULL)
+         mem = malloc(n);
+   } else {
       mem = malloc(n);
+      if (mem == NULL)
+         mem = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+   }
 #else
    mem = (void *) malloc(n);
 #endif                          /* FESTIVAL */

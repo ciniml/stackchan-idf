@@ -103,20 +103,24 @@ static void HTS_movem(float *a, float *b, const int nitem)
 /* HTS_mlsafir: sub functions for MLSA filter */
 static float HTS_mlsafir(const float x, const float *b, const int m, const float a, const float aa, float *d)
 {
+   /* stackchan: 更新・積和・シフトの 3 ループを 1 パスに融合 (ロード/ストア
+    * 半減)。d[i] の更新は d[i-1] の「更新後」値に依存する直列漸化式なので
+    * ベクトル化はできないが、シフトは前値を持ち回れば同じパスで済む。 */
    float y = 0.0;
+   float prev, cur;
    int i;
 
    d[0] = x;
    d[1] = aa * d[0] + a * d[1];
 
-   for (i = 2; i <= m; i++)
-      d[i] += a * (d[i + 1] - d[i - 1]);
-
-   for (i = 2; i <= m; i++)
-      y += d[i] * b[i];
-
-   for (i = m + 1; i > 1; i--)
-      d[i] = d[i - 1];
+   prev = d[1];                 /* d[i-1] の更新後値 */
+   for (i = 2; i <= m; i++) {
+      cur = d[i] + a * (d[i + 1] - prev);
+      y += cur * b[i];
+      d[i] = prev;              /* シフト d[i] = d[i-1] を同時に実施 */
+      prev = cur;
+   }
+   d[m + 1] = prev;
 
    return (y);
 }
@@ -683,20 +687,34 @@ static void HTS_Vocoder_excite_unvoiced_frame(HTS_Vocoder * v, float noise)
 /* HTS_Vocoder_excite_vooiced_frame: ping noise and pulse to ring buffer */
 static void HTS_Vocoder_excite_voiced_frame(HTS_Vocoder * v, float noise, float pulse, const float *lpf)
 {
+   /* stackchan: サンプル毎に呼ばれるので剰余演算を避け、リングの折り返しを
+    * 2 区間に分けて線形に書く (元実装はループ内で毎回 %)。 */
    size_t i;
-   size_t center = (v->excite_buff_size - 1) / 2;
+   const size_t size = v->excite_buff_size;
+   const size_t center = (size - 1) / 2;
+   const size_t head = size - v->excite_buff_index;  /* 折り返しまでの要素数 */
+   float *ring = v->excite_ring_buff;
 
    if (noise != 0.0) {
-      for (i = 0; i < v->excite_buff_size; i++) {
-         if (i == center)
-            v->excite_ring_buff[(v->excite_buff_index + i) % v->excite_buff_size] += noise * (1.0 - lpf[i]);
-         else
-            v->excite_ring_buff[(v->excite_buff_index + i) % v->excite_buff_size] += noise * (0.0 - lpf[i]);
-      }
+      float *p = ring + v->excite_buff_index;
+      for (i = 0; i < head; i++)
+         p[i] -= noise * lpf[i];
+      p = ring - head;
+      for (; i < size; i++)
+         p[i] -= noise * lpf[i];
+      /* center だけは noise*(1-lpf) なので noise を足し戻す */
+      if (center < head)
+         ring[v->excite_buff_index + center] += noise;
+      else
+         ring[center - head] += noise;
    }
    if (pulse != 0.0) {
-      for (i = 0; i < v->excite_buff_size; i++)
-         v->excite_ring_buff[(v->excite_buff_index + i) % v->excite_buff_size] += pulse * lpf[i];
+      float *p = ring + v->excite_buff_index;
+      for (i = 0; i < head; i++)
+         p[i] += pulse * lpf[i];
+      p = ring - head;
+      for (; i < size; i++)
+         p[i] += pulse * lpf[i];
    }
 }
 

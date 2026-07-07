@@ -33,3 +33,7 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_16mb.csv"
 
 # HMM (hts_engine) 音声合成エンジン
 CONFIG_JTTS_ENABLE_HMM=y
+
+# hts_engine の合成 (ラベル パース等のスタック ローカル) が main タスクの
+# 既定 8 KB を溢れさせるため増量。
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
