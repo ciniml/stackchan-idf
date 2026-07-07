@@ -199,6 +199,10 @@ bool render_units(std::span<const Mora> moras, const jvox::Db& db,
         const float v_in_len =
             static_cast<float>(e.unit.marks[e.mark_last] - e.unit.marks.front());
 
+        // グレイン正規化ゲインの平滑化状態。毎グレイン独立にゲインが跳ねると
+        // ピッチ周期の振幅変調 (ざらついたノイズ) になる。
+        float g_smooth = -1.0f;
+
         while (s < v1) {
             const std::size_t out_pos = static_cast<std::size_t>(s);
             const float f0 = f0_at(out_pos);
@@ -219,11 +223,16 @@ bool render_units(std::span<const Mora> moras, const jvox::Db& db,
 
             // グレイン エネルギー正規化: このグレインの生 RMS を単位の代表
             // RMS に揃える。元発話の語尾減衰・強勢の持ち込みを平らにする。
+            // データ側 (pack_jvox) で単位間レベルは揃っている前提なので
+            // 補正は控えめ (±2 倍) + 平滑化 (跳ねるとピッチ周期の変調
+            // ノイズになる)。
             float gain = e.amp;
             if (e.ref_rms > 0.0f) {
                 const float g_rms = local_rms(e.unit.pcm, m, p_a);
                 if (g_rms > 1e-5f) {
-                    gain *= std::clamp(e.ref_rms / g_rms, 0.25f, 4.0f);
+                    const float target = std::clamp(e.ref_rms / g_rms, 0.5f, 2.0f);
+                    g_smooth = (g_smooth < 0.0f) ? target : 0.6f * g_smooth + 0.4f * target;
+                    gain *= g_smooth;
                 }
             }
             // ピッチを上げる (合成間隔 < 分析周期) と窓の重なりが増えて音量が

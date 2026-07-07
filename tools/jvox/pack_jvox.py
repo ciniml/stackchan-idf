@@ -135,6 +135,41 @@ def steady_start(marks: list[int]) -> int:
     return marks[max(0, int(len(marks) * 0.4))]
 
 
+def ref_rms(x: np.ndarray, marks: list[int]) -> float:
+    """有声部の代表 RMS (エンジンの unit_ref_rms と同じ定義: 前半 70% の中央値)。"""
+    if len(marks) < 3:
+        return 0.0
+    n = max(1, len(marks) * 7 // 10)
+    vals = []
+    for j in range(1, min(len(marks) - 1, n + 1)):
+        p = marks[j] - marks[j - 1]
+        lo, hi = max(0, marks[j] - p), min(len(x), marks[j] + p + 1)
+        vals.append(float(np.sqrt((x[lo:hi] ** 2).mean())))
+    return float(np.median(vals)) if vals else 0.0
+
+
+def normalize_unit(x: np.ndarray, marks: list[int]) -> np.ndarray:
+    """単位間のレベルを揃える。
+
+    生成側 (gen_units_openjtalk) はピーク正規化なので、摩擦音がピークの単位
+    (「し」等) は子音が突出し、母音の基準レベルは単位ごとにバラバラになる —
+    連結すると「境界の段差」と「ノイズっぽい子音」になる (実聴で確認)。
+    有声部の代表 RMS を全単位で共通の目標値に揃える (単位内の子音/母音
+    バランスは元発話のまま保たれる)。無声単位はピーク基準。
+    """
+    target = 3000.0  # 共通の母音基準 RMS (i16)
+    r = ref_rms(x, marks)
+    if r > 1.0:
+        scale = target / r
+    else:
+        peak = float(np.abs(x).max())
+        scale = (0.35 * 32767.0 / peak) if peak > 0 else 1.0
+    peak = float(np.abs(x).max())
+    if peak * scale > 0.95 * 32767.0:
+        scale = 0.95 * 32767.0 / peak
+    return x * scale
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         print(__doc__, file=sys.stderr)
@@ -162,6 +197,7 @@ def main() -> int:
             print(f"  [warn] {kana} ({fname}): voiced marks={len(marks)} f0={f0:.0f} — "
                   "無声単位として格納 (verbatim 再生)")
             marks = []
+        x = normalize_unit(x, marks)
         units.append((key, x.astype(np.int16), marks, steady_start(marks), f0))
         print(f"  {kana:4s} key={key:04x} len={len(x):6d} f0={f0:6.1f} marks={len(marks)}")
 
