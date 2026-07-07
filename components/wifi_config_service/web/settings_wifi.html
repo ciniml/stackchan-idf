@@ -576,6 +576,26 @@
         <option value="classic">クラシック (旧方式 — ブザー声)</option>
       </select>
 
+      <label for="jtts-engine">エンジン</label>
+      <select id="jtts-engine">
+        <option value="auto">自動 (音声 DB があれば単位連結)</option>
+        <option value="formant">フォルマント合成のみ</option>
+        <option value="unit">単位連結 (DB 必須、無ければフォルマント)</option>
+      </select>
+
+      <h2 class="section-title" style="margin-top:1rem">単位連結 音声 DB (.jvox)</h2>
+      <p class="hint" style="margin-bottom:0.5rem">
+        実音声由来のモーラ単位 DB をアップロードすると、jtts の発話が単位連結
+        (TD-PSOLA) 合成になります。<code>tools/jvox/</code> のツールで生成した
+        .jvox (ADPCM 版推奨、~230 KB)。反映は即時、NVS 保存で再起動後も有効。
+      </p>
+      <p class="hint" id="voice-db-status" style="margin-bottom:0.5rem">状態: —</p>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
+        <input type="file" id="voice-db-file" accept=".jvox,application/octet-stream" style="flex:1 1 12rem">
+        <button type="button" id="btn-voice-db-upload">アップロード</button>
+        <button type="button" id="btn-voice-db-clear" class="danger">削除</button>
+      </div>
+
       <div class="grid2">
         <div>
           <label for="jtts-f0">ピッチ F0 (Hz)</label>
@@ -1044,6 +1064,8 @@ function readJttsForm() {
   if (voice) obj.voice = voice;
   const synth = $('jtts-synth').value;
   if (synth && synth !== 'v2') obj.synth = synth;
+  const engine = $('jtts-engine').value;
+  if (engine && engine !== 'auto') obj.engine = engine;
   for (const [key, id] of Object.entries(JTTS_NUM_FIELDS)) {
     const v = $(id).value.trim();
     if (v !== '') obj[key] = Number(v);
@@ -1060,6 +1082,9 @@ function applyJttsToForm(json) {
   try { obj = JSON.parse(json); } catch { return; }
   if (obj.voice) $('jtts-voice').value = obj.voice;
   if (obj.synth === 'classic' || obj.synth === 'v2') $('jtts-synth').value = obj.synth;
+  if (obj.engine === 'auto' || obj.engine === 'formant' || obj.engine === 'unit') {
+    $('jtts-engine').value = obj.engine;
+  }
   for (const [key, id] of Object.entries(JTTS_NUM_FIELDS)) {
     if (obj[key] !== undefined) $(id).value = obj[key];
   }
@@ -1109,6 +1134,54 @@ async function sendLtConfig() {
 $('btn-lt-send').addEventListener('click', () => {
   sendLtConfig().catch((e) => log('LT 設定送信失敗: ' + e.message, 'err'));
 });
+
+// --- 単位連結 音声 DB (.jvox) ---
+
+async function refreshVoiceDbStatus() {
+  try {
+    const st = await fetchJSON('/api/voice-db');
+    $('voice-db-status').textContent = st.loaded
+      ? `状態: ロード済み (${st.units} 単位、保存 ${Math.round(st.stored/1024)} KiB)`
+      : (st.stored > 0 ? '状態: 保存済み・未ロード (PSRAM 不足?)' : '状態: 未登録 (フォルマント合成)');
+  } catch (e) { $('voice-db-status').textContent = '状態: 取得失敗'; }
+}
+$('btn-voice-db-upload').addEventListener('click', async () => {
+  const f = $('voice-db-file').files[0];
+  if (!f) { log('音声 DB: ファイルを選択してください', 'err'); return; }
+  const btn = $('btn-voice-db-upload');
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = '送信中…';
+  try {
+    const r = await fetch('/api/voice-db', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: await f.arrayBuffer(),
+    });
+    const body = await r.text();
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${body}`);
+    const st = JSON.parse(body);
+    log(`音声 DB 登録 (${st.units} 単位、${Math.round(st.stored/1024)} KiB)`, 'ok');
+  } catch (e) {
+    log('音声 DB 登録失敗: ' + e.message, 'err');
+  } finally {
+    btn.textContent = old;
+    btn.disabled = false;
+    refreshVoiceDbStatus();
+  }
+});
+$('btn-voice-db-clear').addEventListener('click', async () => {
+  if (!confirm('音声 DB を削除してフォルマント合成に戻します。よろしいですか?')) return;
+  try {
+    const r = await fetch('/api/voice-db/clear', { method: 'POST' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    log('音声 DB 削除', 'ok');
+  } catch (e) {
+    log('音声 DB 削除失敗: ' + e.message, 'err');
+  }
+  refreshVoiceDbStatus();
+});
+refreshVoiceDbStatus();
 
 // --- Status refresh ---
 

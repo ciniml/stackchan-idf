@@ -330,6 +330,16 @@ void set_avatar_bytecode_sink(AvatarBytecodeSink sink)
     http::set_avatar_bytecode_sink(std::move(sink));
 }
 
+void set_voice_db_sink(VoiceDbSink sink)
+{
+    http::set_voice_db_sink(std::move(sink));
+}
+
+void set_voice_db_status_getter(VoiceDbStatusGetter getter)
+{
+    http::set_voice_db_status_getter(std::move(getter));
+}
+
 void set_camera_capture_sink(CameraCaptureSink sink)
 {
     http::set_camera_capture_sink(std::move(sink));

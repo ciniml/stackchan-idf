@@ -8,6 +8,7 @@ idf_component_register(
         "src/prosody.cpp"
         "src/jtts.cpp"
         "src/jvox.cpp"
+        "src/jvox_adpcm.cpp"
         "src/unit_synth.cpp"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "src"

@@ -3,12 +3,16 @@
 """pack_jvox: モーラ単位 WAV 群から .jvox (単位連結 TTS 用音声 DB) を作る。
 
 Usage:
-    python3 pack_jvox.py <unit_dir> <out.jvox>
+    python3 pack_jvox.py [--adpcm] <unit_dir> <out.jvox>
 
 <unit_dir> には index.tsv (key_hex \t kana \t filename [\t f0_hint]) と
 16 kHz mono i16 の WAV 群を置く。各単位についてピッチマーク (声門閉鎖近傍の
 負ピーク列) を抽出してパックする。フォーマットは
 components/jtts/include/jtts/jvox.hpp のコメントが正。
+
+--adpcm: pcm ブロックを IMA-ADPCM 4bit (codec=1) で格納する。実機への転送/
+NVS 保存用 (~1/4 サイズ、NVS blob 上限 508 KB に収まる)。デバイスはロード時
+に codec=0 へ展開する。
 """
 
 import struct
@@ -182,12 +186,71 @@ def normalize_unit(x: np.ndarray, marks: list[int]) -> np.ndarray:
     return x * scale
 
 
+IMA_INDEX_TABLE = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8]
+IMA_STEP_TABLE = [
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+    50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230,
+    253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963,
+    1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327,
+    3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442,
+    11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794,
+    32767,
+]
+
+
+def adpcm_encode(pcm: np.ndarray) -> bytes:
+    """i16 列を IMA-ADPCM 4bit (単一ストリーム、predictor=0/index=0 開始) に。
+
+    デコーダは components/jtts/src/jvox_adpcm.cpp — 両者は同じ量子化規則
+    (diff 再構成方式) を使うので往復のドリフトはステップ量子化誤差のみ。
+    """
+    pred, index = 0, 0
+    nibbles = bytearray()
+    cur = 0
+    for i, s in enumerate(np.asarray(pcm, dtype=np.int64)):
+        step = IMA_STEP_TABLE[index]
+        diff = int(s) - pred
+        code = 0
+        if diff < 0:
+            code = 8
+            diff = -diff
+        if diff >= step:
+            code |= 4
+            diff -= step
+        if diff >= step >> 1:
+            code |= 2
+            diff -= step >> 1
+        if diff >= step >> 2:
+            code |= 1
+        # デコーダと同じ再構成
+        rec = step >> 3
+        if code & 1:
+            rec += step >> 2
+        if code & 2:
+            rec += step >> 1
+        if code & 4:
+            rec += step
+        if code & 8:
+            rec = -rec
+        pred = max(-32768, min(32767, pred + rec))
+        index = max(0, min(88, index + IMA_INDEX_TABLE[code]))
+        if i % 2 == 0:
+            cur = code
+        else:
+            nibbles.append(cur | (code << 4))
+    if len(pcm) % 2 == 1:
+        nibbles.append(cur)
+    return bytes(nibbles)
+
+
 def main() -> int:
-    if len(sys.argv) != 3:
+    args = [a for a in sys.argv[1:] if a != "--adpcm"]
+    use_adpcm = "--adpcm" in sys.argv[1:]
+    if len(args) != 2:
         print(__doc__, file=sys.stderr)
         return 1
-    unit_dir = Path(sys.argv[1])
-    out_path = Path(sys.argv[2])
+    unit_dir = Path(args[0])
+    out_path = Path(args[1])
 
     entries = []
     for line in (unit_dir / "index.tsv").read_text().splitlines():
@@ -225,11 +288,17 @@ def main() -> int:
         pcm_all.append(pcm)
         pcm_off += len(pcm)
 
-    blob = b"JVOX" + struct.pack("<BBHHH", 1, 0, sample_rate, len(units), 0)
+    codec = 1 if use_adpcm else 0
+    blob = b"JVOX" + struct.pack("<BBHHH", 1, codec, sample_rate, len(units), 0)
     blob += b"".join(recs)
     blob += struct.pack("<I", len(marks_all))
     blob += np.asarray(marks_all, dtype="<u2").tobytes()
-    blob += np.concatenate(pcm_all).astype("<i2").tobytes()
+    pcm_cat = np.concatenate(pcm_all).astype("<i2")
+    if use_adpcm:
+        blob += struct.pack("<I", len(pcm_cat))
+        blob += adpcm_encode(pcm_cat)
+    else:
+        blob += pcm_cat.tobytes()
 
     out_path.write_bytes(blob)
     print(f"wrote {out_path} ({len(blob)} bytes, {len(units)} units, "

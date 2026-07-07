@@ -80,6 +80,19 @@ void apply_synth(jtts::Options& opt, const cJSON* item)
     }
 }
 
+// engine は文字列 ("auto"/"formant"/"unit")。missing / 不明値は現在値を維持。
+void apply_engine(jtts::Options& opt, const cJSON* item)
+{
+    if (!cJSON_IsString(item) || item->valuestring == nullptr) return;
+    if (std::strcmp(item->valuestring, "auto") == 0) {
+        opt.engine = jtts::Engine::Auto;
+    } else if (std::strcmp(item->valuestring, "formant") == 0) {
+        opt.engine = jtts::Engine::Formant;
+    } else if (std::strcmp(item->valuestring, "unit") == 0) {
+        opt.engine = jtts::Engine::Unit;
+    }
+}
+
 void build_envelope_from_pcm(const std::vector<std::int16_t>& pcm,
                              std::vector<float>& envelope, std::uint32_t sample_rate,
                              std::uint32_t step_ms)
@@ -125,6 +138,7 @@ void apply_options_json(jtts::Options& opt, const cJSON* root)
     apply_number(opt.tilt_db, cJSON_GetObjectItemCaseSensitive(root, "tilt_db"));
     apply_number(opt.bw_scale, cJSON_GetObjectItemCaseSensitive(root, "bw_scale"));
     apply_synth(opt, cJSON_GetObjectItemCaseSensitive(root, "synth"));
+    apply_engine(opt, cJSON_GetObjectItemCaseSensitive(root, "engine"));
 }
 
 } // namespace

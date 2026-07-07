@@ -51,6 +51,7 @@
 #include "settings_sinks.hpp"
 #include "shared_state.hpp"
 #include "speech.hpp"
+#include "voice_db.hpp"
 #if CONFIG_STACKCHAN_WIFI_AUDIO_ENABLED
 #include "wifi_audio.hpp"
 #endif
@@ -617,6 +618,13 @@ extern "C" void app_main()
                  stackchan::avatar_vm::storage::to_string(loaded.error()));
     }
     stackchan::app::settings_sinks::register_avatar_bytecode_sinks();
+
+    // 単位連結 TTS の音声 DB: storage パーティションの NVS から PSRAM へ展開
+    // (無ければ / no-PSRAM ボードでは 0 → jtts はフォルマント合成のまま)。
+    // アップロード sink は register_avatar_bytecode_sinks 内で登録済み。
+    if (const auto units = stackchan::app::voice_db::init(); units > 0) {
+        ESP_LOGI(kTag, "jvox: voice DB active (%u units) — unit-concat TTS enabled", units);
+    }
 
     // Camera capture / register sinks (no-op when the resident camera did
     // not come up; /api/status's has_camera derives from this registration).

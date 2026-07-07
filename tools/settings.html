@@ -722,6 +722,14 @@
         <option value="classic">クラシック (旧方式 — ブザー声)</option>
       </select>
 
+      <label for="jtts-engine">エンジン</label>
+      <select id="jtts-engine">
+        <option value="auto">自動 (音声 DB があれば単位連結)</option>
+        <option value="formant">フォルマント合成のみ</option>
+        <option value="unit">単位連結 (DB 必須、無ければフォルマント)</option>
+      </select>
+      <p class="hint">単位連結用の音声 DB (.jvox) のアップロードは WiFi 設定ページから行えます。</p>
+
       <div class="grid2">
         <div>
           <label for="jtts-f0">ピッチ F0 (Hz)</label>
@@ -1718,6 +1726,8 @@ function readJttsForm() {
   if (voice) obj.voice = voice;
   const synth = document.getElementById('jtts-synth').value;
   if (synth && synth !== 'v2') obj.synth = synth;
+  const engine = document.getElementById('jtts-engine').value;
+  if (engine && engine !== 'auto') obj.engine = engine;
   for (const [key, id] of Object.entries(JTTS_NUM_FIELDS)) {
     const v = document.getElementById(id).value.trim();
     if (v !== '') {
@@ -1736,6 +1746,7 @@ function writeJttsForm(json) {
   // Reset all inputs first so leftover state never bleeds across configs.
   document.getElementById('jtts-voice').value = 'female';
   document.getElementById('jtts-synth').value = 'v2';
+  document.getElementById('jtts-engine').value = 'auto';
   for (const id of Object.values(JTTS_NUM_FIELDS)) {
     document.getElementById(id).value = '';
   }
@@ -1749,6 +1760,9 @@ function writeJttsForm(json) {
   }
   if (obj.synth === 'classic' || obj.synth === 'v2') {
     document.getElementById('jtts-synth').value = obj.synth;
+  }
+  if (obj.engine === 'auto' || obj.engine === 'formant' || obj.engine === 'unit') {
+    document.getElementById('jtts-engine').value = obj.engine;
   }
   for (const [key, id] of Object.entries(JTTS_NUM_FIELDS)) {
     if (typeof obj[key] === 'number') {

@@ -107,6 +107,22 @@ void set_board_kind(std::uint8_t kind);
 using AvatarBytecodeSink = std::function<bool(const std::uint8_t* data, std::size_t len)>;
 void set_avatar_bytecode_sink(AvatarBytecodeSink sink);
 
+// 単位連結 TTS の音声 DB (.jvox):
+//   POST /api/voice-db        — body = .jvox (ADPCM 推奨)。sink が検証 +
+//                               NVS 保存 + live ロード。戻り値 nullptr = 成功、
+//                               それ以外は静的エラーメッセージ (400 で返す)。
+//   POST /api/voice-db/clear  — data=nullptr / len=0 で呼ばれる (削除)。
+//   GET  /api/voice-db        — status getter の内容を JSON で返す。
+using VoiceDbSink = std::function<const char*(const std::uint8_t* data, std::size_t len)>;
+struct VoiceDbStatus {
+    bool loaded = false;
+    std::uint16_t units = 0;
+    std::uint32_t stored_bytes = 0;
+};
+using VoiceDbStatusGetter = std::function<VoiceDbStatus()>;
+void set_voice_db_sink(VoiceDbSink sink);
+void set_voice_db_status_getter(VoiceDbStatusGetter getter);
+
 // One-shot camera capture for `GET /api/camera/capture`. The sink fills
 // `out` with a raw row-major frame, reports its dimensions, and names the
 // pixel encoding in `format` — served verbatim as the X-Frame-Format

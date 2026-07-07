@@ -14,7 +14,7 @@
 //   offset  size  field
 //   0       4     magic "JVOX"
 //   4       1     version (= 1)
-//   5       1     codec (0 = i16 リトルエンディアン PCM)
+//   5       1     codec (0 = i16 LE PCM / 1 = IMA-ADPCM 4bit — 下記)
 //   6       2     sample_rate (u16 LE)
 //   8       2     unit_count (u16 LE)
 //   10      2     reserved (0)
@@ -31,6 +31,12 @@
 //     u32 pcm_len        (サンプル数)
 //     u16 steady_start   (unit 先頭からの母音定常部開始サンプル)
 //     u16 orig_f0_dhz    (収録時平均 F0 × 10)
+//
+// codec = 1 (IMA-ADPCM): pcm ブロックが「u32 sample_count + 4bit ADPCM
+// ニブル列 (下位ニブル→上位ニブル、predictor=0/index=0 開始の単一ストリーム)」
+// に置き換わる。フラッシュ (NVS blob 上限 508 KB) に収めるための転送/保存
+// 形式で、実行前に decode_adpcm() で codec=0 の生形式へ展開してから
+// Db::parse() する。
 //
 // バージョン/コーデックの追加は append-only (既存フィールドの意味を変えない)。
 
@@ -79,5 +85,17 @@ private:
     const std::int16_t* pcm_ = nullptr;        // pcm ブロック先頭
     std::uint32_t pcm_total_ = 0;
 };
+
+// --- ADPCM (codec=1) の展開 -------------------------------------------------
+
+// codec=1 の blob か (magic/version も検査)。
+bool is_adpcm(std::span<const std::uint8_t> blob);
+
+// 展開後 (codec=0) のバイト数。blob が不正なら 0。
+std::size_t decoded_size(std::span<const std::uint8_t> blob);
+
+// codec=1 blob を codec=0 blob へ展開する。out.size() は decoded_size() 丁度
+// であること (呼び出し側が PSRAM 等に確保する)。成功で true。
+bool decode_adpcm(std::span<const std::uint8_t> blob, std::span<std::uint8_t> out);
 
 }  // namespace stackchan::jtts::jvox

@@ -25,6 +25,7 @@
 #include <vector>
 
 #include <esp_app_desc.h>
+#include <esp_heap_caps.h>
 #include <esp_http_server.h>
 #include <esp_log.h>
 #include <esp_netif.h>
@@ -97,6 +98,8 @@ config::SpeakerVolumeGetter g_speaker_volume_getter = nullptr;
 config::SpeakerVolumeSink g_speaker_volume_sink = nullptr;
 config::JttsSayKanaSink g_jtts_say_sink = nullptr;
 AvatarBytecodeSink g_avatar_bytecode_sink = nullptr;
+VoiceDbSink g_voice_db_sink = nullptr;
+VoiceDbStatusGetter g_voice_db_status_getter = nullptr;
 CameraCaptureSink g_camera_capture_sink = nullptr;
 CameraRegSink g_camera_reg_sink = nullptr;
 McpSayKanaSink g_mcp_say_sink = nullptr;
@@ -1197,6 +1200,84 @@ esp_err_t handle_avatar_dsl_reset_post(httpd_req_t* req)
     return send_json(req, R"({"ok":true})");
 }
 
+// --- 音声 DB (.jvox) --------------------------------------------------------
+// 単位連結 TTS の音声 DB。body は数百 KB になるので内部 RAM の vector では
+// なく PSRAM に受ける。検証/保存/live ロードは sink (main/voice_db) 側。
+
+esp_err_t handle_voice_db_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    VoiceDbSink sink = g_voice_db_sink;
+    xSemaphoreGive(g_mutex);
+    if (!sink) return send_error(req, "503 Service Unavailable", "voice-db sink not ready");
+
+    constexpr std::size_t kMax = 480 * 1024;
+    const int len = req->content_len;
+    if (len <= 0 || static_cast<std::size_t>(len) > kMax) {
+        return send_error(req, "413 Payload Too Large", "voice DB must be 1..480 KiB");
+    }
+    std::uint8_t* buf =
+        static_cast<std::uint8_t*>(heap_caps_malloc(static_cast<std::size_t>(len),
+                                                    MALLOC_CAP_SPIRAM));
+    if (buf == nullptr) {
+        return send_error(req, "507 Insufficient Storage", "no PSRAM for upload buffer");
+    }
+    std::size_t off = 0;
+    while (off < static_cast<std::size_t>(len)) {
+        const int got = httpd_req_recv(req, reinterpret_cast<char*>(buf + off),
+                                       static_cast<std::size_t>(len) - off);
+        if (got <= 0) {
+            heap_caps_free(buf);
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_send(req, nullptr, 0);
+            return ESP_OK;
+        }
+        off += static_cast<std::size_t>(got);
+    }
+    const char* err = sink(buf, static_cast<std::size_t>(len));
+    heap_caps_free(buf);
+    if (err != nullptr) {
+        ESP_LOGE(kTag, "voice-db store: %s", err);
+        return send_error(req, "400 Bad Request", err);
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    VoiceDbStatusGetter getter = g_voice_db_status_getter;
+    xSemaphoreGive(g_mutex);
+    const VoiceDbStatus st = getter ? getter() : VoiceDbStatus{};
+    char body[96];
+    std::snprintf(body, sizeof(body), R"({"ok":true,"units":%u,"stored":%u})",
+                  static_cast<unsigned>(st.units), static_cast<unsigned>(st.stored_bytes));
+    return send_json(req, body);
+}
+
+esp_err_t handle_voice_db_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    VoiceDbStatusGetter getter = g_voice_db_status_getter;
+    xSemaphoreGive(g_mutex);
+    const VoiceDbStatus st = getter ? getter() : VoiceDbStatus{};
+    char body[112];
+    std::snprintf(body, sizeof(body),
+                  R"({"loaded":%s,"units":%u,"stored":%u})",
+                  st.loaded ? "true" : "false", static_cast<unsigned>(st.units),
+                  static_cast<unsigned>(st.stored_bytes));
+    return send_json(req, body);
+}
+
+esp_err_t handle_voice_db_clear_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    VoiceDbSink sink = g_voice_db_sink;
+    xSemaphoreGive(g_mutex);
+    if (!sink) return send_error(req, "503 Service Unavailable", "voice-db sink not ready");
+    const char* err = sink(nullptr, 0);
+    if (err != nullptr) return send_error(req, "500 Internal Server Error", err);
+    return send_json(req, R"({"ok":true})");
+}
+
 // --- /mcp/* (Claude Code Channel adapter API, Bearer-auth) -------------
 //
 // Designed for exposure via Cloudflare Tunnel. Every request must carry
@@ -1593,6 +1674,9 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/release/versions", HTTP_GET, handle_release_versions_get);
     add(server, "/api/avatar-dsl",       HTTP_POST, handle_avatar_dsl_post);
     add(server, "/api/avatar-dsl/reset", HTTP_POST, handle_avatar_dsl_reset_post);
+    add(server, "/api/voice-db",         HTTP_GET,  handle_voice_db_get);
+    add(server, "/api/voice-db",         HTTP_POST, handle_voice_db_post);
+    add(server, "/api/voice-db/clear",   HTTP_POST, handle_voice_db_clear_post);
     add(server, "/api/metrics/audio",    HTTP_GET,  handle_audio_metrics_get);
     add(server, "/api/led-state",        HTTP_GET,  handle_led_state_get);
     add(server, "/api/led-state",        HTTP_POST, handle_led_state_post);
@@ -1748,6 +1832,28 @@ void set_avatar_bytecode_sink(AvatarBytecodeSink sink)
     }
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     g_avatar_bytecode_sink = std::move(sink);
+    xSemaphoreGive(g_mutex);
+}
+
+void set_voice_db_sink(VoiceDbSink sink)
+{
+    if (g_mutex == nullptr) {
+        g_voice_db_sink = std::move(sink);
+        return;
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_voice_db_sink = std::move(sink);
+    xSemaphoreGive(g_mutex);
+}
+
+void set_voice_db_status_getter(VoiceDbStatusGetter getter)
+{
+    if (g_mutex == nullptr) {
+        g_voice_db_status_getter = std::move(getter);
+        return;
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_voice_db_status_getter = std::move(getter);
     xSemaphoreGive(g_mutex);
 }
 

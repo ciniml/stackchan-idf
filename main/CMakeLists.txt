@@ -51,6 +51,7 @@ set(_main_srcs
     "servo_task.cpp"
     "settings_sinks.cpp"
     "speech.cpp"
+    "voice_db.cpp"
     "wifi_sta.cpp"
 )
 if(CONFIG_STACKCHAN_CONVERSATION_ENABLED)

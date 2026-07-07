@@ -3,6 +3,8 @@
 
 #include "settings_sinks.hpp"
 
+#include "voice_db.hpp"
+
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -383,6 +385,18 @@ void register_avatar_bytecode_sinks()
     // setter, and converts implicitly to std::function for the HTTP one.
     stackchan::config::set_avatar_bytecode_sink(&apply_avatar_bytecode);
     stackchan::wifi_config::set_avatar_bytecode_sink(&apply_avatar_bytecode);
+
+    // 音声 DB (/api/voice-db、HTTP のみ — 数百 KB は BLE には大きすぎる)。
+    stackchan::wifi_config::set_voice_db_sink(
+        [](const std::uint8_t* data, std::size_t len) -> const char* {
+            if (data == nullptr || len == 0) return voice_db::clear();
+            return voice_db::store({data, len});
+        });
+    stackchan::wifi_config::set_voice_db_status_getter(
+        []() -> stackchan::wifi_config::VoiceDbStatus {
+            const auto st = voice_db::status();
+            return {st.loaded, st.units, st.stored_bytes};
+        });
 }
 
 void register_mcp_sinks()

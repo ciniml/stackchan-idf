@@ -2,11 +2,40 @@
 // SPDX-License-Identifier: BSL-1.0
 #include "jtts/jtts.hpp"
 
+#include <atomic>
+#include <memory>
 #include <vector>
 
 #include "internal.hpp"
+#include "jtts/jvox.hpp"
 
 namespace stackchan::jtts {
+
+namespace {
+// 単位連結エンジンの音声 DB。blob 自体の寿命は set_voice_db の呼び出し側が
+// 持つ (差し替え時は旧 blob を 1 世代残すこと)。Db ビューは shared_ptr の
+// atomic 差し替えにして、合成中のタスクと HTTP アップロードの競合で
+// ぶら下がりポインタを踏まないようにする。
+std::atomic<std::shared_ptr<const jvox::Db>> g_voice_db;
+}  // namespace
+
+bool set_voice_db(std::span<const std::uint8_t> jvox_blob)
+{
+    if (jvox_blob.empty()) {
+        g_voice_db.store(nullptr);
+        return true;
+    }
+    auto db = jvox::Db::parse(jvox_blob);
+    if (!db) return false;
+    g_voice_db.store(std::make_shared<const jvox::Db>(*db));
+    return true;
+}
+
+std::uint16_t voice_db_units()
+{
+    auto db = g_voice_db.load();
+    return db ? db->unit_count() : 0;
+}
 
 const char* to_string(Error e) {
     switch (e) {
@@ -56,6 +85,17 @@ tl::expected<void, Error> synthesize(std::u32string_view kana,
         return tl::make_unexpected(Error::InvalidKana);
     }
     internal::apply_devoicing(moras);
+
+    // 単位連結エンジン: DB があり、必要な単位が全部揃っていれば
+    // render_units が out を埋めて true。欠け/未ロード/サンプルレート不一致は
+    // フォルマントへ。
+    if (opt.engine != Engine::Formant) {
+        auto db = g_voice_db.load();
+        if (db && db->sample_rate() == opt.sample_rate_hz &&
+            internal::render_units(moras, *db, out, opt)) {
+            return {};
+        }
+    }
 
     std::vector<internal::Segment> segs;
     internal::build_segments(moras, segs, opt);

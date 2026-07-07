@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -24,6 +25,18 @@ enum class Voice : std::uint8_t {
 enum class SynthVariant : std::uint8_t {
     V2 = 0,
     Classic = 1,
+};
+
+// 合成エンジンの選択 (SynthVariant はフォルマント エンジン内の音色バリアント、
+// こちらはエンジンそのものの軸)。
+//   Auto    — 音声 DB (set_voice_db) がロード済みなら Unit、無ければ Formant
+//   Formant — 常にフォルマント合成
+//   Unit    — 単位連結 (TD-PSOLA)。DB 未ロード / 必要単位の欠けは
+//             Formant へ自動フォールバック
+enum class Engine : std::uint8_t {
+    Auto = 0,
+    Formant = 1,
+    Unit = 2,
 };
 
 struct Options {
@@ -59,6 +72,8 @@ struct Options {
     float bw_scale = 1.0f;
     // 合成方式。既定 V2。
     SynthVariant synth = SynthVariant::V2;
+    // エンジン選択。既定 Auto (音声 DB があれば単位連結)。
+    Engine engine = Engine::Auto;
 };
 
 enum class Error {
@@ -71,5 +86,14 @@ const char* to_string(Error e);
 tl::expected<void, Error> synthesize(std::u32string_view kana,
                                      std::vector<std::int16_t>& out,
                                      const Options& opt = {});
+
+// 単位連結エンジン用の音声 DB (.jvox、codec=0 の生形式) を登録する。
+// blob の寿命は呼び出し側が保証する (PSRAM バッファ / flash mmap)。
+// パースに失敗すると false を返し、DB 未ロード状態のまま。空 span で解除。
+// スレッド安全ではない — 発話中の差し替えは呼び出し側で直列化すること。
+bool set_voice_db(std::span<const std::uint8_t> jvox_blob);
+
+// ロード済み DB の単位数 (未ロードなら 0)。
+std::uint16_t voice_db_units();
 
 }  // namespace stackchan::jtts
