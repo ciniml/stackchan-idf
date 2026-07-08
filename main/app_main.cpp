@@ -620,18 +620,9 @@ extern "C" void app_main()
     }
     stackchan::app::settings_sinks::register_avatar_bytecode_sinks();
 
-    // 単位連結 TTS の音声 DB: storage パーティションの NVS から PSRAM へ展開
-    // (無ければ / no-PSRAM ボードでは 0 → jtts はフォルマント合成のまま)。
+    // 音声 DB (jvox) / HMM ボイス (.htsvoice) のロードは app_main 末尾
+    // (run_demo_loop 直前) まで遅延する — 下記 defer_voice_load を参照。
     // アップロード sink は register_avatar_bytecode_sinks 内で登録済み。
-    if (const auto units = stackchan::app::voice_db::init(); units > 0) {
-        ESP_LOGI(kTag, "jvox: voice DB active (%u units) — unit-concat TTS enabled", units);
-    }
-
-    // HMM ボイス: voice パーティション (16 MB flash ボード) から flash mmap で
-    // ロード (無いボード / 未書き込みなら false → 他エンジンへフォールバック)。
-    if (stackchan::app::hmm_voice::init()) {
-        ESP_LOGI(kTag, "hts: HMM voice active — HMM TTS enabled");
-    }
 
     // Camera capture / register sinks (no-op when the resident camera did
     // not come up; /api/status's has_camera derives from this registration).
@@ -878,6 +869,27 @@ extern "C" void app_main()
         },
         "qr_boot", 3072, &board, tskIDLE_PRIORITY + 1, nullptr, 0);
 #endif
+
+    // HMM ボイス / 音声 DB のロードをここまで遅延させる。HMM ボイスの
+    // mmap+パースは内部 RAM を大きく消費・断片化させるので、これを httpd_start
+    // より先にやると httpd タスク (12 KiB 内部スタック) の確保が
+    // ESP_ERR_HTTPD_TASK で失敗し、ping は通るが HTTP が全く上がらなくなる
+    // (実機で判明。内部 RAM には 12 KiB 級の連続ブロックが実質 1 個しか無い)。
+    // httpd が上がる (= 12 KiB を確保する) まで待ってからロードすれば、その後の
+    // 断片化は httpd に影響しない。パースはこの main タスクの 16 KiB スタックで
+    // 行う (別ローダ タスクを作るとその内部スタック予約が httpd と競合するため
+    // NG)。render は別タスクなので、ここで数秒待っても顔描画は止まらない。
+    // Wi-Fi 未接続 (プロビジョニング等) で httpd が上がらない場合は ~40 s で
+    // 諦めてロード (競合する httpd が無いので問題ない)。
+    for (int i = 0; i < 80 && !stackchan::wifi_config::http_started(); ++i) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    if (const auto units = stackchan::app::voice_db::init(); units > 0) {
+        ESP_LOGI(kTag, "jvox: voice DB active (%u units) — unit-concat TTS enabled", units);
+    }
+    if (stackchan::app::hmm_voice::init()) {
+        ESP_LOGI(kTag, "hts: HMM voice active — HMM TTS enabled");
+    }
 
     stackchan::app::run_demo_loop({
         .state = g_state,

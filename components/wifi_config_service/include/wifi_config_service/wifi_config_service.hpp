@@ -29,6 +29,13 @@ enum class Error {
 // commit on /api/apply, identical to the BLE service.
 tl::expected<void, Error> start(const config::DeviceConfig& current);
 
+// True once the HTTP settings server task has been created (httpd_start
+// succeeded). Used by app_main to defer the heavy HMM-voice load until AFTER
+// httpd has claimed its (large, internal-RAM) task stack — loading the voice
+// first fragments internal RAM enough that httpd_start fails with
+// ESP_ERR_HTTPD_TASK and there is no HTTP server at all.
+bool http_started();
+
 // Update Wi-Fi connectivity state — used by the /api/status endpoint to
 // reflect the same flags the BLE Status characteristic does. Thread-safe.
 void notify_wifi_connected(bool connected);

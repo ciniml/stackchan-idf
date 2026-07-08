@@ -123,6 +123,7 @@ tl::expected<void, Error> start_mdns()
     return {};
 }
 
+
 tl::expected<httpd_handle_t, Error> start_http_server()
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
@@ -144,23 +145,23 @@ tl::expected<httpd_handle_t, Error> start_http_server()
     // (cache_utils.c:152 esp_task_stack_is_sane_cache_disabled). Same
     // constraint applies to NVS writes triggered by /api/apply.
     //
-    // 16 KiB (was 6): two synchronous, stack-hungry operations run on THIS
-    // task and can't get a big enough stack any other way:
-    //  (1) POST /api/hmm-voice → hmm_voice::store → the hts_engine model
-    //      parser (HTS_ModelSet_load), which nests ~1 KiB HTS_MAXBUFLEN token
-    //      buffers several frames deep (ModelSet → Model → Tree/Question).
-    //      On the old 6 KiB stack it overflowed and corrupted the adjacent
-    //      httpd session struct (crash surfaced one request later in
-    //      httpd_resp_set_hdr).
-    //  (2) POST /api/hmm-voice/fetch + GET /api/voices → voice_fetch does the
-    //      mbedTLS handshake (~10 KiB) to GitHub Pages HERE. A separate worker
-    //      task would be cleaner, but internal RAM is fragmented at runtime
-    //      (largest free block ~10 KiB) so a 16 KiB worker stack can't be
-    //      allocated on demand — whereas this httpd stack is allocated once at
-    //      httpd_start, before fragmentation, so the contiguous block IS
-    //      available. The two ops never overlap (single httpd task), so 16 KiB
-    //      covers max(TLS, parse), not the sum.
-    cfg.stack_size = 16384;
+    // 12 KiB (was 6): POST /api/hmm-voice → hmm_voice::store → the hts_engine
+    // model parser (HTS_ModelSet_load) runs synchronously on THIS task, nesting
+    // ~1 KiB HTS_MAXBUFLEN token buffers several frames deep (ModelSet → Model →
+    // Tree/Question). On the old 6 KiB stack it overflowed and corrupted the
+    // adjacent httpd session struct (crash surfaced one request later in
+    // httpd_resp_set_hdr). 12 KiB clears it with margin and is proven by the
+    // .htsvoice upload path.
+    //
+    // NOT 16 KiB: a 16 KiB stack tried to also cover the on-device TLS voice
+    // fetch (mbedTLS handshake on this task), but that block can't be allocated
+    // reliably at httpd_start on this internal-RAM-tight firmware (camera + BLE
+    // + Wi-Fi init before httpd fragment internal RAM) — httpd_start then fails
+    // with ESP_ERR_HTTPD_TASK and there is NO HTTP server at all (ping works,
+    // TCP:80 dead). The server voice fetch was moved browser-side (the browser
+    // downloads from Pages and POSTs the bytes to /api/hmm-voice), so this task
+    // no longer needs the TLS headroom — only the parser's ~10 KiB.
+    cfg.stack_size = 12288;
     cfg.lru_purge_enable = true;
     // 2 sockets: SSE long-poll (held open by the Channel adapter) + one
     // regular slot for /api/*, /mcp/say, /mcp/state, etc. esp_http_server
@@ -244,6 +245,11 @@ tl::expected<void, Error> start(const config::DeviceConfig& current)
         return tl::unexpected(Error::HttpServerStart);
     }
     return {};
+}
+
+bool http_started()
+{
+    return g_server != nullptr;
 }
 
 httpd_handle_t handle()
