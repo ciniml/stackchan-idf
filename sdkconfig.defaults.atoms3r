@@ -24,3 +24,8 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_8mb.csv"
 # HMM (hts_engine) 音声合成。専用 voice パーティションは無い (8 MB) ので、
 # hmm_voice が待機側 OTA スロットをボイス置き場に流用する (OTA 更新で消える)。
 CONFIG_JTTS_ENABLE_HMM=y
+
+# HMM の idle 合成 (ランダム発話) は main タスク (run_demo_loop) 上で走り、
+# hts のラベル生成 + 合成が既定 8 KiB スタックを溢れさせる (cores3/stopwatch と
+# 同じ理由で 16 KiB 必要)。HMM 有効ボードでは必須。
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
