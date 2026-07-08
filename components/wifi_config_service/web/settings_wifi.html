@@ -1398,6 +1398,10 @@ async function refresh() {
     setDot('http-dot', 'http-connected');
     $('http-label').textContent = 'HTTP 接続中';
     $('btn-ota').disabled = false;
+    // Apply 成功後はボタンを無効化したままにしている (再起動待ち)。デバイスが
+    // 戻って状態取得が通ったここで再有効化しないと、ページを開き直さない限り
+    // 保存 & 再起動が二度と押せない。
+    $('btn-apply').disabled = false;
     // Release fetch needs the device's STA uplink to reach GitHub Pages.
     // In AP (provisioning) mode STA is unassociated, so disable the release
     // controls and show a note pointing at the local-upload path instead.
