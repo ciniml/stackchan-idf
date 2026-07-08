@@ -237,8 +237,12 @@ jobs:
             - **OpenAI Realtime API / Google Gemini Live API** どちらかでリアルタイム音声会話
             - **BLE 経由の設定 / プロビジョニング** (X25519 + AES-256-GCM 暗号化セッション)
             - **BLE OTA アップデート**(再ビルド不要で次回からはブラウザから直接書き込み)
-            - **jtts ボイス カスタマイズ**(声・フレーズを設定画面から変更)
+            - **jtts 音声合成**: フォルマント / 単位連結 (TD-PSOLA) / **HMM (hts_engine)** の
+              3 エンジン。HMM ボイス (.htsvoice) は設定ページからアップロード、または
+              「サーバーから取得」で配布ボイス (Mei, CC BY 3.0) を直接インストール (16 MB ボード)
+            - **jtts ボイス カスタマイズ**(声・フレーズ・エンジンを設定画面から変更)
             - **タッチセンサによる barge-in / なでなで応答** (CoreS3 のみ)
+            - 第三者ライセンス / 帰属表示: <https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/licenses.html>
 
             ## Installation
 
