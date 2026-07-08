@@ -26,6 +26,10 @@ on:
       # inlined into avatar.html + settings_wifi.html via inject.mjs, so a
       # change to any of them must rebuild the Pages site.
       - 'assets/*.avdsl'
+      # HMM voice catalog: the .htsvoice files + voices.json manifest served
+      # for the on-device "サーバーから取得" install path (voice_fetch).
+      - 'assets/voices/**'
+      - 'assets/voices.json'
       - '.github/workflows/pages.yml'
   release:
     types: [published]
@@ -91,6 +95,19 @@ jobs:
           # Standalone preview page (shell UI + canvas + DSL editor) — same
           # WASM blob inlined via SINGLE_FILE, no sibling asset deps.
           cp build/avatar_web/avatar.html _site/avatar.html
+          # HMM voice catalog for the on-device server-fetch install path:
+          #   _site/voices.json            (manifest the device proxies via /api/voices)
+          #   _site/voices/<id>.htsvoice   (voice_fetch downloads voices/<id>.htsvoice)
+          # Only staged when present so the repo can ship without bundled
+          # voices. .htsvoice files are license-clean (CC BY); attribution is
+          # in the manifest + the LICENSE_* files copied alongside.
+          if [ -d assets/voices ]; then
+            mkdir -p _site/voices
+            cp -a assets/voices/. _site/voices/
+          fi
+          if [ -f assets/voices.json ]; then
+            cp assets/voices.json _site/voices.json
+          fi
 
       - name: Stage release firmware ZIPs into _site/firmware/<tag>/
         env:

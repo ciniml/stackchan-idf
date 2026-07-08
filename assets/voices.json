@@ -1,0 +1,13 @@
+{
+  "voices": [
+    {
+      "id": "mei",
+      "label": "Mei (女声)",
+      "size": 862503,
+      "sample_rate": 48000,
+      "license": "CC BY 3.0",
+      "attribution": "HTS Voice \"Mei\" © 2009-2013 Nagoya Institute of Technology / MMDAgent Project Team — CC BY 3.0",
+      "url": "voices/mei.htsvoice"
+    }
+  ]
+}

@@ -3,6 +3,7 @@
 
 #include "http_handlers.hpp"
 #include "release_ota.hpp"
+#include "voice_fetch.hpp"
 
 #include <avatar_vm/storage.hpp>
 #include <config_service/config_store.hpp>
@@ -1346,6 +1347,50 @@ esp_err_t handle_hmm_voice_get(httpd_req_t* req)
     return send_json(req, body);
 }
 
+// GET /api/voices — Pages の voices.json マニフェストを HTTPS プロキシして返す
+// (AP モードの iOS からもデバイス経由で取得できる)。STA が落ちていれば 502。
+esp_err_t handle_voices_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (!voice_fetch::fetch_manifest(body)) {
+        return send_error(req, "502 Bad Gateway", "manifest fetch failed (STA down?)");
+    }
+    return send_json(req, body.c_str());
+}
+
+// POST /api/hmm-voice/fetch — body = ボイス ID (例 "mei")。デバイスが Pages から
+// .htsvoice を同期ダウンロードして voice パーティションへインストールする。
+// httpd タスク (16 KiB 内部スタック) 上で mbedTLS + hts パースを走らせるので、
+// このリクエストはダウンロード完了までブロックする (数〜数十秒)。UI は spinner
+// を出して待つ。
+esp_err_t handle_hmm_voice_fetch_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string id;
+    if (read_body_str(req, id, 48) != ESP_OK) return ESP_OK;
+    while (!id.empty() && (id.back() == '\n' || id.back() == '\r' || id.back() == ' ')) id.pop_back();
+    if (id.empty()) return send_error(req, "400 Bad Request", "empty voice id");
+
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    HmmVoiceSink sink = g_hmm_voice_sink;
+    HmmVoiceStatusGetter getter = g_hmm_voice_status_getter;
+    xSemaphoreGive(g_mutex);
+    if (!sink) return send_error(req, "503 Service Unavailable", "hmm-voice sink not ready");
+
+    const char* err = voice_fetch::fetch_and_install(
+        id, [sink](const std::uint8_t* d, std::size_t n) { return sink(d, n); });
+    if (err != nullptr) {
+        ESP_LOGE(kTag, "voice fetch '%s': %s", id.c_str(), err);
+        return send_error(req, "502 Bad Gateway", err);
+    }
+    const HmmVoiceStatus vst = getter ? getter() : HmmVoiceStatus{};
+    char body[96];
+    std::snprintf(body, sizeof(body), R"({"ok":true,"stored":%u})",
+                  static_cast<unsigned>(vst.stored_bytes));
+    return send_json(req, body);
+}
+
 esp_err_t handle_hmm_voice_clear_post(httpd_req_t* req)
 {
     if (!require_auth(req)) return ESP_OK;
@@ -1760,6 +1805,8 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/hmm-voice",        HTTP_GET,  handle_hmm_voice_get);
     add(server, "/api/hmm-voice",        HTTP_POST, handle_hmm_voice_post);
     add(server, "/api/hmm-voice/clear",  HTTP_POST, handle_hmm_voice_clear_post);
+    add(server, "/api/hmm-voice/fetch",  HTTP_POST, handle_hmm_voice_fetch_post);
+    add(server, "/api/voices",           HTTP_GET,  handle_voices_get);
     add(server, "/api/metrics/audio",    HTTP_GET,  handle_audio_metrics_get);
     add(server, "/api/led-state",        HTTP_GET,  handle_led_state_get);
     add(server, "/api/led-state",        HTTP_POST, handle_led_state_post);

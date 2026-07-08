@@ -128,7 +128,7 @@ tl::expected<httpd_handle_t, Error> start_http_server()
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = 80;
     // Wide enough to hold all the /api/* + /mcp/* routes plus headroom for
-    // future growth. register_handlers() currently registers 51 routes
+    // future growth. register_handlers() currently registers 64 routes
     // (grep '    add(server,' http_handlers.cpp); a stale 48 here silently
     // dropped the last 3 (/mcp/balloon, /mcp/state, /mcp/events) with
     // "no slots left". esp_http_server allocates the slot table at
@@ -136,7 +136,7 @@ tl::expected<httpd_handle_t, Error> start_http_server()
     // internal RAM; the runtime cost is the slot count we actually register,
     // not the cap. add() now ESP_LOGEs on registration failure so a future
     // count/cap drift is loud instead of silent.
-    cfg.max_uri_handlers = 64;
+    cfg.max_uri_handlers = 72;
     // Stack MUST live in internal RAM: the OTA control handler calls
     // esp_ota_begin → esp_partition_mmap, which disables CPU cache while
     // remapping flash. PSRAM is cached, so a PSRAM-resident stack becomes
@@ -144,16 +144,23 @@ tl::expected<httpd_handle_t, Error> start_http_server()
     // (cache_utils.c:152 esp_task_stack_is_sane_cache_disabled). Same
     // constraint applies to NVS writes triggered by /api/apply.
     //
-    // 12 KiB (was 6): POST /api/hmm-voice runs hmm_voice::store → the
-    // hts_engine model parser (HTS_ModelSet_load) synchronously on THIS
-    // task. That parser nests ~1 KiB HTS_MAXBUFLEN token buffers several
-    // frames deep (ModelSet → Model → Tree/Question), which overflowed the
-    // old 6 KiB stack and corrupted the adjacent httpd session struct — the
-    // crash surfaced one request later in httpd_resp_set_hdr. (This mirrors
-    // the earlier main-task bump to 16 KiB for the same parser on the idle
-    // synth path.) Allocated once at httpd_start, before internal RAM
-    // fragments, so the larger contiguous block is available.
-    cfg.stack_size = 12288;
+    // 16 KiB (was 6): two synchronous, stack-hungry operations run on THIS
+    // task and can't get a big enough stack any other way:
+    //  (1) POST /api/hmm-voice → hmm_voice::store → the hts_engine model
+    //      parser (HTS_ModelSet_load), which nests ~1 KiB HTS_MAXBUFLEN token
+    //      buffers several frames deep (ModelSet → Model → Tree/Question).
+    //      On the old 6 KiB stack it overflowed and corrupted the adjacent
+    //      httpd session struct (crash surfaced one request later in
+    //      httpd_resp_set_hdr).
+    //  (2) POST /api/hmm-voice/fetch + GET /api/voices → voice_fetch does the
+    //      mbedTLS handshake (~10 KiB) to GitHub Pages HERE. A separate worker
+    //      task would be cleaner, but internal RAM is fragmented at runtime
+    //      (largest free block ~10 KiB) so a 16 KiB worker stack can't be
+    //      allocated on demand — whereas this httpd stack is allocated once at
+    //      httpd_start, before fragmentation, so the contiguous block IS
+    //      available. The two ops never overlap (single httpd task), so 16 KiB
+    //      covers max(TLS, parse), not the sum.
+    cfg.stack_size = 16384;
     cfg.lru_purge_enable = true;
     // 2 sockets: SSE long-poll (held open by the Channel adapter) + one
     // regular slot for /api/*, /mcp/say, /mcp/state, etc. esp_http_server

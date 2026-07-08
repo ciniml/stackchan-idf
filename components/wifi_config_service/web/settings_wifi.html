@@ -596,6 +596,24 @@
         反映は即時、flash 保存で再起動後も有効。
       </p>
       <p class="hint" id="hmm-voice-status" style="margin-bottom:0.5rem">状態: —</p>
+
+      <h3 style="margin:0.5rem 0 0.25rem;font-size:0.95rem">サーバーから取得</h3>
+      <p class="hint" style="margin:0 0 0.4rem">
+        配布ボイスをデバイスが直接ダウンロードしてインストールします
+        (PC にファイルを用意する必要なし)。
+      </p>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
+        <select id="hmm-voice-catalog" style="flex:1 1 12rem"><option value="">— 取得中… —</option></select>
+        <button type="button" id="btn-hmm-voice-fetch">取得してインストール</button>
+      </div>
+      <p class="hint" id="hmm-voice-fetch-status" style="margin:0.35rem 0 0" hidden></p>
+      <p class="hint" id="hmm-voice-attribution" style="margin:0.35rem 0 0;font-size:0.8rem;color:#777"></p>
+
+      <h3 style="margin:0.8rem 0 0.25rem;font-size:0.95rem">ファイルからアップロード</h3>
+      <p class="hint" style="margin:0 0 0.4rem">
+        任意の HTS ボイス (.htsvoice、~1-2 MB)。読みに <code>'</code>
+        (アクセント核) と <code>/</code> (アクセント句切り) を書けます。
+      </p>
       <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
         <input type="file" id="hmm-voice-file" accept=".htsvoice,application/octet-stream" style="flex:1 1 12rem">
         <button type="button" id="btn-hmm-voice-upload">アップロード</button>
@@ -1205,19 +1223,96 @@ refreshVoiceDbStatus();
 
 // --- HMM ボイス (.htsvoice) ---
 
+// 配布ボイス マニフェスト (/api/voices)。stored バイト数 → ラベルの逆引きに
+// 使い、ロード中ボイスの「名前」を状態表示に出す。
+let hmmCatalog = [];
+
+function hmmLabelForSize(bytes) {
+  const hit = hmmCatalog.find((v) => v.size === bytes);
+  return hit ? hit.label : null;
+}
+
 async function refreshHmmVoiceStatus() {
   try {
     const st = await fetchJSON('/api/hmm-voice');
     if (st.capacity === 0) {
       $('hmm-voice-status').textContent = '状態: voice パーティションなし (8 MB ボード / 旧パーティション表)';
     } else if (st.loaded) {
-      $('hmm-voice-status').textContent = `状態: ロード済み (${Math.round(st.stored/1024)} KiB / 上限 ${Math.round(st.capacity/1024)} KiB)`;
+      const name = hmmLabelForSize(st.stored);
+      const who = name ? `${name} — ` : '';
+      $('hmm-voice-status').textContent =
+        `状態: ロード済み (${who}${Math.round(st.stored/1024)} KiB / 上限 ${Math.round(st.capacity/1024)} KiB)`;
     } else {
       $('hmm-voice-status').textContent = st.stored > 0
         ? '状態: 保存済み・未ロード (メモリ不足?)' : '状態: 未登録';
     }
+    return st;
   } catch (e) { $('hmm-voice-status').textContent = '状態: 取得失敗'; }
+  return null;
 }
+
+// マニフェストを取得してカタログ ドロップダウンを埋める。デバイス経由の HTTPS
+// プロキシ (/api/voices) なので AP モード iOS からも取れる。
+async function loadHmmCatalog() {
+  const sel = $('hmm-voice-catalog');
+  try {
+    const m = await fetchJSON('/api/voices');
+    hmmCatalog = Array.isArray(m.voices) ? m.voices : [];
+    sel.innerHTML = '';
+    if (!hmmCatalog.length) {
+      sel.innerHTML = '<option value="">— 配布ボイスなし —</option>';
+      return;
+    }
+    for (const v of hmmCatalog) {
+      const o = document.createElement('option');
+      o.value = v.id;
+      o.textContent = `${v.label} (${Math.round((v.size||0)/1024)} KiB, ${v.license||''})`;
+      sel.appendChild(o);
+    }
+    showHmmAttribution(sel.value);
+    // 名前が引けるようになったので状態表示を更新。
+    refreshHmmVoiceStatus();
+  } catch (e) {
+    sel.innerHTML = '<option value="">— 取得失敗 (STA 未接続?) —</option>';
+  }
+}
+
+function showHmmAttribution(id) {
+  const v = hmmCatalog.find((x) => x.id === id);
+  $('hmm-voice-attribution').textContent = v && v.attribution ? v.attribution : '';
+}
+$('hmm-voice-catalog').addEventListener('change', (e) => showHmmAttribution(e.target.value));
+
+// 取得ボタン: id を POST。デバイスが同期でダウンロード+インストールするので
+// レスポンスが返るまで数〜数十秒待つ (spinner 表示)。進捗バーはなし。
+$('btn-hmm-voice-fetch').addEventListener('click', async () => {
+  const id = $('hmm-voice-catalog').value;
+  if (!id) { log('取得するボイスを選択してください', 'err'); return; }
+  const btn = $('btn-hmm-voice-fetch');
+  const old = btn.textContent;
+  const fs = $('hmm-voice-fetch-status');
+  btn.disabled = true;
+  btn.textContent = '取得中…';
+  fs.hidden = false;
+  fs.textContent = `${id} をダウンロード中… (完了まで数十秒かかることがあります)`;
+  try {
+    const r = await fetch('/api/hmm-voice/fetch', {
+      method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: id,
+    });
+    const body = await r.text();
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${body}`);
+    const st = JSON.parse(body);
+    fs.textContent = `取得完了 (${Math.round((st.stored||0)/1024)} KiB)`;
+    log(`ボイス取得完了: ${id}`, 'ok');
+  } catch (e) {
+    fs.textContent = '取得失敗: ' + e.message;
+    log('ボイス取得失敗: ' + e.message, 'err');
+  } finally {
+    btn.textContent = old;
+    btn.disabled = false;
+    refreshHmmVoiceStatus();
+  }
+});
 $('btn-hmm-voice-upload').addEventListener('click', async () => {
   const f = $('hmm-voice-file').files[0];
   if (!f) { log('HMM ボイス: ファイルを選択してください', 'err'); return; }
@@ -1255,6 +1350,7 @@ $('btn-hmm-voice-clear').addEventListener('click', async () => {
   refreshHmmVoiceStatus();
 });
 refreshHmmVoiceStatus();
+loadHmmCatalog();
 
 // --- Status refresh ---
 
