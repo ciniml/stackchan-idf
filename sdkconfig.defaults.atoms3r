@@ -20,3 +20,7 @@ CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
 # アプリが 3 MB を超えたため app 領域を拡張した 8 MB 表を使う (partitions_8mb.csv)。
 # 移行は USB 書き込み必須・storage データはリセット (旧表の機体は OTA 不可)。
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_8mb.csv"
+
+# HMM (hts_engine) 音声合成。専用 voice パーティションは無い (8 MB) ので、
+# hmm_voice が待機側 OTA スロットをボイス置き場に流用する (OTA 更新で消える)。
+CONFIG_JTTS_ENABLE_HMM=y
