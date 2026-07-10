@@ -92,7 +92,7 @@ const std::array<SettingDescriptor, kSettingCount> kTable = {{
             [](const DeviceConfig& c) -> std::uint32_t { return static_cast<std::uint32_t>(c.provider); },
             [](DeviceConfig& c, std::uint32_t v) { c.provider = static_cast<Provider>(v); }),
     num_row("operation-mode", "op_mode",    ValueType::U8, ApplyKind::Staged,
-            static_cast<std::uint32_t>(OperationMode::Conversation), false,
+            static_cast<std::uint32_t>(OperationMode::AsrLocal), false,
             [](const DeviceConfig& c) -> std::uint32_t { return static_cast<std::uint32_t>(c.operation_mode); },
             [](DeviceConfig& c, std::uint32_t v) { c.operation_mode = static_cast<OperationMode>(v); }),
     num_row("audio-output",   "audio_out",  ValueType::U8, ApplyKind::Staged,

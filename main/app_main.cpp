@@ -43,6 +43,7 @@
 #include "i2c_dump.hpp"
 #include "led_task.hpp"
 #include "mic_lip_sync_task.hpp"
+#include "asr_probe.hpp"
 #include "qr_task.hpp"
 #include "render_task.hpp"
 #include "screens.hpp"
@@ -155,6 +156,7 @@ void record_and_playback(std::uint32_t seconds, const char* label)
         if (++tick % 6 == 0) {
             stackchan::app::diag_stack_hwm();
         }
+
     }
 }
 
@@ -242,22 +244,10 @@ extern "C" void app_main()
     // state we created ourselves.
     stackchan::app::dump_internal_i2c_registers();
 
-    // Resident camera init (M5Base only; no-op elsewhere / slim builds).
-    // Must run after the i2c dump (which uses In_I2C) and before any task
-    // that touches In_I2C starts — see camera_service::init_resident.
-    stackchan::app::camera_service::init_resident(board);
-
-    // CoreS3 Speaker and Mic share I2S_NUM_1 (BCK=GPIO34, WS=GPIO33),
-    // so the side that's done has to release the bus before the other
-    // side can install its own driver.
-
-    // M5Unified's mic/speaker I2S tasks default to priority 2 — below the
-    // render (5), conversation (5), servo (4) and WebSocket (5) tasks — so
-    // they get starved and the I2S DMA underruns: choppy playback and gappy
-    // capture (which whisper then mistranscribes). Lift them above the app
-    // tasks and give the speaker extra DMA buffering for jitter margin.
-    // NVS init + config load — needed here (earlier than the rest of the
-    // setup) so the audio_output decision below can consult cfg.
+    // NVS init + config load — moved ahead of the camera init so the ASR
+    // mode can gate the (internal/DMA-RAM-hungry) DVP camera off. ASR
+    // (esp-sr AFE + WakeNet) and the camera can't both fit in internal RAM
+    // on cores3, so in AsrLocal mode we skip the resident camera entirely.
     {
         esp_err_t nvs_err = nvs_flash_init();
         if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -266,6 +256,21 @@ extern "C" void app_main()
         }
     }
     static stackchan::config::DeviceConfig cfg = stackchan::config::load();
+#if defined(CONFIG_STACKCHAN_ASR_ENABLED)
+    const bool asr_mode = (cfg.operation_mode == stackchan::config::OperationMode::AsrLocal);
+#else
+    const bool asr_mode = false;
+#endif
+
+    // Resident camera init (M5Base only; no-op elsewhere / slim builds).
+    // Must run after the i2c dump (which uses In_I2C) and before any task
+    // that touches In_I2C starts — see camera_service::init_resident.
+    // Skipped in ASR mode (frees internal/DMA RAM for esp-sr AFE).
+    if (!asr_mode) {
+        stackchan::app::camera_service::init_resident(board);
+    } else {
+        ESP_LOGI(kTag, "camera: skipped (ASR mode owns internal RAM)");
+    }
 
     // Cache the jtts options used by the settings-page test-speak buttons
     // (BLE chr 0x2d + /api/jtts-say). Same JSON the demo_loop babble
@@ -477,6 +482,8 @@ extern "C" void app_main()
     // sequence (audio_stream / wifi_audio / conversation task spawn /
     // demo_loop babble decision / mic lip-sync task spawn) keeps its
     // existing shape. See config_service::OperationMode for the enum.
+    // asr_mode / cfg.operation_mode は camera gate のため早期 (NVS load 直後) に
+    // 確定済み。ここでは各モードの openai/jtts_idle を導出するだけ。
     switch (cfg.operation_mode) {
     case stackchan::config::OperationMode::Conversation:
         cfg.openai_enabled = true;
@@ -490,11 +497,17 @@ extern "C" void app_main()
         cfg.openai_enabled = false;
         cfg.jtts_idle_enabled = false;
         break;
+    case stackchan::config::OperationMode::AsrLocal:
+        // ローカル音声 (ASR): マイクを ASR が占有するので会話も独り言も切る。
+        cfg.openai_enabled = false;
+        cfg.jtts_idle_enabled = false;
+        break;
     }
-    ESP_LOGI(kTag, "operation_mode=%u (conv=%d jtts_idle=%d)",
+    ESP_LOGI(kTag, "operation_mode=%u (conv=%d jtts_idle=%d asr=%d)",
              static_cast<unsigned>(cfg.operation_mode),
              static_cast<int>(cfg.openai_enabled),
-             static_cast<int>(cfg.jtts_idle_enabled));
+             static_cast<int>(cfg.jtts_idle_enabled),
+             static_cast<int>(asr_mode));
 
     // SharedState + audio_stream sink must be live BEFORE config::start
     // brings the BLE GATT service online. Otherwise a client that
@@ -558,6 +571,12 @@ extern "C" void app_main()
     ESP_LOGI(kTag, "audio_stream: disabled at compile time (slim build)");
 #endif
 
+    // cores3 の DMA 対応内部RAM は BLE + WiFi + httpd + ディスプレイ + AFE + マイク
+    // I2S DMA を同時に賄えない (mic の 512B DMA が取れず失敗)。ASR モードでは BLE を
+    // 切ってマイク DMA を通す。設定は Wi-Fi httpd (Web ページ) で可能。gatt への
+    // 非BLE経路 (set_wifi_connected) は null ガード済みなので BLE off でも安全。
+    // BLE は全モードで起動 (設定に必要)。ASR モードの内部/DMA RAM は
+    // SPIRAM_MALLOC_RESERVE_INTERNAL 拡大 + AFE/タスクの PSRAM 寄せで捻出する。
     if (auto r = stackchan::config::start(cfg); !r) {
         ESP_LOGE(kTag, "BLE config service failed to start: %d (continuing without BLE)",
                  static_cast<int>(r.error()));
@@ -776,7 +795,13 @@ extern "C" void app_main()
     // `mouth_open` and the I2S bus stays free for the mic to own. The task
     // yields to any speaker activity (balloon say / MCP say / OTA chime) and
     // re-acquires the mic afterwards. See main/mic_lip_sync_task.cpp.
-    if (!cfg.openai_enabled && !cfg.jtts_idle_enabled) {
+    if (asr_mode) {
+        // ローカル音声 (ASR) モード: マイクは ASR (WakeNet) が占有するので lip-sync は
+        // 起動しない。AFE の生成 (asr_probe_run) は httpd 起動後まで遅延する — AFE が
+        // 内部 RAM を断片化させると httpd の 12 KiB 連続ブロック確保が失敗するため
+        // (HMM ボイス ロードと同じ理由・下の http_started() 待ち後で生成)。
+        ESP_LOGI(kTag, "ASR mode: WakeNet listening (lip-sync skipped; AFE deferred)");
+    } else if (!cfg.openai_enabled && !cfg.jtts_idle_enabled) {
         ESP_LOGI(kTag, "mic lip-sync: starting (conversation off, jtts idle off)");
         stackchan::app::start_mic_lip_sync_task(*g_state);
     } else {
@@ -884,11 +909,26 @@ extern "C" void app_main()
     for (int i = 0; i < 80 && !stackchan::wifi_config::http_started(); ++i) {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
-    if (const auto units = stackchan::app::voice_db::init(); units > 0) {
-        ESP_LOGI(kTag, "jvox: voice DB active (%u units) — unit-concat TTS enabled", units);
+    // ASR モードでは重い HMM / unit ボイスをロードしない — その内部/DMA RAM を
+    // AFE + マイク I2S DMA に回すため。ウェイクワードの返事「はい」は軽い formant
+    // TTS で十分。他モードは従来どおり全ボイスを使う。
+    if (!asr_mode) {
+        if (const auto units = stackchan::app::voice_db::init(); units > 0) {
+            ESP_LOGI(kTag, "jvox: voice DB active (%u units) — unit-concat TTS enabled", units);
+        }
+    } else {
+        // ASR モードでは重い unit ボイス DB は積まないが、HMM ボイスは返事の音質の
+        // ため載せる (16kHz モデルなら高速)。RAM に載るか実測で確認。
+        ESP_LOGI(kTag, "ASR mode: unit voice DB skipped");
     }
     if (stackchan::app::hmm_voice::init()) {
         ESP_LOGI(kTag, "hts: HMM voice active — HMM TTS enabled");
+    }
+
+    // ASR モードの AFE 生成は httpd (+ HMM ボイス) の後まで遅延 — httpd が先に
+    // 12 KiB 連続ブロックを取れるようにするため。タスク スタックは PSRAM。
+    if (asr_mode) {
+        asr_probe_run(*g_state);
     }
 
     stackchan::app::run_demo_loop({

@@ -6,6 +6,15 @@
 
 menu "Stack-chan QR scanner (Phase 1+2 test)"
 
+
+    config STACKCHAN_ASR_ENABLED
+        bool "Enable on-device ASR (esp-sr WakeNet wake word)"
+        default n
+        help
+            [Phase 0] Bring up esp-sr AFE + WakeNet (Japanese wake word
+            "Konnichiha ESP") and log internal-RAM headroom. cores3 with
+            camera disabled. Requires a "model" partition.
+
     config STACKCHAN_QR_TEST_AT_BOOT
         bool "Auto-start QR scan ~30 s after boot"
         default n

@@ -32,6 +32,7 @@ enum class OperationMode : std::uint8_t {
     MicLipSync   = 0,
     JttsRandom   = 1,
     Conversation = 2,
+    AsrLocal     = 3,  // オンデバイス ローカル音声 (esp-sr WakeNet)。cores3 + 内蔵マイク限定
 };
 
 // Output audio routing on boards that can host an M5 Module Audio (M144)

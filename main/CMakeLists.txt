@@ -8,6 +8,7 @@ set(_main_priv_reqs
     jtts
     telegram
     espressif__esp_audio_codec
+    espressif__esp-sr
     json
     M5Unified
     M5GFX
@@ -31,6 +32,7 @@ set(_main_priv_reqs
 set(_main_srcs
     "ap_screen.cpp"
     "app_main.cpp"
+    "asr_probe.cpp"
     "atom_status.cpp"
     "audio_codec.cpp"
     "battery.cpp"

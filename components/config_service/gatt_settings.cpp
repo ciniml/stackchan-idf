@@ -1199,7 +1199,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
         }
         if (attr_handle == g_operation_mode_handle) {
             if (pt.size() != 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-            if (pt[0] > static_cast<std::uint8_t>(OperationMode::Conversation)) {
+            if (pt[0] > static_cast<std::uint8_t>(OperationMode::AsrLocal)) {
                 return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             }
             xSemaphoreTake(g_mutex, portMAX_DELAY);
@@ -1945,6 +1945,7 @@ void set_subscribe(uint16_t conn_handle, bool subscribed)
 
 void set_wifi_connected(bool connected)
 {
+    if (g_mutex == nullptr) return;  // gatt::init() 未実行 (ASR モード等で BLE 非起動)
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     g_wifi_connected = connected;
     auto st = compute_status_locked();

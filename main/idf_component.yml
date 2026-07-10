@@ -12,3 +12,7 @@ dependencies:
   # for in the IDF component manager manifest.
   espressif/esp32-camera: "^2.0.15"
   espressif/quirc: "^1.2.0"
+  # [ASR Phase 0] esp-sr: on-device wake word (WakeNet) + AFE. Fetched
+  # always but only used when CONFIG_STACKCHAN_ASR_ENABLED (models selected
+  # via menuconfig → flashed to the `model` partition). cores3-asr variant.
+  espressif/esp-sr: "^2.4.0"

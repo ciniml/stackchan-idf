@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSL-1.0
 
 #pragma once
+#include <string_view>
 
 #include <cstdint>
 
@@ -25,6 +26,9 @@ namespace stackchan::app::settings_sinks {
 // exists (boot arpeggio), so every function here tolerates a null state;
 // attach_state() flips them live. Call once, before any register_*().
 void attach_state(SharedState& state);
+
+// kana (ひらがな) を発話タスクで喋る。ASR ウェイクワードの返事等から使う。
+void say_kana(std::string_view kana_utf8);
 
 // Per-board factory speaker volume — the "100 %" reference the user gain
 // multiplies (see apply_speaker_volume). Set from boot before the first

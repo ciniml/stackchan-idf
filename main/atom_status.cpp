@@ -58,7 +58,11 @@ void cycle_operation_mode_and_reboot()
 {
     config::DeviceConfig cfg = config::load();
     const std::uint8_t cur = static_cast<std::uint8_t>(cfg.operation_mode);
+#if defined(CONFIG_STACKCHAN_ASR_ENABLED)
+    const std::uint8_t next = (cur + 1) % 4;   // ASR (AsrLocal) を循環に含める
+#else
     const std::uint8_t next = (cur + 1) % 3;
+#endif
     cfg.operation_mode = static_cast<config::OperationMode>(next);
     (void)config::store::save(cfg);
     esp_restart();
@@ -97,6 +101,7 @@ const char* op_mode_short(config::OperationMode m)
     case config::OperationMode::MicLipSync:   return "mic";
     case config::OperationMode::JttsRandom:   return "jtts";
     case config::OperationMode::Conversation: return "conv";
+    case config::OperationMode::AsrLocal:     return "asr";
     }
     return "?";
 }

@@ -298,6 +298,11 @@ bool apply_avatar_bytecode(const std::uint8_t* data, std::size_t len)
 
 } // namespace
 
+void say_kana(std::string_view kana_utf8)
+{
+    start_say_worker(kana_utf8);
+}
+
 void attach_state(SharedState& state)
 {
     g_state = &state;

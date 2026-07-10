@@ -12,3 +12,5 @@ ota_1,    app,  ota_1,   0x410000, 0x400000,
 storage,  data, spiffs,  0x810000, 0x100000,
 # HMM 合成の .htsvoice 置き場 (raw、先頭に hmm_voice のヘッダ)
 voice,    data, spiffs,  0x910000, 0x400000,
+# [ASR Phase0] esp-sr WakeNet/AFE モデル (camera off の cores3-asr 用)
+model,    data, spiffs,  0xd10000, 0x2e0000,
