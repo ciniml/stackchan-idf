@@ -6,6 +6,8 @@
 #include "dis.hpp"
 #include "gatt_settings.hpp"
 
+#include "sdkconfig.h"
+
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -31,6 +33,45 @@
 extern "C" void ble_store_config_init(void);
 
 namespace stackchan::config {
+
+// --- OperationMode 表示・選択ヘルパ (単一の情報源) -----------------------
+const char* operation_mode_label(OperationMode m)
+{
+    switch (m) {
+    case OperationMode::MicLipSync:   return "マイクリップシンク";
+    case OperationMode::JttsRandom:   return "JTTSランダム発話";
+    case OperationMode::Conversation: return "会話応答";
+    case OperationMode::AsrLocal:     return "ローカル音声認識";
+    }
+    return "?";
+}
+
+const char* operation_mode_short(OperationMode m)
+{
+    switch (m) {
+    case OperationMode::MicLipSync:   return "mic";
+    case OperationMode::JttsRandom:   return "jtts";
+    case OperationMode::Conversation: return "conv";
+    case OperationMode::AsrLocal:     return "asr";
+    }
+    return "?";
+}
+
+std::uint8_t operation_mode_count()
+{
+#if defined(CONFIG_STACKCHAN_ASR_ENABLED)
+    return 4;  // AsrLocal を含む
+#else
+    return 3;
+#endif
+}
+
+OperationMode next_operation_mode(OperationMode m)
+{
+    const std::uint8_t next =
+        static_cast<std::uint8_t>((static_cast<std::uint8_t>(m) + 1) % operation_mode_count());
+    return static_cast<OperationMode>(next);
+}
 
 namespace {
 

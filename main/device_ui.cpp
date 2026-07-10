@@ -379,12 +379,7 @@ void draw_value_row(int i, const char* label, const char* value, int row_h = kRo
 
 const char* op_mode_label(std::uint8_t m)
 {
-    switch (m) {
-    case 0: return "マイクリップシンク";
-    case 1: return "JTTSランダム発話";
-    case 2: return "会話応答";
-    }
-    return "?";
+    return config::operation_mode_label(static_cast<config::OperationMode>(m));
 }
 
 const char* audio_output_label(std::uint8_t m)
@@ -943,9 +938,12 @@ bool handle_tap(int x, int y)
     };
     if (page == kSettings) {
         if (hit_row(0)) {
-            // Cycle operation_mode 0 → 1 → 2 → 0 ...
-            const std::uint8_t cur = g_stage_op_mode.load(std::memory_order_relaxed);
-            const std::uint8_t next = (cur + 1) % 3;
+            // Cycle operation_mode。順序と選択可能数は config が一元管理 (ASR
+            // 有効時のみ AsrLocal を含む)。
+            const auto cur = static_cast<config::OperationMode>(
+                g_stage_op_mode.load(std::memory_order_relaxed));
+            const std::uint8_t next =
+                static_cast<std::uint8_t>(config::next_operation_mode(cur));
             g_stage_op_mode.store(next, std::memory_order_relaxed);
             g_dirty.store(true, std::memory_order_relaxed);
         } else if (hit_row(1)) {

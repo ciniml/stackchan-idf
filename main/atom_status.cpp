@@ -57,13 +57,8 @@ bool g_ap_press_fired   = false;
 void cycle_operation_mode_and_reboot()
 {
     config::DeviceConfig cfg = config::load();
-    const std::uint8_t cur = static_cast<std::uint8_t>(cfg.operation_mode);
-#if defined(CONFIG_STACKCHAN_ASR_ENABLED)
-    const std::uint8_t next = (cur + 1) % 4;   // ASR (AsrLocal) を循環に含める
-#else
-    const std::uint8_t next = (cur + 1) % 3;
-#endif
-    cfg.operation_mode = static_cast<config::OperationMode>(next);
+    // 順序と選択可能数は config が一元管理 (ASR 有効時のみ AsrLocal を含む)。
+    cfg.operation_mode = config::next_operation_mode(cfg.operation_mode);
     (void)config::store::save(cfg);
     esp_restart();
 }
@@ -91,17 +86,6 @@ const char* conv_status_label(ConvStatus s)
     case ConvStatus::Yielded:      return "yld";
     case ConvStatus::Reconnecting: return "recn..";
     case ConvStatus::Error:        return "err";
-    }
-    return "?";
-}
-
-const char* op_mode_short(config::OperationMode m)
-{
-    switch (m) {
-    case config::OperationMode::MicLipSync:   return "mic";
-    case config::OperationMode::JttsRandom:   return "jtts";
-    case config::OperationMode::Conversation: return "conv";
-    case config::OperationMode::AsrLocal:     return "asr";
     }
     return "?";
 }
@@ -265,7 +249,7 @@ bool draw(avatar::RichCanvas& canvas)
     const bool muted = g_state != nullptr &&
                        g_state->speaker.muted.load(std::memory_order_relaxed);
     char mode_buf[20];
-    std::snprintf(mode_buf, sizeof(mode_buf), "%s%s", op_mode_short(g_op_mode),
+    std::snprintf(mode_buf, sizeof(mode_buf), "%s%s", config::operation_mode_short(g_op_mode),
                   muted ? " (mute)" : "");
 
     int row = 0;

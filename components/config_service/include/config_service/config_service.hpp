@@ -35,6 +35,15 @@ enum class OperationMode : std::uint8_t {
     AsrLocal     = 3,  // オンデバイス ローカル音声 (esp-sr WakeNet)。cores3 + 内蔵マイク限定
 };
 
+// OperationMode の表示・選択に関する単一の情報源。オンデバイス設定 UI
+// (device_ui)、Atom ステータス オーバーレイ (atom_status)、その他どの画面でも
+// ラベル文字列・選択可能モード数・タップ循環順を共有する。AsrLocal は ASR
+// ビルド オプション (CONFIG_STACKCHAN_ASR_ENABLED) が有効な時のみ循環に含まれる。
+const char*   operation_mode_label(OperationMode m);  // 長い日本語ラベル (設定 UI 用)
+const char*   operation_mode_short(OperationMode m);  // 短いラベル (ステータス表示用)
+std::uint8_t  operation_mode_count();                 // 選択可能なモード数 (3 or 4)
+OperationMode next_operation_mode(OperationMode m);   // タップ循環の次モード
+
 // Output audio routing on boards that can host an M5 Module Audio (M144)
 // alongside an internal codec (currently CoreS3 = AW88298 internal,
 // ES8388 line-out on the module):
