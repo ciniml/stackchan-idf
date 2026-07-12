@@ -612,9 +612,7 @@ esp_err_t handle_barge_in_enabled_post(httpd_req_t* req)
     std::string body;
     if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
     const bool enabled = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
-    xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.set_num("barge-in", enabled ? 1 : 0);
-    xSemaphoreGive(g_mutex);
+    apply_immediate_num("barge-in", enabled ? 1 : 0);  // 即時反映 (SharedState barge_in_enabled)
     return send_empty(req);
 }
 
