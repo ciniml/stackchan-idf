@@ -378,6 +378,7 @@ esp_err_t handle_status_get(httpd_req_t* req)
     const bool range_mode = g_servo_range_mode;
     const bool has_camera = static_cast<bool>(g_camera_capture_sink);
     config::ServoPositionsGetter pos_getter = g_servo_positions_getter;
+    const bool has_mcp = !g_mcp_active_token.empty();  // ロック下でスナップショット
     xSemaphoreGive(g_mutex);
 
     config::ServoPositionsView pos{-1, -1};
@@ -417,7 +418,7 @@ esp_err_t handle_status_get(httpd_req_t* req)
     body += "\"has_auth_password\":" + std::string(cfg.auth_password.empty() ? "false" : "true") + ",";
     // Token itself is never returned; the UI only needs to know whether the
     // /mcp/* API is reachable (= has a token).
-    body += "\"has_mcp_token\":" + std::string(g_mcp_active_token.empty() ? "false" : "true") + ",";
+    body += "\"has_mcp_token\":" + std::string(has_mcp ? "true" : "false") + ",";
     body += "\"provider\":" + std::to_string(static_cast<int>(cfg.provider)) + ",";
     body += "\"jtts_config\":\"" + escape_json(cfg.jtts_config_json) + "\",";
     body += "\"servo_limits\":\"" + escape_json(cfg.servo_limits_json) + "\",";
@@ -690,9 +691,11 @@ esp_err_t handle_mcp_token_post(httpd_req_t* req)
     // /mcp/*, or falls back to the Kconfig build-time default if present).
     std::string body;
     if (read_body_str(req, body, 128) != ESP_OK) return ESP_OK;
+    // 即時反映: MCP 認証キャッシュ g_mcp_active_token を live 更新(空 body で無効化)。
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.set_str("mcp-token", std::move(body));
+    g_mcp_active_token = body;
     xSemaphoreGive(g_mutex);
+    apply_immediate_str("mcp-token", std::move(body));
     return send_empty(req);
 }
 
@@ -1450,7 +1453,12 @@ constexpr std::size_t kMaxMcpBalloonBytes = 1024;
 
 bool mcp_auth_ok(httpd_req_t* req)
 {
-    if (g_mcp_active_token.empty()) return false;
+    // mcp-token は即時反映(handle_mcp_token_post が g_mutex 下で更新)するため、
+    // ロック下でスナップショットしてから比較する(std::string の競合回避)。
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    const std::string token = g_mcp_active_token;
+    xSemaphoreGive(g_mutex);
+    if (token.empty()) return false;
     char hdr[160];
     if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) != ESP_OK) {
         return false;
@@ -1460,14 +1468,17 @@ bool mcp_auth_ok(httpd_req_t* req)
     if (std::strncmp(hdr, prefix, plen) != 0) return false;
     // Constant-time compare on the token tail (length mismatch included).
     const char* tok = hdr + plen;
-    return constant_time_equals(std::string_view(tok, std::strlen(tok)), g_mcp_active_token);
+    return constant_time_equals(std::string_view(tok, std::strlen(tok)), token);
 }
 
 esp_err_t mcp_gate(httpd_req_t* req)
 {
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    const bool no_token = g_mcp_active_token.empty();
+    xSemaphoreGive(g_mutex);
     // 404 (not 401) when the API is entirely disabled so the URL surface
     // is indistinguishable from an unrelated path.
-    if (g_mcp_active_token.empty()) {
+    if (no_token) {
         return send_error(req, "404 Not Found");
     }
     if (!mcp_auth_ok(req)) {
