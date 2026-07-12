@@ -78,6 +78,21 @@ void apply_immediate_num(const char* id, std::uint32_t v)
     config::notify_config_change(*d, snap);
 }
 
+// String 版。g_active の str フィールドへ書き、単一キー保存 + 通知。g_active の
+// 読み手(require_auth / status / settings_get)は既に g_mutex 下で読むため、
+// str の即時書き込みでもデータ競合しない。
+void apply_immediate_str(const char* id, std::string value)
+{
+    const auto* d = config::registry::find(id);
+    if (d == nullptr || d->str_member == nullptr) return;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_active.*(d->str_member) = std::move(value);
+    const config::DeviceConfig snap = g_active;
+    xSemaphoreGive(g_mutex);
+    (void)config::store::save_one(*d, snap);
+    config::notify_config_change(*d, snap);
+}
+
 // STA-connected flag. Deliberately std::atomic and NOT guarded by g_mutex:
 // notify_wifi_connected(true) fires from the IP_EVENT_STA_GOT_IP handler,
 // which lands during a ~4 s window BEFORE the cfg-wifi-init task has run
@@ -770,9 +785,9 @@ esp_err_t handle_auth_password_post(httpd_req_t* req)
     if (!require_auth(req)) return ESP_OK;
     std::string body;
     if (read_body_str(req, body, kMaxAuthPassword) != ESP_OK) return ESP_OK;
-    xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.set_str("auth-password", std::move(body));
-    xSemaphoreGive(g_mutex);
+    // 即時反映: require_auth が g_active.auth_password を毎リクエスト参照するので
+    // 次のリクエストから新パスワードが効く(再起動不要)。
+    apply_immediate_str("auth-password", std::move(body));
     return send_empty(req);
 }
 
