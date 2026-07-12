@@ -6,10 +6,21 @@
 #include <config_service/config_service.hpp>
 #include <tl/expected.hpp>
 
+namespace stackchan::config::registry {
+struct SettingDescriptor;
+}
+
 namespace stackchan::config::store {
 
 DeviceConfig load();
 tl::expected<void, Error> save(const DeviceConfig& cfg);
+
+// Persist a single setting's current value (string or numeric) to NVS + commit,
+// without touching any other key. The immediate-apply path (settings that take
+// effect at runtime, no reboot) uses this so a per-key write neither hammers the
+// whole blob nor risks the full save() clobbering a concurrent staged change.
+tl::expected<void, Error> save_one(const registry::SettingDescriptor& d,
+                                   const DeviceConfig& cfg);
 
 // Persist just the LED tuple without re-writing every other NVS key. Used
 // by the BLE/HTTP LED patch sink to avoid hammering wear-levelling on the

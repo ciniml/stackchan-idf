@@ -22,6 +22,7 @@
 #include "avatar/expression.hpp"
 #include "config_service/config_service.hpp"
 #include "config_service/config_store.hpp"
+#include "config_service/settings_registry.hpp"
 #include "speech.hpp"
 #include "utf8.hpp"
 #include <wifi_config_service/mcp_events.hpp>
@@ -303,9 +304,36 @@ void say_kana(std::string_view kana_utf8)
     start_say_worker(kana_utf8);
 }
 
+namespace {
+
+// 汎用 immediate-apply ディスパッチ (settings redesign 案C, Phase 1)。
+// トランスポートが per-key 書き込み(in-RAM 更新 + store::save_one 永続化)後に
+// config::notify_config_change 経由で 1 回呼ぶ。ここで id ごとに実行時反映する。
+// 反映先を持たない設定(RebootRequired / boot-only)は default で何もしない
+// (値は既に永続化済み → 次回起動で反映)。項目追加はここに case を 1 つ足すだけ。
+void on_config_change(const stackchan::config::registry::SettingDescriptor& d,
+                      const stackchan::config::DeviceConfig& cfg)
+{
+    if (g_state == nullptr) return;
+    const std::string_view id = d.id;
+    if (id == "lip-sync-mode") {
+        // led_task が毎フレーム参照する SharedState atomic。
+        g_state->led.lip_sync_mode.store(static_cast<std::uint8_t>(cfg.lip_sync_mode),
+                                         std::memory_order_relaxed);
+    } else if (id == "led-mouth-sync") {
+        g_state->led.mouth_sync_enabled.store(cfg.led_mouth_sync_enabled,
+                                              std::memory_order_relaxed);
+    }
+    // startup-arpeggio 等の boot-only は反映先なし (保存のみで OK)。
+}
+
+}  // namespace
+
 void attach_state(SharedState& state)
 {
     g_state = &state;
+    // 変更フックは 1 本だけ。トランスポート非依存なのでここで一度登録する。
+    stackchan::config::set_config_change_hook(&on_config_change);
 }
 
 void set_speaker_base_volume(std::uint8_t base)

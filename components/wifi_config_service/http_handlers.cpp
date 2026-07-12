@@ -6,8 +6,10 @@
 #include "voice_fetch.hpp"
 
 #include <avatar_vm/storage.hpp>
+#include <config_service/config_service.hpp>
 #include <config_service/config_store.hpp>
 #include <config_service/ota.hpp>
+#include <config_service/settings_registry.hpp>
 #include <config_service/staged_config.hpp>
 #include <wifi_config_service/mcp_events.hpp>
 
@@ -56,6 +58,26 @@ SemaphoreHandle_t g_mutex = nullptr;
 
 config::DeviceConfig g_active;
 config::StagedConfig g_staging;
+
+// [settings redesign 案C] Immediate-apply path. For settings that take effect
+// at runtime (no reboot): update the live config (g_active becomes live for
+// this key), persist just that key, and fire the generic change hook so the
+// subsystem reflects it now. Replaces g_staging.set_* for Immediate settings.
+// (Phase 1: HTTP only. BLE stays staged for these until Phase 2; a BLE Apply
+// in the same session could still re-save the boot value — see the design memo
+// §互換性 / Phase 3 g_active unification.)
+void apply_immediate_num(const char* id, std::uint32_t v)
+{
+    const auto* d = config::registry::find(id);
+    if (d == nullptr) return;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    d->num_set(g_active, v);
+    const config::DeviceConfig snap = g_active;
+    xSemaphoreGive(g_mutex);
+    (void)config::store::save_one(*d, snap);
+    config::notify_config_change(*d, snap);
+}
+
 // STA-connected flag. Deliberately std::atomic and NOT guarded by g_mutex:
 // notify_wifi_connected(true) fires from the IP_EVENT_STA_GOT_IP handler,
 // which lands during a ~4 s window BEFORE the cfg-wifi-init task has run
@@ -510,9 +532,7 @@ esp_err_t handle_led_mouth_sync_post(httpd_req_t* req)
     std::string body;
     if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
     const bool enabled = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
-    xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.set_num("led-mouth-sync", enabled ? 1 : 0);
-    xSemaphoreGive(g_mutex);
+    apply_immediate_num("led-mouth-sync", enabled ? 1 : 0);  // 即時反映 (led_task)
     return send_empty(req);
 }
 
@@ -570,9 +590,7 @@ esp_err_t handle_lip_sync_mode_post(httpd_req_t* req)
         httpd_resp_set_status(req, "400 Bad Request");
         return send_text(req, "lip_sync_mode out of range");
     }
-    xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.set_num("lip-sync-mode", static_cast<std::uint32_t>(v));
-    xSemaphoreGive(g_mutex);
+    apply_immediate_num("lip-sync-mode", static_cast<std::uint32_t>(v));  // 即時反映 (led_task)
     return send_empty(req);
 }
 
@@ -618,9 +636,8 @@ esp_err_t handle_startup_arpeggio_post(httpd_req_t* req)
     std::string body;
     if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
     const bool enabled = !body.empty() && (body[0] == '1' || body[0] == 't' || body[0] == 'y');
-    xSemaphoreTake(g_mutex, portMAX_DELAY);
-    g_staging.set_num("startup-arpeggio", enabled ? 1 : 0);
-    xSemaphoreGive(g_mutex);
+    // boot-only 設定: 実行時の反映先は無いが、staging+Apply+再起動を経ずに即永続化する。
+    apply_immediate_num("startup-arpeggio", enabled ? 1 : 0);
     return send_empty(req);
 }
 

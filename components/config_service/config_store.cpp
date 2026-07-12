@@ -203,6 +203,28 @@ tl::expected<void, Error> save(const DeviceConfig& cfg)
     return {};
 }
 
+tl::expected<void, Error> save_one(const SettingDescriptor& d, const DeviceConfig& cfg)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(kNs, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "nvs_open(RW) save_one: %s", esp_err_to_name(err));
+        return tl::unexpected(Error::NvsInit);
+    }
+    if (d.type == ValueType::Str) {
+        err = nvs_set_str(h, d.nvs_key, (cfg.*(d.str_member)).c_str());
+    } else {
+        err = save_numeric(h, d, cfg);
+    }
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "save_one(%s): %s", d.nvs_key, esp_err_to_name(err));
+        return tl::unexpected(Error::NvsWrite);
+    }
+    return {};
+}
+
 tl::expected<void, Error> save_led_state(std::uint8_t mode, std::uint32_t color,
                                          std::uint8_t brightness,
                                          std::uint8_t gradient_period_ds)

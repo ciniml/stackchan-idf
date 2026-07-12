@@ -11,6 +11,12 @@
 
 namespace stackchan::config {
 
+// Defined in settings_registry.hpp (which includes this header, so we only
+// forward-declare here to avoid the include cycle).
+namespace registry {
+struct SettingDescriptor;
+}
+
 // Realtime conversation backend. Selects which provider's WebSocket the
 // conversation task talks to, and which API key it picks up at boot.
 enum class Provider : std::uint8_t {
@@ -464,6 +470,19 @@ struct SettingsHooks {
 // Register every hook in one call (BLE transport). Equivalent to calling the
 // individual setters below plus set_board_kind.
 void set_settings_hooks(const SettingsHooks& hooks);
+
+// --- Generic immediate-apply notification (settings redesign, 案C) ----------
+// One hook for ALL settings that take effect at runtime, replacing the per-
+// setting bespoke sinks. Any transport, after an immediate write (in-RAM
+// config updated + persisted via store::save_one), calls notify_config_change
+// once; the registered hook switches on descriptor.id to reconfigure the right
+// subsystem (SharedState store / cache update). Adding an immediate setting
+// becomes one `case` in the hook instead of plumbing across 4-5 files.
+// See docs/settings-redesign-research.md.
+using ConfigChangeHook = void (*)(const registry::SettingDescriptor& d,
+                                  const DeviceConfig& live);
+void set_config_change_hook(ConfigChangeHook hook);
+void notify_config_change(const registry::SettingDescriptor& d, const DeviceConfig& live);
 
 // Avatar face bytecode live-apply sink — fires after a complete `.avbc` has
 // arrived over BLE chr 0x21 (op=commit) and has been validated + persisted

@@ -493,4 +493,18 @@ void notify_battery(int millivolts, int milliamps, int percent)
     gatt::set_battery(millivolts, milliamps, percent);
 }
 
+namespace {
+ConfigChangeHook g_change_hook = nullptr;
+}
+
+void set_config_change_hook(ConfigChangeHook hook)
+{
+    g_change_hook = hook;
+}
+
+void notify_config_change(const registry::SettingDescriptor& d, const DeviceConfig& live)
+{
+    if (g_change_hook != nullptr) g_change_hook(d, live);
+}
+
 } // namespace stackchan::config
