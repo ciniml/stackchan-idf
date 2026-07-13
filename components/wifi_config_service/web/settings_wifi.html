@@ -442,8 +442,8 @@
   <h2 class="section-title" style="margin-top:0.5rem">パスワード認証</h2>
   <p class="hint" style="margin-bottom:0.5rem">
     設定すると、この設定ページ (WiFi) と BLE の両方で認証が必要になります。
-    空欄を保存すると認証なし (現状互換) に戻ります。HTTP は Basic Auth、BLE は
-    暗号鍵に混入されます。保存後の再起動で反映。
+    空欄を保存すると認証なし (現状互換) に戻ります。HTTP は Basic Auth（即時反映・
+    再起動不要）、BLE は暗号鍵に混入されるため次回接続時に反映。
   </p>
   <label for="auth-password">パスワード <span id="auth-password-state" class="hint" style="font-weight:normal"></span></label>
   <div style="display:flex;gap:0.4rem;align-items:stretch">
@@ -559,7 +559,7 @@
         <input type="checkbox" id="mic-lip-agc">
         <span>自動ゲイン制御 (AGC) を有効にする</span>
       </label>
-      <p class="hint">周辺の雑音レベルを自動追跡して感度を調整します。OFF にすると固定閾値で判定。保存後の再起動で反映されます。</p>
+      <p class="hint">周辺の雑音レベルを自動追跡して感度を調整します。OFF にすると固定閾値で判定。即時反映（再起動不要）。</p>
 
       <h2 class="section-title" style="margin-top:1rem">jtts ボイス</h2>
       <p class="hint" style="margin-bottom:0.5rem">空欄や変更なしで「保存」を押すと現在の設定は維持されます。</p>
@@ -782,7 +782,7 @@
         <input type="checkbox" id="barge-in-enabled">
         <span>頭タッチで会話を中断する (バージイン)</span>
       </label>
-      <p class="hint">応答再生中にアバター画面 (頭) をタップで AI 応答を中断します。タッチ センサが敏感で誤動作しやすいので、初期値はオフです。なでなで (前→中→後の連続タッチ) は本トグルとは独立で常に有効です。保存後の再起動で反映されます。</p>
+      <p class="hint">応答再生中にアバター画面 (頭) をタップで AI 応答を中断します。タッチ センサが敏感で誤動作しやすいので、初期値はオフです。なでなで (前→中→後の連続タッチ) は本トグルとは独立で常に有効です。即時反映（再起動不要）。</p>
     </div>
   </section><!-- /tab-panel "chat" -->
 
@@ -800,7 +800,7 @@
         <input type="checkbox" id="startup-arpeggio-enabled" checked>
         <span>起動時のアルペジオを再生する</span>
       </label>
-      <p class="hint">起動直後の C5–E5–G5（スピーカー動作確認音）を鳴らすかどうか。OFF にすると無音起動（保存後の再起動で反映）</p>
+      <p class="hint">起動直後の C5–E5–G5（スピーカー動作確認音）を鳴らすかどうか。OFF にすると無音起動（設定は即時保存・音自体は次回起動時）</p>
 
       <label class="toggle-label" for="servo-enabled" style="margin-top:1rem">
         <input type="checkbox" id="servo-enabled" checked>
@@ -812,7 +812,7 @@
         <input type="checkbox" id="led-mouth-sync">
         <span>ネコミミ LED を口の動きと連動させる</span>
       </label>
-      <p class="hint">アバターの口が開くと LED が反応します (会話再生・jtts 発話・マイク リップシンク いずれの口元アニメーションでも有効)。OFF のときは設定した明るさで固定。保存後の再起動で反映されます。</p>
+      <p class="hint">アバターの口が開くと LED が反応します (会話再生・jtts 発話・マイク リップシンク いずれの口元アニメーションでも有効)。OFF のときは設定した明るさで固定。即時反映（再起動不要）。</p>
 
       <label for="lip-sync-mode" style="margin-top:0.5rem">リップシンク モード</label>
       <p class="hint" style="margin-bottom:0.5rem">
@@ -914,7 +914,7 @@
         <button type="button" id="btn-mcp-token-show">表示</button>
         <button type="button" id="btn-mcp-token-clear">クリア</button>
       </div>
-      <p class="hint">設定されていれば <code>/mcp/*</code> が有効化（adapter から接続可）。空にすると <code>/mcp/*</code> は 404 を返します（保存後の再起動で反映）</p>
+      <p class="hint">設定されていれば <code>/mcp/*</code> が有効化（adapter から接続可）。空にすると <code>/mcp/*</code> は 404 を返します（即時反映・再起動不要）</p>
     </div>
 
     <div id="ota-section">
@@ -2048,6 +2048,42 @@ $('ota-release-select').addEventListener('change', (e) => {
 });
 
 refresh();
+
+// 設定ごとの「再起動が必要 / 即時反映」バッジを /api/reboot-required から
+// データ駆動で付与する。ファーム側 registry の needs_reboot が唯一の情報源なので
+// 手書きヒントのように陳腐化しない。BADGE_FIELDS = registry id → 対象コントロールの
+// DOM id。checkbox は toggle-label ごと、input/select はコントロール直後に置く。
+const BADGE_FIELDS = {
+  'ssid':'ssid', 'password':'password', 'provider':'provider',
+  'operation-mode':'operation-mode', 'audio-output':'audio-output',
+  'lip-sync-mode':'lip-sync-mode', 'led-mouth-sync':'led-mouth-sync',
+  'barge-in':'barge-in-enabled', 'startup-arpeggio':'startup-arpeggio-enabled',
+  'servo-enabled':'servo-enabled', 'battery-gauge':'bat-gauge-enabled',
+  'openai-enabled':'openai-enabled', 'rtp-enabled':'rtp-enabled',
+  'jtts-idle-enabled':'jtts-idle-enabled', 'auth-password':'auth-password',
+  'mcp-token':'mcp-token', 'system-prompt':'system-prompt', 'mic-lip-agc':'mic-lip-agc',
+};
+async function stampRebootBadges() {
+  let reboot;
+  try { reboot = new Set(await (await fetch('/api/reboot-required')).json()); }
+  catch (e) { return; }
+  for (const [rid, dom] of Object.entries(BADGE_FIELDS)) {
+    const el = document.getElementById(dom);
+    if (!el) continue;
+    const anchor = el.closest('label') || el;
+    if (anchor.nextElementSibling && anchor.nextElementSibling.classList &&
+        anchor.nextElementSibling.classList.contains('reboot-badge')) continue;
+    const need = reboot.has(rid);
+    const b = document.createElement('span');
+    b.className = 'reboot-badge';
+    b.textContent = need ? '⟳ 再起動が必要' : '⚡ 即時反映';
+    b.style.cssText = 'display:inline-block;margin:.15em 0 0 .1em;font-size:.72em;' +
+      'padding:.05em .45em;border-radius:4px;vertical-align:middle;' +
+      (need ? 'background:#fdecea;color:#b71c1c;' : 'background:#e8f5e9;color:#1b5e20;');
+    anchor.insertAdjacentElement('afterend', b);
+  }
+}
+stampRebootBadges();
 
 // Android の captive-portal ミニブラウザ (CaptivePortalLogin WebView) は
 // <input type="file"> のファイルピッカーを実装しないため、ローカル OTA の
