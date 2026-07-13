@@ -174,14 +174,18 @@ tl::expected<void, Error> save(const DeviceConfig& cfg)
     }
 
     for (const auto& d : registry::table()) {
-        // ApplyKind::Live rows (LED tuple / mic gain / speaker volume) are NOT
-        // written here on purpose: the full save() runs from the Apply button,
-        // which merges DeviceConfig from g_active (the boot-time snapshot) +
-        // staging — and live rows aren't in staging because their sinks
-        // persist each change directly via the save_* single-writers below.
-        // Writing them here too would clobber the user's runtime changes with
-        // the stale boot value on every Apply.
-        if (d.apply == ApplyKind::Live) continue;
+        // ApplyKind::Live and ApplyKind::Immediate rows are NOT written here on
+        // purpose. The full save() runs from Apply and merges DeviceConfig from
+        // g_active (a per-transport boot-time snapshot) + staging. Live rows
+        // (LED tuple / mic gain / speaker volume) and Immediate rows
+        // (lip-sync-mode / auth-password / … via apply_immediate_* → save_one)
+        // both persist each change directly via a single-writer save, so
+        // writing them here would clobber the runtime value with the stale
+        // boot value on every Apply — and, crucially, would let a *different*
+        // transport's Apply (e.g. BLE) overwrite an HTTP-immediate change. Both
+        // is deliberately NOT excluded: face/lt-config persist only via this
+        // full save (their sinks apply live but don't save independently).
+        if (d.apply == ApplyKind::Live || d.apply == ApplyKind::Immediate) continue;
         if (d.type == ValueType::Str) {
             err = nvs_set_str(h, d.nvs_key, (cfg.*(d.str_member)).c_str());
         } else {

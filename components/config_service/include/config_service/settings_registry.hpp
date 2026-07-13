@@ -31,10 +31,18 @@ enum class ValueType : std::uint8_t {
 //            save_speaker_volume). EXCLUDED from the full save() so an Apply
 //            can't clobber a runtime change with the stale boot value.
 //   Both   — staged for Apply AND live-applied on write (face / LT config).
+//            Persisted via the full save() on Apply (NOT independently).
+//   Immediate — applied at runtime AND persisted independently per-key via
+//            store::save_one on write (apply_immediate_* / on_config_change).
+//            Like Live, EXCLUDED from the full save() so a stale-g_active Apply
+//            from *either* transport can't clobber the runtime value — this is
+//            what makes cross-transport (HTTP-immediate + BLE-Apply) safe. Also
+//            counts as "no reboot needed" for the UI.
 enum class ApplyKind : std::uint8_t {
     Staged,
     Live,
     Both,
+    Immediate,
 };
 
 // One row per DeviceConfig field. `id` is the stable external identifier
