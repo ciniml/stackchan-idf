@@ -836,6 +836,26 @@ esp_err_t handle_settings_get(httpd_req_t* req)
     return send_json(req, body);
 }
 
+// GET /api/reboot-required — JSON array of registry ids whose change only takes
+// effect after a restart (ApplyKind::Staged). The settings UI reads this to
+// badge those fields and to reboot on Apply only when one of them changed;
+// everything else applies immediately via its per-key route. Additive endpoint
+// so the existing /api/settings shape is untouched.
+esp_err_t handle_reboot_required_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body = "[";
+    bool first = true;
+    for (const auto& d : config::registry::table()) {
+        if (!config::registry::needs_reboot(d)) continue;
+        if (!first) body += ",";
+        first = false;
+        body += "\"" + std::string(d.id) + "\"";
+    }
+    body += "]";
+    return send_json(req, body);
+}
+
 // POST /api/settings — JSON object of {<registry id>: value, …} staged as a
 // batch. Validated in full before anything is staged, so a 400 leaves
 // staging untouched; /api/apply commits as usual. Unknown ids and live rows
@@ -1829,6 +1849,7 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/conv-headers",     HTTP_POST, handle_conv_headers_post);
     add(server, "/api/settings",        HTTP_GET,  handle_settings_get);
     add(server, "/api/settings",        HTTP_POST, handle_settings_post);
+    add(server, "/api/reboot-required", HTTP_GET,  handle_reboot_required_get);
     add(server, "/api/apply",           HTTP_POST, handle_apply_post);
     add(server, "/api/ota/status",      HTTP_GET,  handle_ota_status_get);
     add(server, "/api/ota/control",     HTTP_POST, handle_ota_control_post);

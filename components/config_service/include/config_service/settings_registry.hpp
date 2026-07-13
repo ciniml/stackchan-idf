@@ -75,4 +75,13 @@ const std::array<SettingDescriptor, kSettingCount>& table();
 const SettingDescriptor* find(std::string_view id);
 const SettingDescriptor* find_by_nvs_key(std::string_view nvs_key);
 
+// A setting needs a reboot to take effect iff it is staged-only. Immediate
+// settings (ApplyKind::Live / ApplyKind::Both) reach the running firmware on
+// write (SharedState store / sink / apply_immediate_*), so they never require a
+// restart. Used to surface a "restart required" hint to the settings UI.
+inline bool needs_reboot(const SettingDescriptor& d)
+{
+    return d.apply == ApplyKind::Staged;
+}
+
 } // namespace stackchan::config::registry
