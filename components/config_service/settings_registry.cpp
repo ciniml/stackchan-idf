@@ -92,7 +92,7 @@ const std::array<SettingDescriptor, kSettingCount> kTable = {{
             [](const DeviceConfig& c) -> std::uint32_t { return static_cast<std::uint32_t>(c.provider); },
             [](DeviceConfig& c, std::uint32_t v) { c.provider = static_cast<Provider>(v); }),
     num_row("operation-mode", "op_mode",    ValueType::U8, ApplyKind::Staged,
-            static_cast<std::uint32_t>(OperationMode::AsrLocal), false,
+            static_cast<std::uint32_t>(OperationMode::EspNowRemote), false,
             [](const DeviceConfig& c) -> std::uint32_t { return static_cast<std::uint32_t>(c.operation_mode); },
             [](DeviceConfig& c, std::uint32_t v) { c.operation_mode = static_cast<OperationMode>(v); }),
     num_row("audio-output",   "audio_out",  ValueType::U8, ApplyKind::Staged,
@@ -125,6 +125,15 @@ const std::array<SettingDescriptor, kSettingCount> kTable = {{
     num_row("speaker-volume", "spk_vol_pct", ValueType::U16, ApplyKind::Live, 200, true,
             [](const DeviceConfig& c) -> std::uint32_t { return c.speaker_volume_pct; },
             [](DeviceConfig& c, std::uint32_t v) { c.speaker_volume_pct = static_cast<std::uint16_t>(v); }),
+    // --- ESP-NOW remote (OperationMode::EspNowRemote) — reboot to apply ------
+    // channel clamps to 13 (0 stays as-is; the receiver re-clamps to [1,13] on
+    // use). receiver-id clamps to 254 (0 is not a valid own-id but harmless).
+    num_row("espnow-channel",     "enow_ch",  ValueType::U8, ApplyKind::Staged, 13, true,
+            [](const DeviceConfig& c) -> std::uint32_t { return c.espnow_channel; },
+            [](DeviceConfig& c, std::uint32_t v) { c.espnow_channel = static_cast<std::uint8_t>(v); }),
+    num_row("espnow-receiver-id", "enow_id",  ValueType::U8, ApplyKind::Staged, 254, true,
+            [](const DeviceConfig& c) -> std::uint32_t { return c.espnow_receiver_id; },
+            [](DeviceConfig& c, std::uint32_t v) { c.espnow_receiver_id = static_cast<std::uint8_t>(v); }),
 }};
 
 } // namespace

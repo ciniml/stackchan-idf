@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 
 #include <esp_log.h>
 #include <esp_mac.h>
@@ -42,6 +43,7 @@ const char* operation_mode_label(OperationMode m)
     case OperationMode::JttsRandom:   return "JTTSランダム発話";
     case OperationMode::Conversation: return "会話応答";
     case OperationMode::AsrLocal:     return "ローカル音声認識";
+    case OperationMode::EspNowRemote: return "ESP-NOWリモコン";
     }
     return "?";
 }
@@ -53,24 +55,43 @@ const char* operation_mode_short(OperationMode m)
     case OperationMode::JttsRandom:   return "jtts";
     case OperationMode::Conversation: return "conv";
     case OperationMode::AsrLocal:     return "asr";
+    case OperationMode::EspNowRemote: return "enow";
     }
     return "?";
 }
 
+// 選択可能モードの順序付きリスト (単一の情報源)。AsrLocal / EspNowRemote は
+// それぞれのビルド オプションが有効な時のみ含める。tap 循環と選択数は
+// 「有効なモードの並び」を辿るので、途中のモードが無効でも番号に穴が
+// 開かない (単純な modulo だと ASR 無効 + ESP-NOW 有効で 3 番を踏む)。
+namespace {
+constexpr OperationMode kSelectableModes[] = {
+    OperationMode::MicLipSync,
+    OperationMode::JttsRandom,
+    OperationMode::Conversation,
+#if defined(CONFIG_STACKCHAN_ASR_ENABLED)
+    OperationMode::AsrLocal,
+#endif
+#if defined(CONFIG_STACKCHAN_ESPNOW_REMOTE_ENABLED)
+    OperationMode::EspNowRemote,
+#endif
+};
+}  // namespace
+
 std::uint8_t operation_mode_count()
 {
-#if defined(CONFIG_STACKCHAN_ASR_ENABLED)
-    return 4;  // AsrLocal を含む
-#else
-    return 3;
-#endif
+    return static_cast<std::uint8_t>(std::size(kSelectableModes));
 }
 
 OperationMode next_operation_mode(OperationMode m)
 {
-    const std::uint8_t next =
-        static_cast<std::uint8_t>((static_cast<std::uint8_t>(m) + 1) % operation_mode_count());
-    return static_cast<OperationMode>(next);
+    const auto n = std::size(kSelectableModes);
+    for (std::size_t i = 0; i < n; ++i) {
+        if (kSelectableModes[i] == m) {
+            return kSelectableModes[(i + 1) % n];
+        }
+    }
+    return kSelectableModes[0];  // 現在値が無効モード → 先頭へ寄せる
 }
 
 namespace {

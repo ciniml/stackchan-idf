@@ -1,0 +1,12 @@
+menu "Stackchan ESP-NOW PoC"
+
+config STACKCHAN_ESPNOW_POC
+    bool "Enable ESP-NOW PoC (M5Stack Stack-chan remote protocol)"
+    default n
+    help
+        有効にすると通常のファーム起動を止め、espressif/esp-now で M5Stack 公式
+        Stack-chan 互換の 8 バイト パケット (id/yaw/pitch/speed/laser) を送受信して
+        シリアルにログする。ESP-NOW は固定チャネル + AP 非接続が前提なので、
+        通常の WiFi 設定サーバ等とは排他 (専用モード) 。疎通確認用。
+
+endmenu

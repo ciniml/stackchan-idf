@@ -559,10 +559,10 @@ esp_err_t handle_operation_mode_post(httpd_req_t* req)
     if (read_body_str(req, body, 8) != ESP_OK) return ESP_OK;
     if (body.empty()) {
         httpd_resp_set_status(req, "400 Bad Request");
-        return send_text(req, "expected integer 0..3");
+        return send_text(req, "expected integer 0..4");
     }
     const int v = std::atoi(body.c_str());
-    if (v < 0 || v > static_cast<int>(config::OperationMode::AsrLocal)) {
+    if (v < 0 || v > static_cast<int>(config::OperationMode::EspNowRemote)) {
         httpd_resp_set_status(req, "400 Bad Request");
         return send_text(req, "operation_mode out of range");
     }

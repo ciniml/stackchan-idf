@@ -60,4 +60,16 @@ menu "Stack-chan feature gates"
             main/wifi_audio listener (UDP RTP/L16/μ-law/AAC). Allocates a
             multi-second PSRAM jitter ring; OFF for AtomS3.
 
+    config STACKCHAN_ESPNOW_REMOTE_ENABLED
+        bool "Enable ESP-NOW remote-control receiver mode"
+        default y
+        help
+            OperationMode::EspNowRemote — receive M5Stack official Stack-chan
+            compatible ESP-NOW pose packets (8-byte [id, yaw, pitch, speed,
+            laser]) and drive the head servos. Pulls in components/espnow_remote
+            (espressif/esp-now) and adds the mode to the on-device / web mode
+            picker. WiFi runs on a fixed channel with no AP association, so this
+            mode does NOT start httpd / conversation. OFF to drop the esp-now
+            dependency from slim builds.
+
 endmenu

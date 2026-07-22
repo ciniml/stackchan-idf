@@ -27,6 +27,11 @@ struct DemoLoopArgs {
     bool touch_gaze_follow = false;            // StopWatch: outer-ring gaze following
     bool conversation_enabled = false;         // gates the Wi-Fi-disconnected balloon
     bool jtts_idle_enabled = false;            // idle babble + mouth envelope
+    // When set, an external source owns the head (ESP-NOW remote): demo_loop
+    // must not write servo targets, so its idle random poses and the nadenade
+    // head-wobble are suppressed (the rest — expression, balloon, babble —
+    // still runs). See OperationMode::EspNowRemote.
+    bool external_servo_control = false;
     ServoLimits limits;                        // random-pose ranges
 };
 

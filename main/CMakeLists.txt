@@ -21,6 +21,8 @@ set(_main_priv_reqs
     esp_event
     app_update
     lwip
+    espnow_poc
+    espnow_remote
 )
 
 # Slim-build per-source gates. The PRIV_REQUIRES list above can't be made

@@ -48,6 +48,7 @@ constexpr const char* kTag = "stackchan";
     const bool touch_gaze_follow = args.touch_gaze_follow;
     const bool conversation_enabled = args.conversation_enabled;
     const bool jtts_idle_enabled = args.jtts_idle_enabled;
+    const bool external_servo_control = args.external_servo_control;
     const ServoLimits& limits = args.limits;
 
     using namespace stackchan;
@@ -489,23 +490,28 @@ constexpr const char* kTag = "stackchan";
 
                 g_state->face.expression.store(static_cast<int>(avatar::Expression::Happy),
                                           std::memory_order_relaxed);
-                g_state->servo.speed_override.store(800, std::memory_order_relaxed); // ~120°/s
                 balloon_in_flight.store(true, std::memory_order_release);
                 g_state->set_balloon_text("なでなで♡", /*hold_ms=*/2200, [] {
                     balloon_in_flight.store(false, std::memory_order_release);
                 });
 
-                constexpr float kWobbleDeg = 8.0f;
-                constexpr std::uint32_t kHalfPeriodMs = 160;
-                for (int i = 0; i < 4; ++i) {
-                    g_state->servo.target_yaw_deg.store(-kWobbleDeg, std::memory_order_relaxed);
+                // Head-wobble writes servo targets — skip it entirely when an
+                // external source (ESP-NOW remote) owns the head; still show
+                // the happy face + balloon above.
+                if (!external_servo_control) {
+                    g_state->servo.speed_override.store(800, std::memory_order_relaxed); // ~120°/s
+                    constexpr float kWobbleDeg = 8.0f;
+                    constexpr std::uint32_t kHalfPeriodMs = 160;
+                    for (int i = 0; i < 4; ++i) {
+                        g_state->servo.target_yaw_deg.store(-kWobbleDeg, std::memory_order_relaxed);
+                        vTaskDelay(pdMS_TO_TICKS(kHalfPeriodMs));
+                        g_state->servo.target_yaw_deg.store(+kWobbleDeg, std::memory_order_relaxed);
+                        vTaskDelay(pdMS_TO_TICKS(kHalfPeriodMs));
+                    }
+                    g_state->servo.target_yaw_deg.store(prev_yaw, std::memory_order_relaxed);
                     vTaskDelay(pdMS_TO_TICKS(kHalfPeriodMs));
-                    g_state->servo.target_yaw_deg.store(+kWobbleDeg, std::memory_order_relaxed);
-                    vTaskDelay(pdMS_TO_TICKS(kHalfPeriodMs));
+                    g_state->servo.speed_override.store(0, std::memory_order_relaxed);
                 }
-                g_state->servo.target_yaw_deg.store(prev_yaw, std::memory_order_relaxed);
-                vTaskDelay(pdMS_TO_TICKS(kHalfPeriodMs));
-                g_state->servo.speed_override.store(0, std::memory_order_relaxed);
                 g_state->face.expression.store(prev_expr, std::memory_order_relaxed);
 
                 stroke_hit_ms = {0, 0, 0};
@@ -520,8 +526,9 @@ constexpr const char* kTag = "stackchan";
             }
         }
 
-        // Random yaw + pitch every 10–20 s.
-        if (now_ms >= next_pose_ms) {
+        // Random yaw + pitch every 10–20 s. Suppressed when an external source
+        // (ESP-NOW remote) owns the head.
+        if (!external_servo_control && now_ms >= next_pose_ms) {
             g_state->servo.target_yaw_deg.store(rand_in(kYawMinDeg, kYawMaxDeg), std::memory_order_relaxed);
             g_state->servo.target_pitch_deg.store(rand_in(kPitchMinDeg, kPitchMaxDeg), std::memory_order_relaxed);
             next_pose_ms = now_ms + rand_range_ms(kPoseMinMs, kPoseMaxMs);

@@ -1199,7 +1199,7 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
         }
         if (attr_handle == g_operation_mode_handle) {
             if (pt.size() != 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-            if (pt[0] > static_cast<std::uint8_t>(OperationMode::AsrLocal)) {
+            if (pt[0] > static_cast<std::uint8_t>(OperationMode::EspNowRemote)) {
                 return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
             }
             xSemaphoreTake(g_mutex, portMAX_DELAY);
