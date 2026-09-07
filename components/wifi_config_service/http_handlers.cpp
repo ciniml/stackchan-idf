@@ -1808,7 +1808,24 @@ esp_err_t handle_lt_status_get(httpd_req_t* req)
                   "{\"active\":%s,\"remaining_s\":%ld,\"total_s\":%u,\"overtime\":%s}",
                   v.active ? "true" : "false", static_cast<long>(v.remaining_s),
                   static_cast<unsigned>(v.total_s), (v.active && v.remaining_s < 0) ? "true" : "false");
+    // Read-only, non-sensitive, and meant to be polled from other origins
+    // (Even G2 plugin WebView etc.) — allow cross-origin reads. Auth is still
+    // enforced above; CORS only decides whether the browser lets the caller
+    // see the response.
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     return send_json(req, buf);
+}
+
+// OPTIONS /api/lt/status — CORS preflight. Browsers send this before a GET
+// that carries an Authorization header (the Basic-auth password path), so
+// it must answer without auth and advertise the header.
+esp_err_t handle_lt_status_options(httpd_req_t* req)
+{
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Authorization");
+    httpd_resp_set_hdr(req, "Access-Control-Max-Age", "600");
+    return send_empty(req);
 }
 
 // POST /api/dance/upload — raw dance blob body (header + keyframes + audio).
@@ -1960,6 +1977,7 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/dance/stop",       HTTP_POST, handle_dance_stop_post);
     add(server, "/api/dance/upload",     HTTP_POST, handle_dance_upload_post);
     add(server, "/api/lt/status",        HTTP_GET,  handle_lt_status_get);
+    add(server, "/api/lt/status",        HTTP_OPTIONS, handle_lt_status_options);
     add(server, "/api/device-name",     HTTP_POST, handle_device_name_post);
     add(server, "/api/auth-password",   HTTP_POST, handle_auth_password_post);
     // Claude Code Channel adapter API (Bearer-gated). Empty
