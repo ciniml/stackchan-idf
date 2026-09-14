@@ -1,0 +1,15 @@
+menu "Stack-chan Recovery"
+
+config STACKCHAN_RECOVERY_BOARD_KIND
+    int "Board kind byte"
+    default 0
+    range 0 4
+    help
+        release-fetch OTA がダウンロードする Main イメージのボード スラグを
+        決める。config_service の BoardKind と同じ値:
+        0 = M5Base (cores3), 1 = TakaoBase (cores3), 2 = AtomNyan (atoms3r),
+        3 = AtomS3 (atoms3), 4 = StopWatch (stopwatch)。
+        Recovery はボードごとにビルドする (flash サイズが異なる) ので
+        sdkconfig.defaults.<board> で固定する。
+
+endmenu

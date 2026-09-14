@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <string_view>
 
 namespace stackchan::config::ota {
 
@@ -29,5 +30,11 @@ std::string status_json();
 // Drop any in-progress transfer (esp_ota_abort). Call on BLE disconnect so
 // a half-finished image can never be marked bootable.
 void abort_update();
+
+// Project name an incoming image must carry in its esp_app_desc_t. Default
+// (empty) = the running app's own project_name, which is what Main wants.
+// Recovery (project "stackchan_recovery") sets this to "stackchan_idf" so it
+// accepts Main images while still rejecting foreign firmware.
+void set_expected_project_name(std::string_view name);
 
 } // namespace stackchan::config::ota

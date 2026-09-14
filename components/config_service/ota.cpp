@@ -57,6 +57,8 @@ struct State {
 
 static State g_state;
 static esp_timer_handle_t g_reboot_timer = nullptr;
+// Empty = compare against esp_app_get_description()->project_name.
+static std::string g_expected_project_name;
 
 const char* phase_name(Phase p)
 {
@@ -138,20 +140,22 @@ std::optional<const char*> sniff_and_check_app_desc(std::span<const std::uint8_t
     const char* incoming = reinterpret_cast<const char*>(g_state.header.data() + kProjectNameOffset);
     // project_name is a fixed 32-byte field; treat it as NUL-terminated but
     // bound the compare so a non-terminated field can't run off the buffer.
-    const esp_app_desc_t* self = esp_app_get_description();
     g_state.app_desc_checked = true;
-    if (self == nullptr) {
-        return std::nullopt; // can't compare — don't block the update
+    const char* expected = g_expected_project_name.c_str();
+    if (g_expected_project_name.empty()) {
+        const esp_app_desc_t* self = esp_app_get_description();
+        if (self == nullptr) {
+            return std::nullopt; // can't compare — don't block the update
+        }
+        expected = self->project_name;
     }
-    if (std::strncmp(incoming, self->project_name, kProjectNameSize) != 0) {
+    if (std::strncmp(incoming, expected, kProjectNameSize) != 0) {
         char name[kProjectNameSize + 1] = {};
         std::memcpy(name, incoming, kProjectNameSize);
-        ESP_LOGE(kTag, "project_name mismatch: image='%s' expected='%s'",
-                 name, self->project_name);
+        ESP_LOGE(kTag, "project_name mismatch: image='%s' expected='%s'", name, expected);
         return "project name mismatch";
     }
-    ESP_LOGI(kTag, "app_desc project_name '%s' matches — accepting image",
-             self->project_name);
+    ESP_LOGI(kTag, "app_desc project_name '%s' matches — accepting image", expected);
     return std::nullopt;
 }
 
@@ -307,6 +311,11 @@ std::string handle_data_chunk(std::span<const std::uint8_t> data)
 std::string status_json()
 {
     return make_status();
+}
+
+void set_expected_project_name(std::string_view name)
+{
+    g_expected_project_name.assign(name.data(), name.size());
 }
 
 void abort_update()
