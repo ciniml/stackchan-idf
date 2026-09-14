@@ -10,4 +10,11 @@ set(EXTRA_COMPONENT_DIRS
     "${CMAKE_CURRENT_LIST_DIR}/../components/flash_layout")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+
+# ADR-001 カスタムブートローダー (リポジトリ直下の bootloader_components/main) を
+# Main プロジェクトと共有する。IDF は PROJECT_SOURCE_DIR/bootloader_components しか
+# 自動では見ないので、ここで明示的に足す。
+idf_build_set_property(BOOTLOADER_EXTRA_COMPONENT_DIRS
+    "${CMAKE_CURRENT_LIST_DIR}/../bootloader_components" APPEND)
+
 project(stackchan_recovery)

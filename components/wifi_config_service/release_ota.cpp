@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
 // SPDX-License-Identifier: BSL-1.0
 
-#include "release_ota.hpp"
+#include <wifi_config_service/release_ota.hpp>
 
 #include "https_fetch.hpp"
 
@@ -22,6 +22,9 @@
 #include <freertos/task.h>
 
 #include <config_service/ota.hpp>
+#include <flash_layout/flash_layout.hpp>
+#include <esp_system.h>
+#include <esp_timer.h>
 
 namespace stackchan::wifi_config::release_ota {
 
@@ -45,6 +48,14 @@ constexpr std::size_t kWorkerStack = 16 * 1024;
 
 std::atomic<bool> g_active{false};
 std::atomic<bool> g_abort{false};
+bool g_handoff = false;
+esp_timer_handle_t g_handoff_restart_timer = nullptr;
+
+void handoff_restart_cb(void*)
+{
+    ESP_LOGI(kTag, "rebooting into recovery");
+    esp_restart();
+}
 
 struct WorkerArgs {
     std::string tag;
@@ -235,6 +246,24 @@ tl::expected<void, StartError> start(const std::string& tag,
         return tl::unexpected(StartError::UnknownBoard);
     }
 
+    if (g_handoff) {
+        // ADR-001: Recovery に引き継ぐ。bootctl 書き込みを読み戻し確認してから再起動。
+        auto r = flash_layout::request_recovery(tag);
+        if (!r) {
+            ESP_LOGE(kTag, "request_recovery: %s", flash_layout::error_name(r.error()));
+            return tl::unexpected(StartError::WorkerSpawnFailed);
+        }
+        if (g_handoff_restart_timer == nullptr) {
+            esp_timer_create_args_t a{};
+            a.callback = handoff_restart_cb;
+            a.name = "rcv_handoff";
+            esp_timer_create(&a, &g_handoff_restart_timer);
+        }
+        ESP_LOGI(kTag, "handoff to recovery: tag=%s (restart in 1 s)", tag.c_str());
+        esp_timer_start_once(g_handoff_restart_timer, 1'000'000);
+        return {};
+    }
+
     auto* args = new WorkerArgs{tag, board_kind};
     g_active.store(true, std::memory_order_release);
     BaseType_t ok = xTaskCreate(&worker, "release-ota", kWorkerStack, args,
@@ -248,6 +277,8 @@ tl::expected<void, StartError> start(const std::string& tag,
 }
 
 bool active() { return g_active.load(std::memory_order_acquire); }
+
+void set_handoff_to_recovery(bool enabled) { g_handoff = enabled; }
 
 void request_abort()
 {

@@ -59,6 +59,9 @@ static State g_state;
 static esp_timer_handle_t g_reboot_timer = nullptr;
 // Empty = compare against esp_app_get_description()->project_name.
 static std::string g_expected_project_name;
+static const esp_partition_t* g_target_partition = nullptr;
+static FinalizeFn g_finalize_hook = nullptr;
+static HandoffFn g_handoff_hook = nullptr;
 
 const char* phase_name(Phase p)
 {
@@ -178,10 +181,21 @@ std::string cmd_begin(const cJSON* root)
     }
     g_state = State{};
 
-    const esp_partition_t* part = esp_ota_get_next_update_partition(nullptr);
+    // ADR-001: Main は自分では受信せず Recovery に引き継ぐ。
+    if (g_handoff_hook != nullptr && g_handoff_hook()) {
+        mark_failed("rebooting to recovery");
+        return error_response("rebooting to recovery");
+    }
+
+    const esp_partition_t* part =
+        (g_target_partition != nullptr) ? g_target_partition : esp_ota_get_next_update_partition(nullptr);
     if (part == nullptr) {
         mark_failed("no OTA partition");
         return error_response("no OTA partition");
+    }
+    if (part == esp_ota_get_running_partition()) {
+        mark_failed("target is the running partition");
+        return error_response("target is the running partition");
     }
     if (size > part->size) {
         char msg[64];
@@ -227,7 +241,8 @@ std::string cmd_end()
         mark_failed(esp_err_to_name(err));
         return error_response(esp_err_to_name(err));
     }
-    err = esp_ota_set_boot_partition(g_state.partition);
+    err = (g_finalize_hook != nullptr) ? g_finalize_hook(g_state.partition)
+                                       : esp_ota_set_boot_partition(g_state.partition);
     if (err != ESP_OK) {
         mark_failed(esp_err_to_name(err));
         return error_response(esp_err_to_name(err));
@@ -311,6 +326,21 @@ std::string handle_data_chunk(std::span<const std::uint8_t> data)
 std::string status_json()
 {
     return make_status();
+}
+
+void set_target_partition(const esp_partition_t* part)
+{
+    g_target_partition = part;
+}
+
+void set_finalize_hook(FinalizeFn fn)
+{
+    g_finalize_hook = fn;
+}
+
+void set_handoff_hook(HandoffFn fn)
+{
+    g_handoff_hook = fn;
 }
 
 void set_expected_project_name(std::string_view name)

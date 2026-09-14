@@ -23,6 +23,7 @@ set(_main_priv_reqs
     lwip
     espnow_poc
     espnow_remote
+    flash_layout
 )
 
 # Slim-build per-source gates. The PRIV_REQUIRES list above can't be made
@@ -85,3 +86,34 @@ idf_component_register(
     PRIV_REQUIRES ${_main_priv_reqs}
 )
 target_compile_features(${COMPONENT_LIB} PRIVATE cxx_std_20)
+
+# --- ADR-001: exttab / bootctl の生成と書き込み (partitions_main_*.csv のとき) --
+# 開発時の `make flash` で Main と一緒に拡張テーブルと「起動先=Main (確認済み)」の
+# bootctl を書く。Recovery は recovery/ プロジェクトから別途書く。
+partition_table_get_partition_info(_exttab_off "--partition-name exttab" "offset")
+if(_exttab_off)
+    set(_gen "${PROJECT_DIR}/tools/flash_layout/gen_exttab.py")
+    if(CONFIG_ESPTOOLPY_FLASHSIZE_16MB)
+        set(_layout "${PROJECT_DIR}/exttab_16mb.json")
+    else()
+        set(_layout "${PROJECT_DIR}/exttab_8mb.json")
+    endif()
+    set(_exttab_bin "${CMAKE_BINARY_DIR}/exttab.bin")
+    set(_bootctl_bin "${CMAKE_BINARY_DIR}/bootctl_main.bin")
+    add_custom_command(
+        OUTPUT "${_exttab_bin}"
+        COMMAND ${python} "${_gen}" "${_layout}" --ab -o "${_exttab_bin}"
+        DEPENDS "${_gen}" "${_layout}"
+        COMMENT "[flash_layout] generating exttab from ${_layout}"
+        VERBATIM)
+    add_custom_command(
+        OUTPUT "${_bootctl_bin}"
+        COMMAND ${python} "${_gen}" --bootctl main --ab -o "${_bootctl_bin}"
+        DEPENDS "${_gen}"
+        COMMENT "[flash_layout] generating bootctl (target=main, confirmed)"
+        VERBATIM)
+    add_custom_target(flash_layout_images ALL DEPENDS "${_exttab_bin}" "${_bootctl_bin}")
+    partition_table_get_partition_info(_bootctl_off "--partition-name bootctl" "offset")
+    esptool_py_flash_target_image(flash exttab "${_exttab_off}" "${_exttab_bin}")
+    esptool_py_flash_target_image(flash bootctl "${_bootctl_off}" "${_bootctl_bin}")
+endif()

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSL-1.0
 
 #include "http_handlers.hpp"
-#include "release_ota.hpp"
+#include <wifi_config_service/release_ota.hpp>
 #include "voice_fetch.hpp"
 
 #include <avatar_vm/storage.hpp>

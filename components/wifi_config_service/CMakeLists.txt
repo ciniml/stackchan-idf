@@ -18,6 +18,7 @@ idf_component_register(
     PRIV_INCLUDE_DIRS "."
     REQUIRES tl_expected config_service avatar_vm esp_http_server
     PRIV_REQUIRES
+        flash_layout
         esp_https_ota
         esp_app_format
         app_update

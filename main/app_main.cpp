@@ -44,6 +44,9 @@
 #include "led_task.hpp"
 #include "mic_lip_sync_task.hpp"
 #include "asr_probe.hpp"
+#include <flash_layout/flash_layout.hpp>
+#include <config_service/ota.hpp>
+#include <wifi_config_service/release_ota.hpp>
 #include "qr_task.hpp"
 #include "render_task.hpp"
 #include "dance.hpp"
@@ -190,6 +193,37 @@ extern "C" void app_main()
     // This is how the esp-aes "Failed to allocate memory" finally gets a
     // number attached — register before anything else can fail.
     stackchan::app::diag_register_alloc_fail_hook();
+
+    // ADR-001: 拡張パーティションテーブルを読み、storage / voice / model / main を
+    // esp_partition に登録する。storage を触る前、かつ esp_ota_get_running_partition()
+    // より前に呼ぶ。旧レイアウト (exttab 無し) なら従来どおり標準テーブルだけで動く。
+    static bool s_adr_layout = false;
+    if (auto fl = stackchan::flash_layout::init(); fl) {
+        s_adr_layout = true;
+        ESP_LOGI(kTag, "ADR-001 layout: exttab gen=%lu entries=%u",
+                 static_cast<unsigned long>(fl->generation), fl->entry_count);
+        // Main は自分ではイメージを受信しない。BLE / HTTP の OTA begin と
+        // release-fetch はどちらも Recovery へ引き継ぐ。
+        stackchan::wifi_config::release_ota::set_handoff_to_recovery(true);
+        stackchan::config::ota::set_handoff_hook([]() -> bool {
+            auto r = stackchan::flash_layout::request_recovery("");
+            if (!r) {
+                ESP_LOGE(kTag, "request_recovery: %s", stackchan::flash_layout::error_name(r.error()));
+                return false;
+            }
+            static esp_timer_handle_t t = nullptr;
+            if (t == nullptr) {
+                esp_timer_create_args_t a{};
+                a.callback = [](void*) { esp_restart(); };
+                a.name = "rcv_handoff";
+                esp_timer_create(&a, &t);
+            }
+            esp_timer_start_once(t, 1'000'000);
+            return true;
+        });
+    } else {
+        ESP_LOGI(kTag, "legacy partition layout (%s)", stackchan::flash_layout::error_name(fl.error()));
+    }
 
     // NOTE: with CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y a freshly-OTA'd image
     // boots in ESP_OTA_IMG_PENDING_VERIFY and must be promoted to VALID or the
@@ -1014,7 +1048,17 @@ extern "C" void app_main()
     // run (and crash, if the image is bad) before we commit. Only images in
     // PENDING_VERIFY are promoted; a normal boot from a VALID / factory image
     // is a no-op.
-    {
+    if (s_adr_layout) {
+        // ADR-001: 起動確認。主要サブシステム (表示・サーボ・無線) の初期化が済んだ
+        // この時点で bootctl の pending を落とす。失敗した起動はブートローダーが
+        // 試行回数で数え、上限で Recovery に落とす。
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        if (auto r = stackchan::flash_layout::confirm_boot(); r) {
+            ESP_LOGI(kTag, "boot confirmed (bootctl pending cleared)");
+        } else {
+            ESP_LOGE(kTag, "confirm_boot: %s", stackchan::flash_layout::error_name(r.error()));
+        }
+    } else {
         const esp_partition_t* running = esp_ota_get_running_partition();
         esp_ota_img_states_t ota_state = ESP_OTA_IMG_UNDEFINED;
         if (running != nullptr &&

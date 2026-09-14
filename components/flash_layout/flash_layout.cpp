@@ -54,6 +54,23 @@ bool register_children(const fl_exttab_view_t& view, std::uint32_t reserved_offs
             g_children[i] = nullptr;
             continue;
         }
+        // Main の開発ビルド用テーブル (partitions_main_*.csv) は main を ota_0 として
+        // 標準テーブルにも載せる。同一ラベル・同一範囲なら登録せずそれを使う。
+        // 範囲が違えば設定ミスなので失敗させる。
+        if (const esp_partition_t* std_p = esp_partition_find_first(type, ESP_PARTITION_SUBTYPE_ANY, e.label);
+            std_p != nullptr) {
+            if (std_p->address == reserved_offset + e.offset && std_p->size == e.size) {
+                g_children[i] = std_p;
+                ESP_LOGI(kTag, "  %-12s 0x%08lx 0x%08lx kind=%u (standard table)", e.label,
+                         static_cast<unsigned long>(std_p->address), static_cast<unsigned long>(std_p->size),
+                         e.kind);
+                continue;
+            }
+            ESP_LOGE(kTag, "'%s' in standard table (0x%08lx +0x%lx) != exttab (0x%08lx +0x%lx)", e.label,
+                     static_cast<unsigned long>(std_p->address), static_cast<unsigned long>(std_p->size),
+                     static_cast<unsigned long>(reserved_offset + e.offset), static_cast<unsigned long>(e.size));
+            return false;
+        }
         const esp_partition_t* p = nullptr;
         esp_err_t err = esp_partition_register_external(nullptr, reserved_offset + e.offset, e.size, e.label,
                                                         type, subtype, &p);
@@ -134,6 +151,19 @@ tl::expected<Info, Error> init()
 {
     if (g_init_result.has_value()) return *g_init_result;
 
+    // Main の開発用テーブル (partitions_main_*.csv) には recovery が載らない。
+    // Recovery 自身がその表で動くとき、IDF は実行中 app のパーティションを要求する
+    // (esp_partition_write → esp_ota_get_running_partition → abort) ので、無ければ
+    // 固定位置で登録しておく。Main で登録されても害はない。
+    if (esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, "recovery") == nullptr) {
+        esp_err_t err = esp_partition_register_external(nullptr, FL_RECOVERY_OFFSET, FL_RECOVERY_SIZE, "recovery",
+                                                        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY,
+                                                        nullptr);
+        if (err != ESP_OK) {
+            ESP_LOGW(kTag, "register fixed recovery: %s", esp_err_to_name(err));
+        }
+    }
+
     auto fail = [](Error e) {
         g_init_result = tl::unexpected(e);
         return *g_init_result;
@@ -197,6 +227,11 @@ tl::expected<fl_bootctl_t, Error> read_bootctl()
 
 tl::expected<void, Error> confirm_boot()
 {
+    // 既に確認済み (target=Main, pending=0, attempts=0) なら書かない。通常起動で
+    // セクタ消去が起きないようにする (ADR-001「起動先選択とロールバック」)。
+    if (auto cur = read_bootctl(); cur && cur->target == FL_TARGET_MAIN && cur->pending == 0 && cur->attempts == 0) {
+        return {};
+    }
     return update_bootctl([](fl_bootctl_t& b) -> tl::expected<void, Error> {
         b.target = FL_TARGET_MAIN;
         b.pending = 0;

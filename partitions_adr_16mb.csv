@@ -1,0 +1,11 @@
+# ADR-001 標準パーティションテーブル (16 MB: CoreS3 / StopWatch)。機体に書く正本。
+# Main と大容量データは 0x1A0000 以降の予約範囲に置き、exttab (拡張テーブル) で管理する。
+# 予約範囲はこの表には載せない (esp_partition_register_external の重複拒否のため)。
+# Main の開発ビルドは partitions_main_16mb.csv (recovery を data placeholder にし
+# main を ota_0 として載せた表) を使う。固定領域のオフセットは両表で同一。
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x4000,
+bootctl,    data, 0x40,    0xd000,   0x2000,
+phy_init,   data, phy,     0xf000,   0x1000,
+recovery,   app,  factory, 0x10000,  0x180000,
+exttab,     data, 0x41,    0x190000, 0x2000,

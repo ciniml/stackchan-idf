@@ -37,7 +37,9 @@ Mainは論理的には常にMainとして扱い、Recoveryは常に起動可能�
 
 ESP-IDFの`esp_partition` APIを利用するデータ領域は、拡張テーブルを読み込んだ後に、内蔵フラッシュの相対位置・サイズ・ラベルをもつ論理パーティションとして登録する（`esp_partition_register_external`）。既存コードが利用する`esp_partition_find_first()`や`esp_partition_mmap()`を活かし、BlueScriptとモデル管理の利用箇所を共通のパーティション管理層へ接続する。
 
-`esp_partition_register_external`は内蔵フラッシュに対して既存パーティションとの重複を拒否する。そのため、拡張テーブルが管理する予約範囲は**標準パーティションテーブルのエントリとして置かない**（標準テーブル上は単なる未使用範囲とし、範囲の境界は拡張テーブルのヘッダと Recovery/Main のビルド時定数で共有する）。同じ理由で、親データ領域そのものは登録せず、管理用の予約範囲として扱い、子領域だけを登録する。Recovery が Main イメージを書き込む際に`esp_ota_begin`系APIを外部登録したAPP型パーティションに対して使えるかは実機で確認し、使えない場合は`esp_partition_write`と`esp_image_verify`による独自書き込み経路を用意する。
+`esp_partition_register_external`は内蔵フラッシュに対して既存パーティションとの重複を拒否する。そのため、拡張テーブルが管理する予約範囲は**標準パーティションテーブルのエントリとして置かない**（標準テーブル上は単なる未使用範囲とし、範囲の境界は拡張テーブルのヘッダと Recovery/Main のビルド時定数で共有する）。同じ理由で、親データ領域そのものは登録せず、管理用の予約範囲として扱い、子領域だけを登録する。Recovery が Main イメージを書き込む際の`esp_ota_begin`系APIは、外部登録したAPP型（`ota_0`）パーティションに対してそのまま使えることを実機で確認した（2026-09-15）。
+
+標準テーブルは 2 種類用意する（[partitions_adr_16mb.csv](../partitions_adr_16mb.csv) / [partitions_main_16mb.csv](../partitions_main_16mb.csv)、8MB も同様）。機体の正本は前者で、`recovery`（app/factory）、`bootctl`、`exttab` を持ち、予約範囲のエントリは持たない。後者は Main の開発ビルド専用で、IDF のツールチェーンが「最小の app 領域」（`check_sizes`）と「先頭の起動候補」（`idf.py flash` の app オフセット）を使う都合から、`recovery` を載せず `main` を `ota_0` として拡張テーブルと同じ位置・サイズで載せる。この差を吸収するため、ブートローダーと `flash_layout` は `recovery` がテーブルに無ければ `format.h` の固定値（0x10000、1.5 MiB）を使い、Recovery は起動時に自分の領域を app/factory として登録する（IDF はフラッシュ書き込みのたびに実行中 app のパーティションを要求する）。`flash_layout::init()` は標準テーブルの `main` が拡張テーブルの `main` と一致することを検証し、一致すれば登録をスキップする。
 
 カスタムブートローダーは、プロジェクト内の `bootloader_components/main/` で IDF の `bootloader_start.c` を差し替えて実装する（IDF の hooks だけでは起動先を変えられない）。IDF の `bootloader_utility`（イメージ検証・ロード）はそのまま呼び、追加するのは「`bootctl` と拡張テーブルを検証して Main の位置を `esp_partition_pos_t` として渡す」処理だけにする。標準テーブルの読み込み後、拡張テーブルを検証してMainの位置とサイズを取得し、既存のアプリイメージ検証・起動処理へ渡す。拡張テーブルが無効または未作成の場合は、必ずRecoveryを起動する。ブートローダーにはファイルシステムやBlueScript実行環境を組み込まず、固定形式の小さなテーブル検証だけを実装する。
 
@@ -142,13 +144,26 @@ voice は現行 4 MiB から 3.5 MiB に縮める。1 ファイル運用で最�
 
 初回導入はUSB書き込みで、ブートローダー、標準パーティションテーブル、Recovery、Main、拡張テーブルを同時に書き込む。既存のHMM音声、顔データ、動作データ、BlueScript autorunは、必要に応じて退避または再配置する。以後の配置変更はRecovery上で行い、データ移動、拡張テーブルA/B更新、再起動を一つの状態機械として実施する。
 
+## 実装と検証の記録
+
+- Step 1（4a47968）: `recovery/` の最小構成、約 0.93 MiB。
+- Step 2（14d14b3）: `components/flash_layout`（形式・検証・アプリ API・ホストテスト）、`tools/flash_layout/gen_exttab.py`、`exttab_16mb.json` / `exttab_8mb.json`。
+- Step 3: `bootloader_components/main`（カスタムブートローダー）、`partitions_adr_*.csv` / `partitions_main_*.csv`、Recovery と Main（cores3）の統合。2026-09-15 に CoreS3 で次を確認した。
+  - ブートローダーが bootctl を読み Recovery / Main を選択し、拡張テーブルの `main`（0x1A0000）から起動する。
+  - Recovery が release-fetch で外部登録した `main` に書き込み、`arm_main`（target=Main, pending=1）で再起動する。起動確認を返さない旧イメージ（v0.12.0）は試行 3 回で Recovery に戻った。
+  - 新 Main は起動直後に拡張テーブルの 6 領域を登録し、`ready` 後に `confirm_boot` で pending を落とす。
+  - Main からの release-fetch 要求は bootctl にタグを書いて Recovery へ引き継ぎ、Recovery が自動取得する。存在しないタグ（HTTP 404）では受信前に失敗し、`return_to_main` で旧 Main に戻った。
+  - 標準テーブルに `recovery` が無い開発用テーブルで Recovery を動かすと、Wi-Fi ドライバの NVS 書き込みで `esp_ota_get_running_partition()` が abort した。Recovery が自分の領域を登録する対処を入れて解消。
+
 ## 未決事項
 
 - RecoveryのBLE経路の実機検証（2026-09-15 に CoreS3 で HTTP 状態取得と release-fetch → Main 起動までは確認済み。BLE OTA は未確認）
 - `bootctl`の`max_attempts`の値と、Mainが起動確認を行うタイミング（どのサブシステム初期化完了を条件とするか）
 - ブートローダーの追加サイズ（現行 0x5160、上限 0x8000）
 - 更新・配置変更中の電断に対応する移行状態の保存と、イメージ・テーブル世代の対応付け
-- `esp_ota_begin`系APIが外部登録したAPP型パーティションに使えるか（実機確認）。使えなければ`esp_partition_write` + `esp_image_verify`
+- リリース パイプライン（release.yml / pages.yml / Web flasher）で bootloader、標準テーブル、Recovery、exttab、bootctl を配布する形（現在は Main の bin のみ）
+- cores3 以外のボード（atoms3r / atoms3 / stopwatch）の sdkconfig を新テーブルへ切り替える時期（実機確認後）
+- Main の BLE / HTTP アップロード OTA は Recovery への引き継ぎ（再起動）になった。tools/ble-cli と設定ページが Recovery へ再接続して送り直す対応
 - 8MB機でのBlueScript / esp-srモデルの扱い（現時点では置かない）
 - BlueScriptのiflash/dflash/autorunヘッダ形式の一次資料への参照
 - SanoTTS-jp のモデル配置形式（raw + ヘッダか、ファイルシステム上のファイルか）

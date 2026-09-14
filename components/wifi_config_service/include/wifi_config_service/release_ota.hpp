@@ -20,6 +20,11 @@ enum class StartError {
     WorkerSpawnFailed, // xTaskCreate failed (heap)
 };
 
+// ADR-001: Main が拡張レイアウトで動くとき true にする。start() は自分で
+// ダウンロードせず、bootctl に「起動先=Recovery、取得タグ」を書いて再起動を
+// 予約する。Recovery が起動後に同じタグを自動取得する。Recovery 自身は false。
+void set_handoff_to_recovery(bool enabled);
+
 // Kick off a release-firmware download + OTA-write + reboot. tag = git tag
 // like "v0.7.3"; board_kind = the byte values used by config_service
 // (M5Base/TakaoBase=0/1 → "cores3", AtomNyan=2 → "atoms3r", AtomS3=3 →

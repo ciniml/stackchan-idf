@@ -26,6 +26,15 @@ extern "C" {
 #define FL_SECTOR_SIZE 0x1000u
 #define FL_APP_ALIGN 0x10000u
 
+// 固定領域の位置 (ADR-001「容量方針」)。標準テーブルにも同じ値で載せるが、
+// Main の開発用テーブル (partitions_main_*.csv) は IDF の check_sizes と
+// app 書き込みオフセットの都合で recovery を載せない。その場合ブートローダーと
+// flash_layout はこの既定値を使う。
+#define FL_RECOVERY_OFFSET 0x10000u
+#define FL_RECOVERY_SIZE 0x180000u
+#define FL_BOOTCTL_OFFSET 0xd000u
+#define FL_EXTTAB_OFFSET 0x190000u
+
 // CRC-32 (IEEE 802.3、反転あり、esp_rom_crc32_le と同じ多項式・初期値扱い)。
 // crc の初期値には前回の戻り値を渡して連結できる。最初は 0。
 uint32_t fl_crc32(uint32_t crc, const uint8_t* buf, size_t len);

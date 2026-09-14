@@ -1,0 +1,14 @@
+# ADR-001 Main 開発ビルド用テーブル (8MB)。partitions_adr_8mb.csv と固定領域は同一。
+# IDF のツールチェーン (check_sizes / idf.py flash の app オフセット) が「最小の app
+# 領域」「先頭の boot 候補」を使うため、Main プロジェクトでは recovery (1.5 MiB) を
+# 載せず、main を ota_0 として exttab と同じ位置・サイズで載せる。
+# recovery の位置はブートローダーと flash_layout が format.h の固定値
+# (FL_RECOVERY_OFFSET = 0x10000, 1.5 MiB) で補うので、この表でも recovery を起動できる。
+# flash_layout::init() は exttab の main とこのエントリが一致することを検証して
+# 登録をスキップする。
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x4000,
+bootctl,    data, 0x40,    0xd000,   0x2000,
+phy_init,   data, phy,     0xf000,   0x1000,
+exttab,     data, 0x41,    0x190000, 0x2000,
+main,       app,  ota_0,   0x1A0000, 0x400000,

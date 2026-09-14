@@ -1,9 +1,0 @@
-# Recovery 計測用パーティション表 (8 MB)。
-# ADR-001 の最終レイアウトではない。Recovery を factory 1.5 MiB に置き、
-# 拡張テーブル導入までの実機スモーク用に Main 4 MiB を ota_0 として直後に置く。
-# Name,     Type, SubType, Offset,   Size,     Flags
-nvs,        data, nvs,     0x9000,   0x4000,
-otadata,    data, ota,     0xd000,   0x2000,
-phy_init,   data, phy,     0xf000,   0x1000,
-recovery,   app,  factory, 0x10000,  0x180000,
-main,       app,  ota_0,   0x190000, 0x400000,

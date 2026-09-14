@@ -1,0 +1,8 @@
+# ADR-001 標準パーティションテーブル (8 MB: AtomS3R / AtomS3)。機体に書く正本。
+# 16 MB 版と固定領域は同一。予約範囲は 0x1A0000〜0x800000 (exttab_8mb.json)。
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x4000,
+bootctl,    data, 0x40,    0xd000,   0x2000,
+phy_init,   data, phy,     0xf000,   0x1000,
+recovery,   app,  factory, 0x10000,  0x180000,
+exttab,     data, 0x41,    0x190000, 0x2000,

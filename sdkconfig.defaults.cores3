@@ -81,7 +81,12 @@ CONFIG_MEGA_CCM_SUPPORT=n
 # 16 MB flash: 末尾に HMM 合成の voice パーティション (4 MB) を追加した
 # パーティション表を使う。先頭は共通表と一致 (既存データ引き継ぎ)。
 # 旧表の機体では voice パーティションが見えず HMM はフォールバック動作。
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_16mb.csv"
+# ADR-001: recovery (factory) + exttab の固定領域と、拡張テーブル管理の main。
+# 旧 partitions_16mb.csv の機体からは USB 書き込みで移行する (storage / voice は
+# 再アップロード)。詳細は docs/adr-001-extensible-flash-layout.md。
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_main_16mb.csv"
+# 起動確認とロールバックは bootctl (components/flash_layout) が担う。
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=n
 
 # HMM (hts_engine) 音声合成エンジン
 CONFIG_JTTS_ENABLE_HMM=y

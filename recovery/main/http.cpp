@@ -16,7 +16,7 @@
 
 #include <config_service/ota.hpp>
 
-#include "release_ota.hpp"
+#include <wifi_config_service/release_ota.hpp>
 #include "wifi.hpp"
 
 namespace stackchan::recovery::http {

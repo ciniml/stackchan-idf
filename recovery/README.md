@@ -17,8 +17,8 @@ ADR-001 の最初の作業「Recovery の最小構成をビルドしてサイズ
 - BLE OTA 経路: **未確認** (Main 側に戻ってしまうので、bootctl で
   Recovery ↔ Main を切り替えられるようになってから検証する)
 - 注意: 暫定表では OTA 型が `main` 1 つだけなので、Main の
-  `esp_ota_get_next_update_partition()` は実行中の自分自身を返す
-  (HMM 音声フォールバックが自スロットを選んだ)。ADR-001 の未決事項に追記済み。
+  `esp_ota_get_next_update_partition()` は実行中の自分自身を返した。
+  hmm_voice.cpp に実行中パーティションを使わないガードを追加済み。
 
 | ビルド | イメージ サイズ | 1.5 MiB 枠に対する余裕 |
 |---|---|---|
@@ -45,17 +45,27 @@ btdm_app / bt / mbedcrypto / pp / lwip。
 Main と同一なので、`tools/ble-cli` や設定ページの OTA フローがそのまま使える
 想定。
 
-## 既知の制限 (ADR-001 の次の作業で解消する)
+## Step 3 (2026-09-15): カスタムブートローダーと統合
+
+- `bootloader_components/main` (リポジトリ直下) を Main / Recovery 両方のビルドが
+  使う。Recovery は `BOOTLOADER_EXTRA_COMPONENT_DIRS` で指す。
+- 標準表は `../partitions_adr_16mb.csv` (機体の正本)。`idf.py flash` で
+  bootloader、標準表、Recovery、exttab (`../exttab_16mb.json` から生成、A/B)、
+  初期 bootctl (target=recovery) を書く。
+- 起動時に `flash_layout::init()` で拡張テーブルの `main` を書き込み先にし、
+  完了時は `arm_main` (target=Main, pending=1) で再起動する。bootctl の
+  `request_tag` があれば自動で release-fetch し、受信前に失敗したら
+  `return_to_main` で旧 Main に戻す。
+- 実機で確認済み: Recovery → Main 書き込み → 試行カウント → 上限で Recovery
+  復帰、Main → Recovery 引き継ぎ → 404 → Main 復帰。
+
+## 既知の制限
 
 - `ota.cpp` の `project_name` 検査は `set_expected_project_name("stackchan_idf")`
   で Main のイメージを受け入れるようにしてある (Main 側は未設定 = 自分自身と
   比較、従来どおり)。
-- 書き込み先は `esp_ota_get_next_update_partition()` = 標準テーブル上の
-  `ota_0`。ADR-001 の拡張テーブル + `bootctl` はまだ無く、
-  `esp_ota_set_boot_partition` (otadata) で起動先を切り替えている。
-- `partitions_recovery_*.csv` は **計測用の暫定表**。ADR-001 の最終
-  レイアウトではない。この表を書き込むと現行の Main / storage / voice は
-  消える (USB 書き込み必須)。
+- BLE OTA 経路は未確認 (Main 側の BLE begin は Recovery への再起動になるので、
+  クライアントが再接続して送り直す対応が必要)。
 - Wi-Fi の SoftAP (プロビジョニング) は入れていない。NVS に SSID が無い
   機体は BLE 経由でのみ更新できる。
 

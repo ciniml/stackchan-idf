@@ -53,8 +53,13 @@ const esp_partition_t* find_partition() {
         g_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, kPart);
 #if defined(CONFIG_JTTS_ENABLE_HMM)
         if (g_part == nullptr) {
-            g_part = esp_ota_get_next_update_partition(nullptr);
-            g_using_ota_slot = (g_part != nullptr);
+            // ADR-001 の暫定表で next_update が実行中の自分自身を返した実績があるので
+            // (2026-09-15)、実行中パーティションは絶対に使わない。
+            const esp_partition_t* spare = esp_ota_get_next_update_partition(nullptr);
+            if (spare != nullptr && spare != esp_ota_get_running_partition()) {
+                g_part = spare;
+                g_using_ota_slot = true;
+            }
         }
 #endif
     }
