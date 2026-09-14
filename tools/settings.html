@@ -1284,6 +1284,9 @@ let jttsInitialJson = '';  // last read JSON, used to detect Apply-time changes
 let servoLimitsInitial = ''; // last read servo-limits JSON (Apply-time change detection)
 let otaInFlight = false;
 let aesKey = null;  // CryptoKey for AES-256-GCM, derived per connection
+// ensureAuthenticated() が最後に使った HKDF salt (空 = 認証なし)。Recovery への
+// 再接続 (ADR-001 OTA 引き継ぎ) で同じ鍵導出を黙って繰り返すために保持する。
+let authSalt = new Uint8Array(0);
 
 // --- Log ---
 // Shared implementation (settings_common.js). Classless calls render as
@@ -1523,6 +1526,7 @@ function promptForAuthPassword(deviceName) {
 // only in the local scope (no localStorage) so it lives in memory just
 // long enough to derive the salt and then becomes garbage-collectible.
 async function ensureAuthenticated() {
+  authSalt = new Uint8Array(0);
   if (!chrStatus) return; // very old firmware — nothing to probe against
   try {
     await readEncrypted(chrStatus);
@@ -1553,6 +1557,7 @@ async function ensureAuthenticated() {
   } catch (e) {
     throw new Error('パスワードが違うため接続を中断: ' + e.message);
   }
+  authSalt = salt;
   log('BLE 認証 OK', 'ok');
 }
 
@@ -2026,6 +2031,52 @@ async function readOtaStatus() {
   return JSON.parse(dec.decode(bytes));
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ADR-001: Main は OTA を自分では受けず、bootctl に「起動先=Recovery」を書いて
+// 再起動する (begin の応答が state=failed, error="rebooting to recovery")。
+// Recovery は同じ BLE アドレス・同じ Service/KeyExchange/OtaControl/OtaData で
+// 広告するので、requestDevice() で得た同じ BluetoothDevice に対して
+// gatt.connect() を再試行すればチューザー無しで繋ぎ直せる。再接続後は GATT の
+// 取り直しと鍵交換 (同じ salt) をやり直す。
+async function reconnectForRecoveryOta(timeoutMs = 60000) {
+  const t0 = performance.now();
+  // Main の再起動で切断されるのを待つ (最大 10 秒)。
+  while (bleDevice.gatt.connected && performance.now() - t0 < 10000) {
+    await sleep(200);
+  }
+  if (bleDevice.gatt.connected) {
+    try { bleDevice.gatt.disconnect(); } catch (_) { /* ignore */ }
+    await sleep(500);
+  }
+  log('Recovery の広告を待って再接続します…');
+  document.getElementById('ble-dot').className = 'dot ble-connecting';
+  document.getElementById('ble-label').textContent = 'Recovery に再接続中…';
+  let server = null;
+  let lastErr = null;
+  while (performance.now() - t0 < timeoutMs) {
+    try {
+      server = await bleDevice.gatt.connect();
+      break;
+    } catch (e) {
+      lastErr = e;
+      await sleep(1000);
+    }
+  }
+  if (!server) {
+    throw new Error(`Recovery に再接続できません (${lastErr ? lastErr.message : 'timeout'})`);
+  }
+  bleServer = server;
+  svc = await bleServer.getPrimaryService(SVC_UUID);
+  chrKx = await svc.getCharacteristic(CHR_KX);
+  chrOtaCtrl = await svc.getCharacteristic(CHR_OTA_CTRL);
+  chrOtaData = await svc.getCharacteristic(CHR_OTA_DATA);
+  await setupSession(authSalt);
+  setBleUi(true);
+  document.getElementById('ble-label').textContent = 'BLE 接続中 (Recovery)';
+  log('Recovery に再接続、鍵交換完了', 'ok');
+}
+
 async function performOta(file) {
   if (otaInFlight) return;
   otaInFlight = true;
@@ -2036,10 +2087,19 @@ async function performOta(file) {
     const total = file.size;
     log(`OTA 開始: ${file.name} (${fmtBytes(total)})`);
 
-    // begin
-    await writeEncrypted(chrOtaCtrl, strToBytes(JSON.stringify({op: 'begin', size: total})));
-    const st = await readOtaStatus();
-    if (st.state !== 'receiving') {
+    // begin。ADR-001 レイアウトの Main は Recovery へ引き継ぐので、その場合は
+    // 再接続してもう一度 begin する (引き継ぎは 1 回だけ許す)。
+    let st = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await writeEncrypted(chrOtaCtrl, strToBytes(JSON.stringify({op: 'begin', size: total})));
+      st = await readOtaStatus();
+      if (st.state === 'receiving') break;
+      if (attempt === 0 && (st.error || '').includes('rebooting to recovery')) {
+        log('デバイスは Recovery へ再起動して受信します (ADR-001)。', 'info');
+        document.getElementById('ota-stats').textContent = 'Recovery へ再起動中…';
+        await reconnectForRecoveryOta();
+        continue;
+      }
       throw new Error(`begin に失敗 (${st.state}: ${st.error || ''})`);
     }
     setOtaProgress(0, total, null);
@@ -2136,7 +2196,7 @@ async function performOta(file) {
     if (final.state !== 'done') {
       throw new Error(`end に失敗 (${final.state}: ${final.error || ''})`);
     }
-    log('OTA 完了 — デバイスを再起動します。BLE が切断されたら新ファームで再接続してください。', 'ok');
+    log('OTA 完了 — デバイスを再起動します。ADR-001 レイアウトでは Recovery が Main を起動し、起動確認まで自動で進みます。BLE が切断されたら新ファームで再接続してください。', 'ok');
     document.getElementById('ota-stats').textContent = '再起動中…';
   } catch (e) {
     log(`OTA エラー: ${e.message}`, 'err');
