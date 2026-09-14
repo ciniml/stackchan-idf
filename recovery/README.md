@@ -14,8 +14,8 @@ ADR-001 の最初の作業「Recovery の最小構成をビルドしてサイズ
 - `POST /api/ota/release {"tag":"v0.12.0"}` → GitHub Pages から 3.66 MB を
   約 24 秒で取得 → `main` (0x190000) へ書き込み → 再起動で Main v0.12.0 が
   起動し `ready` / HTTP 応答まで確認: OK
-- BLE OTA 経路: **未確認** (Main 側に戻ってしまうので、bootctl で
-  Recovery ↔ Main を切り替えられるようになってから検証する)
+- BLE OTA 経路 (Step 3 後): `tools/ble-cli ota` で 3.6 MB を 217 秒 (16 KiB/s)
+  → arm_main → Main 起動 → 起動確認: OK
 - 注意: 暫定表では OTA 型が `main` 1 つだけなので、Main の
   `esp_ota_get_next_update_partition()` は実行中の自分自身を返した。
   hmm_voice.cpp に実行中パーティションを使わないガードを追加済み。
@@ -64,8 +64,10 @@ Main と同一なので、`tools/ble-cli` や設定ページの OTA フローが
 - `ota.cpp` の `project_name` 検査は `set_expected_project_name("stackchan_idf")`
   で Main のイメージを受け入れるようにしてある (Main 側は未設定 = 自分自身と
   比較、従来どおり)。
-- BLE OTA 経路は未確認 (Main 側の BLE begin は Recovery への再起動になるので、
-  クライアントが再接続して送り直す対応が必要)。
+- Main 側の BLE / HTTP アップロード OTA は Recovery への再起動になる。
+  `tools/ble-cli` の `ota` サブコマンドはこれを前提に「Main に対して実行 →
+  引き継ぎ → 再実行で Recovery に送る」手順で確認済み。設定ページ (Web
+  Bluetooth) の再接続対応は未着手。
 - Wi-Fi の SoftAP (プロビジョニング) は入れていない。NVS に SSID が無い
   機体は BLE 経由でのみ更新できる。
 

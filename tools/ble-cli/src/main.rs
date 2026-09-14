@@ -36,6 +36,9 @@ const CHR_KX: Uuid = Uuid::from_u128(0xe3f0a006_7b1c_4d2a_9e6f_2c5a8d4b1f00);
 const CHR_APPLY: Uuid = Uuid::from_u128(0xe3f0a004_7b1c_4d2a_9e6f_2c5a8d4b1f00);
 const CHR_STATUS: Uuid = Uuid::from_u128(0xe3f0a005_7b1c_4d2a_9e6f_2c5a8d4b1f00);
 const CHR_OPERATION_MODE: Uuid = Uuid::from_u128(0xe3f0a025_7b1c_4d2a_9e6f_2c5a8d4b1f00);
+// OTA (gatt_settings.cpp / recovery/main/ble.cpp と一致)。
+const CHR_OTA_CONTROL: Uuid = Uuid::from_u128(0xe3f0a009_7b1c_4d2a_9e6f_2c5a8d4b1f00);
+const CHR_OTA_DATA: Uuid = Uuid::from_u128(0xe3f0a00a_7b1c_4d2a_9e6f_2c5a8d4b1f00);
 
 const HKDF_INFO: &[u8] = b"stackchan-config-v1";
 const NONCE_LEN: usize = 12;
@@ -77,6 +80,20 @@ enum Cmd {
     Read { uuid: Uuid },
     /// 任意 characteristic を暗号 write (値は hex)。
     Write { uuid: Uuid, hex: String },
+    /// ファームウェア (.bin) を OtaControl / OtaData 経由で書き込む。
+    /// ADR-001 レイアウトの Main に対して実行すると Main は Recovery へ再起動する
+    /// ("rebooting to recovery") ので、数秒待ってからもう一度実行する (Recovery が
+    /// 同じ名前・同じ characteristic で受け付ける)。
+    Ota {
+        /// 書き込む .bin (build-<board>/stackchan_idf.bin)
+        file: std::path::PathBuf,
+        /// 1 チャンクの平文バイト数。暗号化で +28 B。ATT MTU 517 に収まる既定値。
+        #[arg(long, default_value_t = 480)]
+        chunk: usize,
+        /// 何チャンクごとに OtaControl の状態を読んで進捗と整合を確認するか。
+        #[arg(long, default_value_t = 32)]
+        check_every: usize,
+    },
 }
 
 #[tokio::main]
@@ -283,7 +300,107 @@ async fn run_session(p: &Peripheral, cli: &Cli) -> Result<()> {
             session.write_chr(p, *uuid, &plain).await?;
             println!("[ok] wrote {} byte(s) to {}", plain.len(), uuid);
         }
+        Cmd::Ota { file, chunk, check_every } => {
+            ota(p, &session, file, *chunk, *check_every).await?;
+        }
         Cmd::Scan => unreachable!(),
     }
+    Ok(())
+}
+
+async fn ota_status(
+    p: &Peripheral,
+    ctrl: &btleplug::api::Characteristic,
+    s: &SecureSession,
+) -> Result<String> {
+    let raw = p.read(ctrl).await.context("read OtaControl")?;
+    let json = s.decrypt(&raw)?;
+    Ok(String::from_utf8_lossy(&json).into_owned())
+}
+
+/// OTA: begin → OtaData に暗号チャンクを WriteWithoutResponse で流し、check_every
+/// ごとに OtaControl (状態 JSON) を読んで received が追従しているか確認 → end。
+/// 端末側のプロトコルは components/config_service/ota.cpp。
+async fn ota(
+    p: &Peripheral,
+    session: &SecureSession,
+    file: &std::path::Path,
+    chunk: usize,
+    check_every: usize,
+) -> Result<()> {
+    let image = std::fs::read(file).with_context(|| format!("read {}", file.display()))?;
+    let ctrl = find_chr(p, CHR_OTA_CONTROL)?;
+    let data = find_chr(p, CHR_OTA_DATA)?;
+
+    let begin = format!(r#"{{"op":"begin","size":{}}}"#, image.len());
+    p.write(&ctrl, &session.encrypt(begin.as_bytes())?, WriteType::WithResponse)
+        .await
+        .context("write OtaControl begin")?;
+    let st = ota_status(p, &ctrl, session).await?;
+    println!("begin -> {}", st);
+    if st.contains("rebooting to recovery") {
+        bail!("device is handing off to Recovery — wait ~10 s and run `ota` again");
+    }
+    if !st.contains(r#""state":"receiving""#) {
+        bail!("device did not enter receiving state: {}", st);
+    }
+
+    let started = std::time::Instant::now();
+    let mut sent = 0usize;
+    for (i, c) in image.chunks(chunk).enumerate() {
+        let wire = session.encrypt(c)?;
+        p.write(&data, &wire, WriteType::WithoutResponse)
+            .await
+            .with_context(|| format!("write OtaData chunk {}", i))?;
+        sent += c.len();
+        if (i + 1) % check_every == 0 {
+            // 端末が追いつくまで待つ (受信済みバイト数が sent と一致するまで)。
+            let mut st = ota_status(p, &ctrl, session).await?;
+            let mut tries = 0;
+            while !st.contains(&format!(r#""received":{},"#, sent)) {
+                if st.contains(r#""state":"failed""#) {
+                    bail!("device reported failure: {}", st);
+                }
+                tries += 1;
+                if tries > 50 {
+                    bail!("device did not catch up (sent {} B): {}", sent, st);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                st = ota_status(p, &ctrl, session).await?;
+            }
+            let secs = started.elapsed().as_secs_f64();
+            print!("\r  {} / {} B ({:.0} KiB/s)   ", sent, image.len(), sent as f64 / 1024.0 / secs.max(0.001));
+            use std::io::Write as _;
+            let _ = std::io::stdout().flush();
+        }
+    }
+    println!();
+    // 残りのチャンクが到着するまで待ってから end。
+    let mut st = ota_status(p, &ctrl, session).await?;
+    let mut tries = 0;
+    while !st.contains(&format!(r#""received":{},"#, sent)) {
+        if st.contains(r#""state":"failed""#) {
+            bail!("device reported failure: {}", st);
+        }
+        tries += 1;
+        if tries > 100 {
+            bail!("device did not receive everything: {}", st);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        st = ota_status(p, &ctrl, session).await?;
+    }
+    p.write(&ctrl, &session.encrypt(br#"{"op":"end"}"#)?, WriteType::WithResponse)
+        .await
+        .context("write OtaControl end")?;
+    // end の後は 500 ms で再起動するので、状態読み取りは失敗しても構わない。
+    match ota_status(p, &ctrl, session).await {
+        Ok(st) => println!("end -> {}", st),
+        Err(_) => println!("end -> (device rebooting)"),
+    }
+    println!(
+        "[ok] {} bytes in {:.1} s",
+        image.len(),
+        started.elapsed().as_secs_f64()
+    );
     Ok(())
 }

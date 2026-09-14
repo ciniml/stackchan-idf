@@ -55,3 +55,17 @@ ESP-NOW モード中も config_service(BLE)は稼働するので、httpd が無�
 - BlueZ は連続再接続で稀に `le-connection-abort-by-local` を返す。数秒空けて再実行する。
 - espnow-channel / espnow-receiver-id は現状 BLE characteristic 未公開(HTTP `/api/settings`
   かオンデバイス UI で設定)。既定(ch1/id1)で足りる用途はこの CLI だけで完結する。
+
+## OTA (ADR-001 レイアウト)
+
+```sh
+cargo run --release -- ota ../../build-cores3/stackchan_idf.bin
+# → begin -> {"state":"failed",...,"error":"rebooting to recovery"}
+#   Main は bootctl に「起動先=Recovery」を書いて再起動する。10 秒ほど待って再実行:
+cargo run --release -- ota ../../build-cores3/stackchan_idf.bin
+# → Recovery (同じ名前・同じ characteristic) が受信し、完了で Main を起動する。
+```
+
+チャンクは平文 480 B (暗号化で +28 B、ATT MTU 517 に収まる) を WriteWithoutResponse で
+送り、`--check-every` (既定 32) チャンクごとに OtaControl の状態 JSON を読んで受信済み
+バイト数が追いついているか確認する。実測 16 KiB/s (CoreS3、BlueZ)。

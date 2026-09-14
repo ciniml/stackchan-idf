@@ -153,17 +153,17 @@ voice は現行 4 MiB から 3.5 MiB に縮める。1 ファイル運用で最�
   - Recovery が release-fetch で外部登録した `main` に書き込み、`arm_main`（target=Main, pending=1）で再起動する。起動確認を返さない旧イメージ（v0.12.0）は試行 3 回で Recovery に戻った。
   - 新 Main は起動直後に拡張テーブルの 6 領域を登録し、`ready` 後に `confirm_boot` で pending を落とす。
   - Main からの release-fetch 要求は bootctl にタグを書いて Recovery へ引き継ぎ、Recovery が自動取得する。存在しないタグ（HTTP 404）では受信前に失敗し、`return_to_main` で旧 Main に戻った。
+  - BLE OTA: `tools/ble-cli ota` で Main に begin → 「rebooting to recovery」で引き継ぎ → Recovery に再接続して 3.6 MB を 217 秒（16 KiB/s）で受信 → `arm_main` → 試行 1/3 で Main 起動 → 起動確認。
   - 標準テーブルに `recovery` が無い開発用テーブルで Recovery を動かすと、Wi-Fi ドライバの NVS 書き込みで `esp_ota_get_running_partition()` が abort した。Recovery が自分の領域を登録する対処を入れて解消。
 
 ## 未決事項
 
-- RecoveryのBLE経路の実機検証（2026-09-15 に CoreS3 で HTTP 状態取得と release-fetch → Main 起動までは確認済み。BLE OTA は未確認）
 - `bootctl`の`max_attempts`の値と、Mainが起動確認を行うタイミング（どのサブシステム初期化完了を条件とするか）
 - ブートローダーの追加サイズ（現行 0x5160、上限 0x8000）
 - 更新・配置変更中の電断に対応する移行状態の保存と、イメージ・テーブル世代の対応付け
 - リリース パイプライン（release.yml / pages.yml / Web flasher）で bootloader、標準テーブル、Recovery、exttab、bootctl を配布する形（現在は Main の bin のみ）
 - cores3 以外のボード（atoms3r / atoms3 / stopwatch）の sdkconfig を新テーブルへ切り替える時期（実機確認後）
-- Main の BLE / HTTP アップロード OTA は Recovery への引き継ぎ（再起動）になった。tools/ble-cli と設定ページが Recovery へ再接続して送り直す対応
+- Main の BLE / HTTP アップロード OTA は Recovery への引き継ぎ（再起動）になった。tools/ble-cli には `ota` サブコマンドを追加し、Main に対して実行すると引き継ぎ、再実行で Recovery に送る形で確認済み（3.6 MB を 217 秒、16 KiB/s）。設定ページ（Web Bluetooth）側の再接続対応は未着手
 - 8MB機でのBlueScript / esp-srモデルの扱い（現時点では置かない）
 - BlueScriptのiflash/dflash/autorunヘッダ形式の一次資料への参照
 - SanoTTS-jp のモデル配置形式（raw + ヘッダか、ファイルシステム上のファイルか）
