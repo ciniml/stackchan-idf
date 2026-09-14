@@ -125,11 +125,11 @@ voice は現行 4 MiB から 3.5 MiB に縮める。1 ファイル運用で最�
 | ラベル | 用途 | 相対オフセット | サイズ | 絶対オフセット |
 |---|---|---|---|---|
 | main | app | 0x0 | 0x400000 | 0x1A0000 |
-| storage | spiffs | 0x400000 | 0x100000 | 0x5A0000 |
-| sanotts | raw | 0x500000 | 0xA0000 | 0x6A0000 |
-| voice | raw (hmm_voice) | 0x5A0000 | 0x160000 | 0x740000 |
+| storage | spiffs | 0x400000 | 0x80000 | 0x5A0000 |
+| sanotts | raw | 0x480000 | 0xA0000 | 0x620000 |
+| voice | raw (hmm_voice) | 0x520000 | 0x140000 | 0x6C0000 |
 
-8MB 機の voice は 1.375 MiB で、mei（0.86 MB）と nitech（1.17 MB）は入るが tohoku-f01 は入らない。esp-sr モデルと BlueScript 領域は 8MB 機には置かない（必要になった場合は voice を SanoTTS へ置き換えるなど、ボードごとに判断する）。
+8MB 機は Main 4 MiB を確保すると残りが 2.375 MiB しかないため、storage を 512 KiB に縮める（顔バイトコードと動作データは数十 KiB 規模）。voice は 1.25 MiB で、mei（0.86 MB）と nitech（1.17 MB）は入るが tohoku-f01 は入らない。esp-sr モデルと BlueScript 領域は 8MB 機には置かない（必要になった場合は voice を SanoTTS へ置き換えるなど、ボードごとに判断する）。
 
 ## 代替案と不採用理由
 

@@ -20,6 +20,7 @@ idf_component_register(
         "${_shared}/wifi_config_service"
     PRIV_REQUIRES
         tl_expected
+        flash_layout
         bt
         nvs_flash
         esp_wifi

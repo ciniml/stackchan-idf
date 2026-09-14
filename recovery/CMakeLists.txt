@@ -5,7 +5,9 @@ cmake_minimum_required(VERSION 3.22)
 # 表示・音声・サーボは持ち込まない (ADR-001「決定」参照)。
 #
 # 共有コンポーネントは ../components から必要最小限だけ取り込む。
-set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/../components/tl_expected")
+set(EXTRA_COMPONENT_DIRS
+    "${CMAKE_CURRENT_LIST_DIR}/../components/tl_expected"
+    "${CMAKE_CURRENT_LIST_DIR}/../components/flash_layout")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(stackchan_recovery)

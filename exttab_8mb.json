@@ -1,0 +1,12 @@
+{
+  "_comment": "ADR-001 8 MB (AtomS3R / AtomS3) 拡張パーティションテーブル。tools/flash_layout/gen_exttab.py で生成。",
+  "flash_size": "0x800000",
+  "reserved_offset": "0x1A0000",
+  "generation": 1,
+  "entries": [
+    {"label": "main",    "kind": "app",    "size": "0x400000", "required": true},
+    {"label": "storage", "kind": "spiffs", "size": "0x80000"},
+    {"label": "sanotts", "kind": "raw",    "size": "0xA0000"},
+    {"label": "voice",   "kind": "raw",    "size": "0x140000"}
+  ]
+}

@@ -15,6 +15,7 @@
 #include <sdkconfig.h>
 
 #include <config_service/ota.hpp>
+#include <flash_layout/flash_layout.hpp>
 
 #include "ble.hpp"
 #include "http.hpp"
@@ -77,6 +78,18 @@ extern "C" void app_main()
         err = nvs_flash_init();
     }
     ESP_ERROR_CHECK(err);
+
+    // ADR-001 の拡張テーブル / bootctl。暫定表 (exttab 無し) では失敗するが、
+    // その場合は従来どおり標準テーブルの ota_0 に書く (ota.cpp の既定動作)。
+    if (auto r = stackchan::flash_layout::init(); r) {
+        ESP_LOGI(kTag, "exttab gen=%lu entries=%u", static_cast<unsigned long>(r->generation), r->entry_count);
+        if (auto b = stackchan::flash_layout::read_bootctl(); b) {
+            ESP_LOGI(kTag, "bootctl target=%u pending=%u attempts=%u tag='%s'", b->target, b->pending,
+                     b->attempts, b->request_tag);
+        }
+    } else {
+        ESP_LOGW(kTag, "flash_layout: %s — legacy partition table", stackchan::flash_layout::error_name(r.error()));
+    }
 
     const Settings s = load_settings();
 

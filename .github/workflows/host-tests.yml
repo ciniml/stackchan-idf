@@ -60,6 +60,27 @@ jobs:
           cmake --build build-san
           ctest --test-dir build-san --output-on-failure
 
+      # --- flash_layout: ADR-001 exttab / bootctl format --------------------
+      # format.c is the exact source the custom bootloader compiles, so the
+      # validation / A-B selection / boot-decision logic is proven here.
+      - name: flash_layout host tests
+        working-directory: components/flash_layout/test/host
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+
+      - name: flash_layout host tests (ASan + UBSan)
+        working-directory: components/flash_layout/test/host
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-san -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all"
+          cmake --build build-san
+          ctest --test-dir build-san --output-on-failure
+
       # --- scs_servo: SCS0009 protocol + path generator -------------------
       - name: scs_servo host tests
         working-directory: components/scs_servo/test/host
