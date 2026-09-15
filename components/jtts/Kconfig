@@ -23,8 +23,17 @@ config JTTS_SANO_ARENA_INTERNAL
     depends on JTTS_ENABLE_SANOTTS
     default n
     help
-        合成の作業領域を内部 DRAM から確保する (取れなければ PSRAM にフォールバック)。
-        公式構成 (RTF 0.45) と同じ配置。内部 RAM に 176 KB の空きが必要なので、
-        機能を絞ったプロファイル (cores3-sano) 向け。
+        合成の作業領域を内部 DRAM のヒープから確保する (取れなければ PSRAM に
+        フォールバック)。ヒープの最大連続ブロックは通常 176 KB に届かないので、
+        確実に内部 RAM に置くには JTTS_SANO_ARENA_STATIC を使う。
+
+config JTTS_SANO_ARENA_STATIC
+    bool "sanoTTS: reserve the 176 KB arena as a static .bss array"
+    depends on JTTS_ENABLE_SANOTTS
+    default n
+    help
+        公式 sanoTTS-jp ファームウェアと同じく、作業領域をリンカが内部 DRAM に置く
+        静的配列にする。静的 DRAM を 176 KB 恒久的に消費するので、機能を絞った
+        プロファイル (cores3-fast) 向け。RTF は PSRAM 配置の約 1/1.4〜1/2。
 
 endmenu

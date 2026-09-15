@@ -65,8 +65,18 @@ bool g_loaded = false;
 std::uint8_t* g_arena = nullptr;
 std::size_t g_arena_size = kArenaBytes;
 
+#if defined(CONFIG_JTTS_SANO_ARENA_STATIC)
+// 公式ファームと同じ .bss の静的配列 (リンカが内部 DRAM に置く)。
+alignas(16) std::uint8_t g_static_arena[kArenaBytes];
+#endif
+
 bool ensure_arena() {
     if (g_arena != nullptr) return true;
+#if defined(CONFIG_JTTS_SANO_ARENA_STATIC)
+    g_arena = g_static_arena;
+    SANO_LOGI("arena %u B static (.bss) at %p", static_cast<unsigned>(kArenaBytes), static_cast<void*>(g_arena));
+    return true;
+#endif
 #if defined(ESP_PLATFORM)
 #if defined(CONFIG_JTTS_SANO_ARENA_INTERNAL)
     // 公式構成と同じ内部 DRAM 配置 (RTF 0.45)。空きが無ければ PSRAM へ。

@@ -18,9 +18,6 @@ namespace stackchan::app::sano_bench {
 
 namespace {
 constexpr const char* kTag = "sano-bench";
-// 公式ファームウェアと同じ「.bss の静的配列」。ヒープの最大連続ブロックに縛られない。
-// リンクできるかは静的 DRAM の残量次第 (cores3-sano で確認する)。
-alignas(16) std::uint8_t g_static_arena[176 * 1024];
 
 void log_heap(const char* when) {
     ESP_LOGI(kTag, "%s: INT free=%u largest=%u | PSRAM free=%u", when,
@@ -32,7 +29,6 @@ void log_heap(const char* when) {
 
 void run() {
     log_heap("before weights");
-    jtts::set_sano_arena(g_static_arena, sizeof g_static_arena);
     if (!sano_weights::init()) {
         ESP_LOGW(kTag, "no sanoTTS weights — bench skipped");
         return;

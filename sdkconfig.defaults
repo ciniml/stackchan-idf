@@ -1,14 +1,18 @@
 # Common defaults for stackchan-idf (target-independent).
 # Per-target overrides live in sdkconfig.defaults.<target>.
 
-# OTA-friendly partition layout (see partitions.csv).
+# ADR-001 partition layout (docs/adr-001-extensible-flash-layout.md, 2026-09-15).
+# Main の開発ビルドは partitions_main_<size>.csv (recovery 行なし、main を ota_0)、
+# 機体の正本は partitions_adr_<size>.csv (recovery/ プロジェクトが書く)。
+# flash サイズごとの表は sdkconfig.defaults.<board> で選ぶ。既定は 8 MB。
 CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_main_8mb.csv"
 CONFIG_PARTITION_TABLE_TWO_OTA=n
 CONFIG_PARTITION_TABLE_SINGLE_APP=n
 
-# Bootloader rollback.
-CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# 起動確認とロールバックは bootctl (components/flash_layout) が担う。IDF の otadata
+# ロールバックは使わない (otadata パーティション自体が無い)。
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=n
 
 # Avatar renders at 30 fps from a PSRAM canvas — favour speed over size.
 CONFIG_COMPILER_OPTIMIZATION_PERF=y

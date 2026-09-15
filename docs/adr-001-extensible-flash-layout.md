@@ -163,7 +163,7 @@ voice は現行 4 MiB から 3.5 MiB に縮める。1 ファイル運用で最�
 - ブートローダーの追加サイズ（現行 0x5160、上限 0x8000）
 - 更新・配置変更中の電断に対応する移行状態の保存と、イメージ・テーブル世代の対応付け
 - リリース パイプライン（release.yml / pages.yml / Web flasher）で bootloader、標準テーブル、Recovery、exttab、bootctl を配布する形（現在は Main の bin のみ）
-- cores3 以外のボード（atoms3r / atoms3 / stopwatch）の sdkconfig を新テーブルへ切り替える時期（実機確認後）
+- atoms3r / atoms3 / stopwatch は 2026-09-15 に新テーブル（`partitions_main_*.csv`）へ切り替えてビルド確認済み。実機での初回書き込み（USB、storage / voice は消える）と起動確認は未実施
 - Main の BLE / HTTP アップロード OTA は Recovery への引き継ぎ（再起動）になった。tools/ble-cli には `ota` サブコマンドを追加し、Main に対して実行すると引き継ぎ、再実行で Recovery に送る形で確認済み（3.6 MB を 217 秒、16 KiB/s）。設定ページ（Web Bluetooth）側は `tools/settings.html` に同じ手順（begin → 「rebooting to recovery」→ 同じ BluetoothDevice に `gatt.connect()` を再試行 → 鍵交換をやり直して begin）を実装済み。ブラウザでの実機確認は未実施
 - 8MB機でのBlueScript / esp-srモデルの扱い（現時点では置かない）
 - BlueScriptのiflash/dflash/autorunヘッダ形式の一次資料への参照

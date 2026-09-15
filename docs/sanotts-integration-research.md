@@ -154,3 +154,22 @@ IRAM 常駐コードを flash へ移し、`CONFIG_STACKCHAN_SANO_BENCH` で BLE 
 - 内部 RAM に 176 KB の連続領域を作るには、静的 DRAM (現状 209 KB、うち IRAM 常駐
   コード 120 KB) を大きく削る必要があり、Wi-Fi / BLE を持つ構成では現実的でない。
   上流への分割 arena 提案 (活性化バッファのみ内部 RAM) が残る道。
+
+### 6.3 高速化版 (機能削減版) プロファイルの試行 (2026-09-15)
+
+CoreS3 向けに「会話・音声ストリーミング・ASR・カメラを外し、作業領域 176 KB を .bss の
+静的配列に置く」プロファイル (cores3-fast) を試したが、**現状のコードでは成立しない**。
+
+- FreeRTOS / heap / ringbuf の関数を flash に置く設定と `SPI_FLASH_ROM_IMPL`、NimBLE
+  スタック 4 KB を入れると静的 DRAM 313 KB でリンクはできるが、Wi-Fi 初期化中の NVS
+  書き込みが失敗 (`ESP_ERR_WIFI_NVS`) して再起動ループになる (別の周回では
+  StoreProhibited)。
+- それらを外すと静的 DRAM が 8 KB 超過してリンクできない。
+- ベンチ構成 (前者) で起動できた場合でも、起動直後のヒープ 99 KB では BLE / Wi-Fi /
+  httpd の確保 (8 KB × 2 など) が失敗した。使える構成にするには内部 RAM がさらに
+  60〜70 KB 必要で、候補は BLE を丸ごと外すこと (config_service が NimBLE を
+  無条件に要求するため、それ自体が改修になる)。
+- 残したもの: `CONFIG_JTTS_SANO_ARENA_STATIC` (静的配列の作業領域)、
+  `CONFIG_STACKCHAN_SANO_BENCH` (起動時ベンチ)。プロファイルは削除。
+- 結論: ファームウェアの分岐を避ける方針とも合わせ、通常構成 (RTF 1.4) で運用し、
+  上流への分割 arena 提案を進める。
