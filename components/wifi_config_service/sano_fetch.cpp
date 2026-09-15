@@ -51,6 +51,11 @@ const char* fetch_and_install(const std::string& release_tag, const std::string&
     cfg.keep_alive_enable = false;
     cfg.disable_auto_redirect = false;
     cfg.max_redirection_count = 4;
+    // GitHub の Releases は objects.githubusercontent.com の署名付き URL (数百
+    // バイトの Location ヘッダ) へリダイレクトする。既定 512 B の受信バッファでは
+    // "Out of buffer" で open に失敗する。
+    cfg.buffer_size = 4096;
+    cfg.buffer_size_tx = 2048;
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (client == nullptr) return "http client init failed";
