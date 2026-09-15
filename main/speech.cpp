@@ -248,6 +248,11 @@ struct Speech::SynthJob {
 
 void Speech::synth_task(void* arg)
 {
+    // vTaskDeleteWithCaps() never returns, so every local (the old PCM buffer
+    // handed back by swap(), the envelope, the job) must be destroyed BEFORE
+    // it is called — otherwise ~60 KB leak per utterance. Hence the body
+    // lives in an immediately-invoked lambda and the delete happens after it.
+    [&] {
     std::unique_ptr<SynthJob> job{static_cast<SynthJob*>(arg)};
     Speech* self = job->self;
     std::vector<std::int16_t> pcm;
@@ -255,7 +260,6 @@ void Speech::synth_task(void* arg)
     if (!r || pcm.empty() || self->gen_.load(std::memory_order_acquire) != job->gen) {
         // 合成失敗、無音、または stop() で取り消された。
         self->synthesizing_.store(false, std::memory_order_release);
-        vTaskDeleteWithCaps(nullptr);
         return;
     }
     const std::uint32_t rate = *r;
@@ -276,6 +280,7 @@ void Speech::synth_task(void* arg)
                            /*repeat=*/1, /*channel=*/-1, /*stop_current_sound=*/true);
     }
     self->synthesizing_.store(false, std::memory_order_release);
+    }();
     vTaskDeleteWithCaps(nullptr);
 }
 

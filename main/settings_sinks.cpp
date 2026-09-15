@@ -195,11 +195,14 @@ void start_say_worker(std::string_view kana_utf8)
     constexpr UBaseType_t kCaps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
     const BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
         +[](void* arg) {
+            // Body in an immediately-invoked lambda: vTaskDeleteWithCaps()
+            // never returns, so locals (PCM buffer, text) must be destroyed
+            // before it — otherwise each /api/say leaks the whole buffer.
+            [&] {
             std::unique_ptr<std::string> kana_text{static_cast<std::string*>(arg)};
             std::u32string kana = stackchan::app::decode_utf8(*kana_text);
             if (kana.empty()) {
                 ESP_LOGW(kTag, "say: empty / invalid utf8");
-                vTaskDeleteWithCaps(nullptr);
                 return;
             }
             // Use the user's jtts settings (voice / pitch / mora /
@@ -216,19 +219,18 @@ void start_say_worker(std::string_view kana_utf8)
             if (auto r = stackchan::jtts::synthesize_ex(kana, pcm, opt); !r) {
                 ESP_LOGW(kTag, "say synth fail: %s",
                          stackchan::jtts::to_string(r.error()));
-                vTaskDeleteWithCaps(nullptr);
                 return;
             } else {
                 rate = *r;
             }
             if (pcm.empty()) {
-                vTaskDeleteWithCaps(nullptr);
                 return;
             }
             while (M5.Speaker.isPlaying()) vTaskDelay(pdMS_TO_TICKS(20));
             M5.Speaker.playRaw(pcm.data(), pcm.size(), rate, /*stereo=*/false);
             while (M5.Speaker.isPlaying()) vTaskDelay(pdMS_TO_TICKS(20));
             stackchan::wifi_config::mcp_events::publish_say_done();
+            }();
             vTaskDeleteWithCaps(nullptr);
         },
         // Pin to CPU 0 — CPU 1 hosts speaker/mic/render/servo and a
