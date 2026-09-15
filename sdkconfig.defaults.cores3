@@ -29,7 +29,8 @@ CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 # "camera-active" flag, or migrate them off the shared lgfx i2c instance).
 # STACKCHAN_QR_TEST_AT_BOOT stays OFF — do not flip it back on without
 # revisiting the race.
-CONFIG_STACKCHAN_CAMERA_ENABLED=y
+# 2026-09-15: カメラは実質未使用のため無効化 (内部 RAM が約 20 KB 空く)。戻すときは y に。
+CONFIG_STACKCHAN_CAMERA_ENABLED=n
 # DMA path selection (ESP32-S3 knob in esp32-camera).
 #   y: EDMA writes each line straight into the PSRAM framebuffer.
 #   n: DMA lands in small internal-RAM bounce buffers; the cam task memcpys
@@ -116,3 +117,5 @@ CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=4
 # sanoTTS: PSRAM 上の arena を読む速度を上げる実験 (2026-09-15)。キャッシュ容量は
 # 内部 RAM を食うので据え置き、ライン長だけ 64 B にする。
 CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+# 64 KB キャッシュは 2026-09-15 に実測: RTF は 8〜10 % しか改善せず内部 RAM が
+# 1.5 KB まで枯渇 (ALLOC_FAIL) したので不採用。
