@@ -23,3 +23,14 @@ CONFIG_SPIRAM_USE_MALLOC=y
 
 # Default console on the on-board USB-Serial-JTAG.
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# CPU 240 MHz + flash QIO (全 ESP32-S3 ボード共通、2026-09-15)。
+# sanoTTS の実測で 160 MHz / DIO から約 1.5 倍速くなった (公式 sanoTTS-jp ファームと同じ
+# 設定)。CoreS3 の W25Q128 は QIO 動作を確認済み。IDF のブートローダー
+# (flash_qio_mode.c) は既知チップは専用手順で、未知のチップは既定の QE ビット手順で
+# QIO を有効にする。AtomS3 / AtomS3R (ESP32-S3-PICO-1 内蔵 flash) と StopWatch は
+# 未確認なので、初回書き込み時にブートログの "SPI Mode : QIO" と起動を確認すること。
+# 起動しなければそのボードの sdkconfig.defaults.<board> で
+# CONFIG_ESPTOOLPY_FLASHMODE_DIO=y に戻す。
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y

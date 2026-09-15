@@ -120,7 +120,3 @@ CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
 # 64 KB キャッシュは 2026-09-15 に実測: RTF は 8〜10 % しか改善せず内部 RAM が
 # 1.5 KB まで枯渇 (ALLOC_FAIL) したので不採用。
 
-# 2026-09-15: sanoTTS の実測で CPU 240 MHz + flash QIO が RTF を約 35% 改善 (公式構成と同じ)。
-# CoreS3 の W25Q128 は QIO 対応 (ブートログ "SPI Mode: QIO" で確認)。
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
-CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
