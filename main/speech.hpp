@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -90,6 +91,16 @@ private:
     std::atomic<std::uint32_t> duration_ms_{0};
     // 直近の合成出力のレート。sanoTTS は 22.05 kHz、他は kSampleRate。
     std::uint32_t play_rate_{kSampleRate};
+
+    // 合成は別タスクで行う (sanoTTS は 1 発話 1〜2 秒かかり、呼び出し元 = demo_loop を
+    // ブロックすると M5.update() が止まってタッチを取りこぼす)。synthesizing_ の間は
+    // is_speaking() が true。stop() は gen_ を進めて進行中の合成結果を捨てる。
+    std::atomic<bool> synthesizing_{false};
+    std::atomic<std::uint32_t> gen_{0};
+    // pcm_ / envelope_ / play_rate_ の差し替えと current_mouth_open() の読み出しを直列化。
+    mutable std::mutex buf_mutex_;
+    struct SynthJob;
+    static void synth_task(void* arg);
 };
 
 } // namespace stackchan::app

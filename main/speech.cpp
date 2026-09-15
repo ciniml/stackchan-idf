@@ -14,8 +14,12 @@
 
 #include <M5Unified.h>
 #include <cJSON.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <memory>
 
 namespace stackchan::app {
 
@@ -235,55 +239,75 @@ std::string Speech::babble(std::uint32_t seed)
     return phrase.display;
 }
 
+struct Speech::SynthJob {
+    Speech* self;
+    std::u32string reading;
+    jtts::Options opt;
+    std::uint32_t gen;
+};
+
+void Speech::synth_task(void* arg)
+{
+    std::unique_ptr<SynthJob> job{static_cast<SynthJob*>(arg)};
+    Speech* self = job->self;
+    std::vector<std::int16_t> pcm;
+    auto r = jtts::synthesize_ex(job->reading, pcm, job->opt);
+    if (!r || pcm.empty() || self->gen_.load(std::memory_order_acquire) != job->gen) {
+        // 合成失敗、無音、または stop() で取り消された。
+        self->synthesizing_.store(false, std::memory_order_release);
+        vTaskDeleteWithCaps(nullptr);
+        return;
+    }
+    const std::uint32_t rate = *r;
+    std::vector<float> envelope;
+    build_envelope_from_pcm(pcm, envelope, rate, kEnvelopeStepMs);
+    {
+        std::lock_guard<std::mutex> lock(self->buf_mutex_);
+        self->pcm_.swap(pcm);
+        self->envelope_.swap(envelope);
+        self->play_rate_ = rate;
+        self->duration_ms_.store(
+            static_cast<std::uint32_t>(static_cast<float>(self->pcm_.size()) * 1000.0f /
+                                       static_cast<float>(rate)),
+            std::memory_order_relaxed);
+        self->start_ms_.store(static_cast<std::uint32_t>(esp_timer_get_time() / 1000),
+                              std::memory_order_release);
+        M5.Speaker.playRaw(self->pcm_.data(), self->pcm_.size(), rate, /*stereo=*/false,
+                           /*repeat=*/1, /*channel=*/-1, /*stop_current_sound=*/true);
+    }
+    self->synthesizing_.store(false, std::memory_order_release);
+    vTaskDeleteWithCaps(nullptr);
+}
+
 bool Speech::say(std::u32string_view reading)
 {
     if (!initialised_) {
         configure(""); // first-call lazy init with defaults
     }
+    if (reading.empty()) return false;
+    if (synthesizing_.exchange(true, std::memory_order_acq_rel)) {
+        return false; // 前の合成がまだ走っている
+    }
     jtts::Options opt = opts_;
-    opt.sample_rate_hz = kSampleRate; // playback rate is fixed for envelope sync
-
-    pcm_.clear();
-    // synthesize_ex は実際の出力レートを返す (sanoTTS は 22.05 kHz 固定、他は
-    // opt.sample_rate_hz)。再生と包絡はそのレートで行う。
-    auto r = jtts::synthesize_ex(std::u32string{reading}, pcm_, opt);
-    if (!r || pcm_.empty()) {
+    opt.sample_rate_hz = kSampleRate; // 他エンジンの既定レート。sanoTTS は 22.05 kHz を返す
+    auto* job = new SynthJob{this, std::u32string{reading}, opt, gen_.load(std::memory_order_acquire)};
+    // スタックは PSRAM (flash への書き込みはしない)。CPU 0 — CPU 1 は描画 / サーボ / スピーカー。
+    const BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(&synth_task, "speech_synth", 16 * 1024, job,
+                                                          tskIDLE_PRIORITY + 2, nullptr, 0,
+                                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (rc != pdPASS) {
+        ESP_LOGE("speech", "synth task create failed");
+        delete job;
+        synthesizing_.store(false, std::memory_order_release);
         return false;
     }
-    play_rate_ = *r;
-
-    build_envelope_from_pcm(pcm_, envelope_, play_rate_, kEnvelopeStepMs);
-
-    duration_ms_.store(
-        static_cast<std::uint32_t>(static_cast<float>(pcm_.size()) * 1000.0f /
-                                   static_cast<float>(play_rate_)),
-        std::memory_order_relaxed);
-    start_ms_.store(static_cast<std::uint32_t>(esp_timer_get_time() / 1000),
-                    std::memory_order_release);
-
-    // Diagnostic: dump the live Speaker config pins right before playRaw so
-    // we can confirm the Module Audio overrides (mck=G7 / bck=G0 / ws=G6 /
-    // data_out=G13) are still in effect at JTTS playback time. If a stray
-    // task has re-configured the speaker to internal AW88298 pins
-    // (mck=NC / bck=34 / ws=33 / data_out=13) the line-out goes silent
-    // even though the channel mixer says "playing". Remove once JTTS-on-
-    // Module-Audio is stable.
-    {
-        auto live = M5.Speaker.config();
-        ESP_LOGI("speech",
-                 "play: mck=%d bck=%d ws=%d dout=%d sr=%u samples=%u",
-                 live.pin_mck, live.pin_bck, live.pin_ws, live.pin_data_out,
-                 static_cast<unsigned>(live.sample_rate),
-                 static_cast<unsigned>(pcm_.size()));
-    }
-    M5.Speaker.playRaw(pcm_.data(), pcm_.size(), play_rate_, /*stereo=*/false,
-                       /*repeat=*/1, /*channel=*/-1,
-                       /*stop_current_sound=*/true);
     return true;
 }
 
 void Speech::stop()
 {
+    // 進行中の合成があれば結果を捨てさせる (タスク自体は合成完了まで走る)。
+    gen_.fetch_add(1, std::memory_order_acq_rel);
     if (M5.Speaker.isPlaying()) {
         M5.Speaker.stop();
     }
@@ -293,6 +317,9 @@ void Speech::stop()
 
 bool Speech::is_speaking() const
 {
+    if (synthesizing_.load(std::memory_order_acquire)) {
+        return true;
+    }
     const std::uint32_t start = start_ms_.load(std::memory_order_acquire);
     if (start == 0) {
         return false;
@@ -303,6 +330,7 @@ bool Speech::is_speaking() const
 
 float Speech::current_mouth_open() const
 {
+    std::lock_guard<std::mutex> lock(buf_mutex_);
     const std::uint32_t start = start_ms_.load(std::memory_order_acquire);
     if (start == 0 || envelope_.empty()) {
         return 0.0f;
