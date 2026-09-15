@@ -63,10 +63,23 @@ std::mutex g_mutex;
 saan_weights g_weights{};
 bool g_loaded = false;
 std::uint8_t* g_arena = nullptr;
+std::size_t g_arena_size = kArenaBytes;
 
 bool ensure_arena() {
     if (g_arena != nullptr) return true;
 #if defined(ESP_PLATFORM)
+#if defined(CONFIG_JTTS_SANO_ARENA_INTERNAL)
+    // 公式構成と同じ内部 DRAM 配置 (RTF 0.45)。空きが無ければ PSRAM へ。
+    g_arena = static_cast<std::uint8_t*>(
+        heap_caps_aligned_alloc(16, kArenaBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    if (g_arena != nullptr) {
+        SANO_LOGI("arena %u B in internal DRAM (INT free now %u B)", static_cast<unsigned>(kArenaBytes),
+                  static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+        return true;
+    }
+    SANO_LOGW("internal DRAM arena unavailable (largest free %u B) — falling back to PSRAM",
+              static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+#endif
     g_arena = static_cast<std::uint8_t*>(
         heap_caps_aligned_alloc(16, kArenaBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (g_arena != nullptr) {
@@ -113,6 +126,17 @@ bool sano_weights_loaded() {
     return g_loaded;
 }
 
+void set_sano_arena(void* buf, std::size_t size) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (buf == nullptr || size < kArenaBytes || (reinterpret_cast<std::uintptr_t>(buf) & 15u) != 0) {
+        SANO_LOGW("set_sano_arena: rejected (%p, %u B)", buf, static_cast<unsigned>(size));
+        return;
+    }
+    g_arena = static_cast<std::uint8_t*>(buf);
+    g_arena_size = size;
+    SANO_LOGI("arena %u B provided by caller at %p", static_cast<unsigned>(size), buf);
+}
+
 namespace internal {
 
 bool render_sano(std::u32string_view text, std::vector<std::int16_t>& out, const Options& opt,
@@ -144,13 +168,13 @@ bool render_sano(std::u32string_view text, std::vector<std::int16_t>& out, const
     const float s_v = SAAN_S_V * speed;
 
     saan_arena arena{};
-    saan_arena_init(&arena, g_arena, kArenaBytes);
+    saan_arena_init(&arena, g_arena, g_arena_size);
     saan_stream st{};
     const auto t0 = std::chrono::steady_clock::now();
     saan_status s = saan_stream_init(&st, &g_weights, &arena, ids.data(), n_ids, s_v);
     if (s != SAAN_OK) {
         SANO_LOGW("stream_init: %s (%d ids, arena %u B, needed<=%u B)", saan_strerror(s), static_cast<int>(n_ids),
-                  static_cast<unsigned>(kArenaBytes), static_cast<unsigned>(saan_stream_arena_needed(n_ids)));
+                  static_cast<unsigned>(g_arena_size), static_cast<unsigned>(saan_stream_arena_needed(n_ids)));
         return false;
     }
 

@@ -62,6 +62,7 @@
 #include "voice_db.hpp"
 #include "hmm_voice.hpp"
 #include "sano_weights.hpp"
+#include "sano_bench.hpp"
 #if CONFIG_STACKCHAN_WIFI_AUDIO_ENABLED
 #include "wifi_audio.hpp"
 #endif
@@ -225,6 +226,10 @@ extern "C" void app_main()
     } else {
         ESP_LOGI(kTag, "legacy partition layout (%s)", stackchan::flash_layout::error_name(fl.error()));
     }
+#if CONFIG_STACKCHAN_SANO_BENCH
+    // 技術検証: BLE / Wi-Fi より前に内部 RAM を最大限使って sanoTTS を測る。
+    stackchan::app::sano_bench::run();
+#endif
 
     // NOTE: with CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y a freshly-OTA'd image
     // boots in ESP_OTA_IMG_PENDING_VERIFY and must be promoted to VALID or the

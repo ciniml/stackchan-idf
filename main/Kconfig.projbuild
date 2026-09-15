@@ -81,4 +81,13 @@ menu "Stack-chan feature gates"
             mode does NOT start httpd / conversation. OFF to drop the esp-now
             dependency from slim builds.
 
+
+config STACKCHAN_SANO_BENCH
+    bool "sanoTTS boot-time benchmark (before BLE / Wi-Fi start)"
+    default n
+    help
+        起動直後 (BLE / Wi-Fi / 会話などを始める前、内部 RAM が最も空いている時点) に
+        sanoTTS の重みをロードして固定の 3 文を合成し、RTF と arena の配置を
+        ログに出す。技術検証用 (cores3-sano)。通常のビルドでは n。
+
 endmenu

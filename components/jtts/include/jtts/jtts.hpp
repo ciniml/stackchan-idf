@@ -136,4 +136,9 @@ bool set_sano_weights(std::span<const std::uint8_t> blob);
 // sanoTTS の重みがロード済みか。
 bool sano_weights_loaded();
 
+// sanoTTS の作業領域を呼び出し側のバッファに差し替える (16 バイト境界、176 KB 以上)。
+// 既定はヒープ (Kconfig で内部 DRAM 優先 / PSRAM) から初回に確保する。公式構成と
+// 同じ「.bss の静的配列」を使う検証用。合成中に呼ばないこと。
+void set_sano_arena(void* buf, std::size_t size);
+
 }  // namespace stackchan::jtts

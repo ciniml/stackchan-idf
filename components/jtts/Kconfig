@@ -18,4 +18,13 @@ config JTTS_ENABLE_SANOTTS
         合成の作業領域 176 KB を PSRAM に取る。PSRAM のあるボード向け。
         無効時は render_sano がスタブになり、推論コアはリンクされない。
 
+config JTTS_SANO_ARENA_INTERNAL
+    bool "sanoTTS: place the 176 KB arena in internal DRAM when possible"
+    depends on JTTS_ENABLE_SANOTTS
+    default n
+    help
+        合成の作業領域を内部 DRAM から確保する (取れなければ PSRAM にフォールバック)。
+        公式構成 (RTF 0.45) と同じ配置。内部 RAM に 176 KB の空きが必要なので、
+        機能を絞ったプロファイル (cores3-sano) 向け。
+
 endmenu
