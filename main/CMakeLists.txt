@@ -61,6 +61,7 @@ set(_main_srcs
     "speech.cpp"
     "voice_db.cpp"
     "hmm_voice.cpp"
+    "sano_weights.cpp"
     "wifi_sta.cpp"
 )
 if(CONFIG_STACKCHAN_CONVERSATION_ENABLED)

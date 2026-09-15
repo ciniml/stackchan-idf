@@ -61,6 +61,7 @@
 #include "speech.hpp"
 #include "voice_db.hpp"
 #include "hmm_voice.hpp"
+#include "sano_weights.hpp"
 #if CONFIG_STACKCHAN_WIFI_AUDIO_ENABLED
 #include "wifi_audio.hpp"
 #endif
@@ -1142,6 +1143,9 @@ extern "C" void app_main()
         }
         if (stackchan::app::hmm_voice::init()) {
             ESP_LOGI(kTag, "hts: HMM voice active — HMM TTS enabled");
+        }
+        if (stackchan::app::sano_weights::init()) {
+            ESP_LOGI(kTag, "sanoTTS: weights active — neural TTS enabled");
         }
     }
 

@@ -624,6 +624,32 @@
         <button type="button" id="btn-hmm-voice-clear" class="danger">削除</button>
       </div>
 
+      <h2 class="section-title" style="margin-top:1rem">sanoTTS-jp (ニューラル TTS)</h2>
+      <p class="hint" style="margin-bottom:0.5rem">
+        <a href="https://github.com/ayutaz/sanoTTS-jp" target="_blank" rel="noopener">sanoTTS-jp</a>
+        の重み (654 KB) を入れると、jtts の発話がニューラル合成 (22.05 kHz) になります
+        (PSRAM のあるボード)。読みは HTS ボイスと同じ記法 (<code>'</code> 核、<code>/</code> 句切り)。
+        重みは本ファームウェアには同梱していません。機体が公式 GitHub Releases から直接取得します。
+      </p>
+      <p class="hint" id="sanotts-status" style="margin-bottom:0.5rem">状態: —</p>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
+        <input type="text" id="sanotts-release" value="v1.1.0" placeholder="release tag" style="flex:0 1 6rem">
+        <input type="text" id="sanotts-file" value="saanotts-jp-v4-int8.bin" placeholder="asset file" style="flex:1 1 12rem">
+        <button type="button" id="btn-sanotts-fetch">公式 Releases から取得</button>
+        <button type="button" id="btn-sanotts-clear" class="danger">削除</button>
+      </div>
+      <p class="hint" id="sanotts-fetch-status" style="margin:0.35rem 0 0" hidden></p>
+      <p class="hint" style="margin:0.35rem 0 0;font-size:0.8rem;color:#777">
+        重みのライセンスは MIT ではありません。取得前に
+        <a href="https://github.com/ayutaz/sanoTTS-jp/blob/main/LICENSE-MODEL.md" target="_blank" rel="noopener">LICENSE-MODEL.md</a>
+        を確認してください。合成音声はつくよみちゃんコーパスの規約により、個人・団体への攻撃や批判、
+        政治的・宗教的な主張、注意書きのない過激な内容、他者が再利用できる素材としての配布には使えません。
+      </p>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;margin-top:0.4rem">
+        <input type="file" id="sanotts-upload-file" accept=".bin,application/octet-stream" style="flex:1 1 12rem">
+        <button type="button" id="btn-sanotts-upload">ファイルからアップロード</button>
+      </div>
+
       <h2 class="section-title" style="margin-top:1rem">単位連結 音声 DB (.jvox)</h2>
       <p class="hint" style="margin-bottom:0.5rem">
         実音声由来のモーラ単位 DB をアップロードすると、jtts の発話が単位連結
@@ -1236,6 +1262,79 @@ function hmmLabelForSize(bytes) {
   return hit ? hit.label : null;
 }
 
+async function refreshSanottsStatus() {
+  try {
+    const st = await fetchJSON('/api/sanotts');
+    if (st.capacity === 0) {
+      $('sanotts-status').textContent = '状態: sanotts 領域なし (旧パーティション表)';
+    } else if (st.loaded) {
+      $('sanotts-status').textContent =
+        `状態: ロード済み (${Math.round(st.stored/1024)} KiB / 上限 ${Math.round(st.capacity/1024)} KiB)`;
+    } else {
+      $('sanotts-status').textContent = st.stored > 0 ? '状態: 保存済み・未ロード' : '状態: 未登録';
+    }
+    return st;
+  } catch (e) { $('sanotts-status').textContent = '状態: 取得失敗'; }
+  return null;
+}
+
+$('btn-sanotts-fetch').addEventListener('click', async () => {
+  const release = $('sanotts-release').value.trim();
+  const file = $('sanotts-file').value.trim();
+  if (!release || !file) { log('リリース タグとファイル名を入力してください', 'err'); return; }
+  if (!confirm(`機体が GitHub Releases (ayutaz/sanoTTS-jp ${release}/${file}) から取得します。LICENSE-MODEL.md の条件に同意していますか？`)) return;
+  const btn = $('btn-sanotts-fetch');
+  const fs = $('sanotts-fetch-status');
+  btn.disabled = true;
+  fs.hidden = false;
+  fs.textContent = '機体がダウンロード中… (30 秒程度)';
+  try {
+    const r = await fetch('/api/sanotts/fetch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ release, file }),
+    });
+    const body = await r.text();
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${body}`);
+    const st = JSON.parse(body);
+    fs.textContent = `インストール完了 (${Math.round((st.stored||0)/1024)} KiB)`;
+    log(`sanoTTS 重みを取得+インストール: ${release}/${file}`, 'ok');
+  } catch (e) {
+    fs.textContent = `失敗: ${e.message}`;
+    log(`sanoTTS 取得失敗: ${e.message}`, 'err');
+  } finally {
+    btn.disabled = false;
+    refreshSanottsStatus();
+  }
+});
+
+$('btn-sanotts-upload').addEventListener('click', async () => {
+  const f = $('sanotts-upload-file').files[0];
+  if (!f) { log('重みファイルを選択してください', 'err'); return; }
+  const fs = $('sanotts-fetch-status');
+  fs.hidden = false;
+  fs.textContent = `デバイスへ転送中… (${Math.round(f.size/1024)} KiB)`;
+  try {
+    const r = await fetch('/api/sanotts', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: await f.arrayBuffer() });
+    const body = await r.text();
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${body}`);
+    fs.textContent = 'インストール完了';
+    log('sanoTTS 重みをアップロード', 'ok');
+  } catch (e) {
+    fs.textContent = `失敗: ${e.message}`;
+    log(`sanoTTS アップロード失敗: ${e.message}`, 'err');
+  } finally { refreshSanottsStatus(); }
+});
+
+$('btn-sanotts-clear').addEventListener('click', async () => {
+  if (!confirm('sanoTTS の重みを削除しますか？')) return;
+  try {
+    const r = await fetch('/api/sanotts/clear', { method: 'POST' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    log('sanoTTS 重みを削除', 'ok');
+  } catch (e) { log(`削除失敗: ${e.message}`, 'err'); }
+  refreshSanottsStatus();
+});
+
 async function refreshHmmVoiceStatus() {
   try {
     const st = await fetchJSON('/api/hmm-voice');
@@ -1389,6 +1488,7 @@ $('btn-hmm-voice-clear').addEventListener('click', async () => {
   refreshHmmVoiceStatus();
 });
 refreshHmmVoiceStatus();
+refreshSanottsStatus();
 loadHmmCatalog();
 
 // --- Status refresh ---

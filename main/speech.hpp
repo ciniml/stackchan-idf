@@ -88,6 +88,8 @@ private:
 
     std::atomic<std::uint32_t> start_ms_{0};
     std::atomic<std::uint32_t> duration_ms_{0};
+    // 直近の合成出力のレート。sanoTTS は 22.05 kHz、他は kSampleRate。
+    std::uint32_t play_rate_{kSampleRate};
 };
 
 } // namespace stackchan::app

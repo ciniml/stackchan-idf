@@ -4,6 +4,7 @@
 #include "http_handlers.hpp"
 #include <wifi_config_service/release_ota.hpp>
 #include "voice_fetch.hpp"
+#include "sano_fetch.hpp"
 
 #include <avatar_vm/storage.hpp>
 #include <config_service/config_service.hpp>
@@ -142,6 +143,8 @@ AvatarBytecodeSink g_avatar_bytecode_sink = nullptr;
 VoiceDbSink g_voice_db_sink = nullptr;
 VoiceDbStatusGetter g_voice_db_status_getter = nullptr;
 HmmVoiceSink g_hmm_voice_sink = nullptr;
+SanoWeightsSink g_sano_weights_sink = nullptr;
+SanoWeightsStatusGetter g_sano_weights_status_getter = nullptr;
 HmmVoiceStatusGetter g_hmm_voice_status_getter = nullptr;
 CameraCaptureSink g_camera_capture_sink = nullptr;
 CameraRegSink g_camera_reg_sink = nullptr;
@@ -1447,6 +1450,113 @@ esp_err_t handle_hmm_voice_fetch_post(httpd_req_t* req)
     return send_json(req, body);
 }
 
+// --- sanoTTS-jp 重み (拡張テーブル sanotts 領域) -------------------------------
+
+esp_err_t handle_sanotts_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    SanoWeightsStatusGetter getter = g_sano_weights_status_getter;
+    xSemaphoreGive(g_mutex);
+    const SanoWeightsStatus st = getter ? getter() : SanoWeightsStatus{};
+    char body[128];
+    std::snprintf(body, sizeof(body), R"({"loaded":%s,"stored":%u,"capacity":%u})",
+                  st.loaded ? "true" : "false", static_cast<unsigned>(st.stored_bytes),
+                  static_cast<unsigned>(st.capacity));
+    return send_json(req, body);
+}
+
+esp_err_t handle_sanotts_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    SanoWeightsSink sink = g_sano_weights_sink;
+    SanoWeightsStatusGetter getter = g_sano_weights_status_getter;
+    xSemaphoreGive(g_mutex);
+    if (!sink) return send_error(req, "503 Service Unavailable", "sanotts sink not ready");
+
+    constexpr std::size_t kMax = 1024 * 1024;
+    const int len = req->content_len;
+    if (len <= 0 || static_cast<std::size_t>(len) > kMax) {
+        return send_error(req, "413 Payload Too Large", "weights must be 1 B .. 1 MiB");
+    }
+    std::uint8_t* buf =
+        static_cast<std::uint8_t*>(heap_caps_malloc(static_cast<std::size_t>(len), MALLOC_CAP_SPIRAM));
+    if (buf == nullptr) return send_error(req, "507 Insufficient Storage", "no PSRAM for upload buffer");
+    std::size_t off = 0;
+    while (off < static_cast<std::size_t>(len)) {
+        const int got = httpd_req_recv(req, reinterpret_cast<char*>(buf + off),
+                                       static_cast<std::size_t>(len) - off);
+        if (got <= 0) {
+            heap_caps_free(buf);
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_send(req, nullptr, 0);
+            return ESP_OK;
+        }
+        off += static_cast<std::size_t>(got);
+    }
+    const char* err = sink(buf, static_cast<std::size_t>(len));
+    heap_caps_free(buf);
+    if (err != nullptr) {
+        ESP_LOGE(kTag, "sanotts store: %s", err);
+        return send_error(req, "400 Bad Request", err);
+    }
+    const SanoWeightsStatus st = getter ? getter() : SanoWeightsStatus{};
+    char body[96];
+    std::snprintf(body, sizeof(body), R"({"ok":true,"stored":%u})", static_cast<unsigned>(st.stored_bytes));
+    return send_json(req, body);
+}
+
+esp_err_t handle_sanotts_clear_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    SanoWeightsSink sink = g_sano_weights_sink;
+    xSemaphoreGive(g_mutex);
+    if (!sink) return send_error(req, "503 Service Unavailable", "sanotts sink not ready");
+    const char* err = sink(nullptr, 0);
+    if (err != nullptr) return send_error(req, "500 Internal Server Error", err);
+    return send_json(req, R"({"ok":true})");
+}
+
+// POST /api/sanotts/fetch — {"release":"v1.1.0","file":"saanotts-jp-v4-int8.bin"}。
+// 機体が公式 GitHub Releases から同期ダウンロードして sanotts 領域へインストール
+// する (httpd タスク上、数〜数十秒ブロック)。
+esp_err_t handle_sanotts_fetch_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, 256) != ESP_OK) return ESP_OK;
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (root == nullptr) return send_error(req, "400 Bad Request", "bad json");
+    const cJSON* rel = cJSON_GetObjectItemCaseSensitive(root, "release");
+    const cJSON* file = cJSON_GetObjectItemCaseSensitive(root, "file");
+    if (!cJSON_IsString(rel) || !cJSON_IsString(file)) {
+        cJSON_Delete(root);
+        return send_error(req, "400 Bad Request", "release and file required");
+    }
+    const std::string release = rel->valuestring;
+    const std::string file_name = file->valuestring;
+    cJSON_Delete(root);
+
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    SanoWeightsSink sink = g_sano_weights_sink;
+    SanoWeightsStatusGetter getter = g_sano_weights_status_getter;
+    xSemaphoreGive(g_mutex);
+    if (!sink) return send_error(req, "503 Service Unavailable", "sanotts sink not ready");
+
+    const char* err = sano_fetch::fetch_and_install(
+        release, file_name, [sink](const std::uint8_t* d, std::size_t n) { return sink(d, n); });
+    if (err != nullptr) {
+        ESP_LOGE(kTag, "sanotts fetch %s/%s: %s", release.c_str(), file_name.c_str(), err);
+        return send_error(req, "502 Bad Gateway", err);
+    }
+    const SanoWeightsStatus st = getter ? getter() : SanoWeightsStatus{};
+    char out[96];
+    std::snprintf(out, sizeof(out), R"({"ok":true,"stored":%u})", static_cast<unsigned>(st.stored_bytes));
+    return send_json(req, out);
+}
+
 esp_err_t handle_hmm_voice_clear_post(httpd_req_t* req)
 {
     if (!require_auth(req)) return ESP_OK;
@@ -1964,6 +2074,10 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/hmm-voice",        HTTP_POST, handle_hmm_voice_post);
     add(server, "/api/hmm-voice/clear",  HTTP_POST, handle_hmm_voice_clear_post);
     add(server, "/api/hmm-voice/fetch",  HTTP_POST, handle_hmm_voice_fetch_post);
+    add(server, "/api/sanotts",          HTTP_GET,  handle_sanotts_get);
+    add(server, "/api/sanotts",          HTTP_POST, handle_sanotts_post);
+    add(server, "/api/sanotts/clear",    HTTP_POST, handle_sanotts_clear_post);
+    add(server, "/api/sanotts/fetch",    HTTP_POST, handle_sanotts_fetch_post);
     add(server, "/api/voices",           HTTP_GET,  handle_voices_get);
     add(server, "/api/metrics/audio",    HTTP_GET,  handle_audio_metrics_get);
     add(server, "/api/led-state",        HTTP_GET,  handle_led_state_get);
@@ -2171,6 +2285,28 @@ void set_voice_db_status_getter(VoiceDbStatusGetter getter)
     }
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     g_voice_db_status_getter = std::move(getter);
+    xSemaphoreGive(g_mutex);
+}
+
+void set_sano_weights_sink(SanoWeightsSink sink)
+{
+    if (g_mutex == nullptr) {
+        g_sano_weights_sink = std::move(sink);
+        return;
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_sano_weights_sink = std::move(sink);
+    xSemaphoreGive(g_mutex);
+}
+
+void set_sano_weights_status_getter(SanoWeightsStatusGetter getter)
+{
+    if (g_mutex == nullptr) {
+        g_sano_weights_status_getter = std::move(getter);
+        return;
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_sano_weights_status_getter = std::move(getter);
     xSemaphoreGive(g_mutex);
 }
 

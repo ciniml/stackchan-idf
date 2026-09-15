@@ -72,6 +72,8 @@ void set_voice_db_sink(VoiceDbSink sink);
 void set_voice_db_status_getter(VoiceDbStatusGetter getter);
 void set_hmm_voice_sink(HmmVoiceSink sink);
 void set_hmm_voice_status_getter(HmmVoiceStatusGetter getter);
+void set_sano_weights_sink(SanoWeightsSink sink);
+void set_sano_weights_status_getter(SanoWeightsStatusGetter getter);
 
 // Register the one-shot camera capture sink (GET /api/camera/capture).
 // See wifi_config_service.hpp for the contract.

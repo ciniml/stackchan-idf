@@ -159,6 +159,18 @@ using HmmVoiceStatusGetter = std::function<HmmVoiceStatus()>;
 void set_hmm_voice_sink(HmmVoiceSink sink);
 void set_hmm_voice_status_getter(HmmVoiceStatusGetter getter);
 
+// sanoTTS-jp の重み blob (拡張テーブルの sanotts 領域):
+//   POST /api/sanotts        — body = blob。sink が検証 + flash 保存 + live ロード。
+//   POST /api/sanotts/clear  — data=nullptr / len=0 で呼ばれる (削除)。
+//   POST /api/sanotts/fetch  — {"release":"v1.1.0","file":"saanotts-jp-v4-int8.bin"}
+//                              機体が公式 GitHub Releases から取得して sink へ。
+//   GET  /api/sanotts        — status getter の内容を JSON で返す。
+using SanoWeightsSink = HmmVoiceSink;
+using SanoWeightsStatus = HmmVoiceStatus;
+using SanoWeightsStatusGetter = std::function<SanoWeightsStatus()>;
+void set_sano_weights_sink(SanoWeightsSink sink);
+void set_sano_weights_status_getter(SanoWeightsStatusGetter getter);
+
 // One-shot camera capture for `GET /api/camera/capture`. The sink fills
 // `out` with a raw row-major frame, reports its dimensions, and names the
 // pixel encoding in `format` — served verbatim as the X-Frame-Format

@@ -242,16 +242,19 @@ bool Speech::say(std::u32string_view reading)
     opt.sample_rate_hz = kSampleRate; // playback rate is fixed for envelope sync
 
     pcm_.clear();
-    auto r = jtts::synthesize(std::u32string{reading}, pcm_, opt);
+    // synthesize_ex は実際の出力レートを返す (sanoTTS は 22.05 kHz 固定、他は
+    // opt.sample_rate_hz)。再生と包絡はそのレートで行う。
+    auto r = jtts::synthesize_ex(std::u32string{reading}, pcm_, opt);
     if (!r || pcm_.empty()) {
         return false;
     }
+    play_rate_ = *r;
 
-    build_envelope_from_pcm(pcm_, envelope_, kSampleRate, kEnvelopeStepMs);
+    build_envelope_from_pcm(pcm_, envelope_, play_rate_, kEnvelopeStepMs);
 
     duration_ms_.store(
         static_cast<std::uint32_t>(static_cast<float>(pcm_.size()) * 1000.0f /
-                                   static_cast<float>(kSampleRate)),
+                                   static_cast<float>(play_rate_)),
         std::memory_order_relaxed);
     start_ms_.store(static_cast<std::uint32_t>(esp_timer_get_time() / 1000),
                     std::memory_order_release);
@@ -271,7 +274,7 @@ bool Speech::say(std::u32string_view reading)
                  static_cast<unsigned>(live.sample_rate),
                  static_cast<unsigned>(pcm_.size()));
     }
-    M5.Speaker.playRaw(pcm_.data(), pcm_.size(), kSampleRate, /*stereo=*/false,
+    M5.Speaker.playRaw(pcm_.data(), pcm_.size(), play_rate_, /*stereo=*/false,
                        /*repeat=*/1, /*channel=*/-1,
                        /*stop_current_sound=*/true);
     return true;

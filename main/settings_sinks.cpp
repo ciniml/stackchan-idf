@@ -5,6 +5,7 @@
 
 #include "voice_db.hpp"
 #include "hmm_voice.hpp"
+#include "sano_weights.hpp"
 
 #include <cstdio>
 #include <memory>
@@ -444,6 +445,18 @@ void register_avatar_bytecode_sinks()
     stackchan::wifi_config::set_hmm_voice_status_getter(
         []() -> stackchan::wifi_config::HmmVoiceStatus {
             const auto st = hmm_voice::status();
+            return {st.loaded, st.stored_bytes, st.capacity};
+        });
+
+    // sanoTTS-jp 重み (/api/sanotts、HTTP のみ)。
+    stackchan::wifi_config::set_sano_weights_sink(
+        [](const std::uint8_t* data, std::size_t len) -> const char* {
+            if (data == nullptr || len == 0) return sano_weights::clear();
+            return sano_weights::store({data, len});
+        });
+    stackchan::wifi_config::set_sano_weights_status_getter(
+        []() -> stackchan::wifi_config::SanoWeightsStatus {
+            const auto st = sano_weights::status();
             return {st.loaded, st.stored_bytes, st.capacity};
         });
 }
