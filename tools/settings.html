@@ -727,7 +727,8 @@
 
       <label for="jtts-engine">エンジン</label>
       <select id="jtts-engine">
-        <option value="auto">自動 (HMM ボイス &gt; 音声 DB &gt; フォルマント)</option>
+        <option value="auto">自動 (sanoTTS &gt; HMM ボイス &gt; 音声 DB &gt; フォルマント)</option>
+        <option value="sano">sanoTTS-jp (重み必須、無ければフォールバック)</option>
         <option value="hmm">HMM 合成 (ボイス必須、無ければフォールバック)</option>
         <option value="unit">単位連結 (DB 必須、無ければフォルマント)</option>
         <option value="formant">フォルマント合成のみ</option>
@@ -1777,7 +1778,7 @@ function writeJttsForm(json) {
   if (obj.synth === 'classic' || obj.synth === 'v2') {
     document.getElementById('jtts-synth').value = obj.synth;
   }
-  if (['auto', 'formant', 'unit', 'hmm'].includes(obj.engine)) {
+  if (['auto', 'formant', 'unit', 'hmm', 'sano'].includes(obj.engine)) {
     document.getElementById('jtts-engine').value = obj.engine;
   }
   for (const [key, id] of Object.entries(JTTS_NUM_FIELDS)) {

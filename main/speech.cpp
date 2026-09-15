@@ -92,6 +92,8 @@ void apply_engine(jtts::Options& opt, const cJSON* item)
         opt.engine = jtts::Engine::Unit;
     } else if (std::strcmp(item->valuestring, "hmm") == 0) {
         opt.engine = jtts::Engine::Hmm;
+    } else if (std::strcmp(item->valuestring, "sano") == 0) {
+        opt.engine = jtts::Engine::Sano;
     }
 }
 
