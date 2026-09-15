@@ -158,25 +158,23 @@ jobs:
           make set-target BOARD="$BOARD"
           echo "=== Building $BOARD ==="
           make build BOARD="$BOARD"
+          echo "=== Building Recovery for $BOARD (ADR-001) ==="
+          # Recovery は固定領域に置く小さな更新専用アプリ (recovery/)。ブートローダーは
+          # Main と同じ bootloader_components/main。version.txt は recovery/ にも置く。
+          cp version.txt recovery/version.txt
+          rm -rf "recovery/build-$BOARD"
+          make -C recovery set-target BOARD="$BOARD" IDF_PATH="$IDF_PATH"
+          make -C recovery build BOARD="$BOARD" IDF_PATH="$IDF_PATH"
           echo "=== ccache stats ==="
           ccache --show-stats || true
-          echo "=== Packing firmware for $BOARD ==="
-          python3 script/pack_firmware.py \
-            --build-dir "build-$BOARD" \
-            --out "firmware-$BOARD.bin"
-          ls -lh "firmware-$BOARD.bin"
-          outdir="release/$BOARD"
-          mkdir -p "$outdir"
-          cp "build-$BOARD/bootloader/bootloader.bin"           "$outdir/"
-          cp "build-$BOARD/partition_table/partition-table.bin" "$outdir/"
-          cp "build-$BOARD/ota_data_initial.bin"                "$outdir/"
-          cp "build-$BOARD/stackchan_idf.bin"                   "$outdir/"
-          cp "firmware-$BOARD.bin" "$outdir/firmware-${VERSION}-${BOARD}.bin"
-          cp "build-$BOARD/flash_args" "$outdir/"
-          cp README.md "$outdir/" 2>/dev/null || true
+          echo "=== Packing release for $BOARD (ADR-001 layout) ==="
+          # bootloader / 機体正本の標準表 / bootctl / recovery / exttab / Main と、
+          # Web flasher が読む flash_manifest.json、0x0 から書ける結合イメージ。
+          python3 script/pack_release.py --board "$BOARD" --version "$VERSION" --out "release/$BOARD"
+          cp README.md "release/$BOARD/" 2>/dev/null || true
           echo "=== Firmware size for $BOARD ==="
           python3 -m esp_idf_size "build-$BOARD/stackchan_idf.map" --format=text || true
-          (cd "$outdir" && zip -r "../../firmware-${VERSION}-${BOARD}.zip" .)
+          (cd "release/$BOARD" && zip -r "../../firmware-${VERSION}-${BOARD}.zip" .)
           ls -lh "firmware-${VERSION}-${BOARD}.zip"
 
       - name: Upload firmware artifact (${{ matrix.board }})
@@ -233,6 +231,14 @@ jobs:
 
             PSRAM モードは bootloader レベルで確定するため、ボードごとに別 firmware です。
 
+            ## パーティション構成 (ADR-001)
+            このリリースから flash の構成が変わりました (Recovery アプリ + 拡張パーティションテーブル)。
+            旧構成 (2 面 OTA) の機体には **USB での初回書き込みが必要** で、BLE / Wi-Fi の OTA では
+            移行できません。書き込むと保存済みの顔データ・HMM ボイス・sanoTTS の重みは消えます
+            (Wi-Fi などの設定は残ります。結合イメージ `firmware-<ver>-<board>.bin` を 0x0 に書く場合は
+            設定も消えます)。以後の更新は Recovery 経由で行われます (設定ページからの release 取得、
+            BLE / HTTP アップロード)。ZIP の `flash_manifest.json` に各イメージの書き込み位置があります。
+
             ## Features
             - **OpenAI Realtime API / Google Gemini Live API** どちらかでリアルタイム音声会話
             - **BLE 経由の設定 / プロビジョニング** (X25519 + AES-256-GCM 暗号化セッション)
@@ -252,16 +258,21 @@ jobs:
 
             ### コマンドラインから初回書き込み
             1. ボードに合った ZIP (`-cores3` / `-atoms3r` / `-atoms3` / `-stopwatch`) をダウンロード・展開
-            2. esptool で書き込み:
+            2. esptool で書き込み (結合イメージ。NVS 設定も初期化される):
                ```bash
                esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 460800 write_flash \
                  0x0 firmware-${{ steps.version.outputs.version }}-<board>.bin
                ```
+               設定を残したい場合は ZIP を展開して `flash_args` の一覧どおりに個別に書き込む:
+               ```bash
+               esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 460800 write_flash @flash_args
+               ```
 
-            ### BLE 経由の OTA(既に動いている場合)
+            ### OTA(既に ADR-001 構成で動いている場合)
             1. <https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/settings.html>
-            2. BLE 接続後「ファームウェア更新 (OTA)」を開き、ZIP に同梱の
-               `stackchan_idf.bin` を選択 → 書き込み
+            2. BLE 接続後「ファームウェア更新 (OTA)」でリリースを選ぶと、機体が Recovery で
+               再起動して Wi-Fi で取得します (約 30 秒)。Wi-Fi が無い場合は同梱の
+               `stackchan_idf.bin` を選ぶと BLE で転送します (4〜5 分)
 
             ## Build Information
             - **ESP-IDF**: release-v5.5

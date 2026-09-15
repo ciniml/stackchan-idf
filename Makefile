@@ -50,7 +50,7 @@ endif
 
 .PHONY: build clean set-target flash flash-monitor monitor monitor-log erase-flash \
         build-docker docker-shell docker-clean \
-        audio-cli audio-play audio-test
+        audio-cli audio-play audio-test recovery-build pack
 
 # Capture serial output non-interactively (for CI / agent contexts where
 # idf.py monitor refuses to attach without a TTY). SECONDS defaults to 8.
@@ -206,3 +206,15 @@ docker-shell:
 			git config --global --add safe.directory "$(DOCKER_WORKDIR)" && \
 			. "$$IDF_PATH/export.sh" && \
 			exec bash'
+
+# --- ADR-001 release packaging ---------------------------------------------
+# Main (build-$(BOARD)) と Recovery (recovery/build-$(BOARD)) を揃えてから、
+# 機体に書く一式 + flash_manifest.json + 結合イメージを release/$(BOARD) に作る。
+VERSION ?= $(shell git describe --tags --always --dirty)
+
+recovery-build:
+	$(MAKE) -C recovery set-target BOARD=$(BOARD) IDF_PATH=$(IDF_PATH)
+	$(MAKE) -C recovery build BOARD=$(BOARD) IDF_PATH=$(IDF_PATH)
+
+pack:
+	python3 script/pack_release.py --board $(BOARD) --version $(VERSION) --out release/$(BOARD)

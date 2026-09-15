@@ -127,23 +127,44 @@
 <script type="module">
 import { ESPLoader, Transport } from './esptool.js';
 
-// Initial-flash layout for the Stack-chan partition table (see partitions.csv).
+// Initial-flash layout.
+//
+// Releases built with the ADR-001 layout (docs/adr-001-extensible-flash-layout.md)
+// ship a `flash_manifest.json` inside the ZIP listing every image and its
+// address (bootloader / partition table / bootctl / recovery / exttab / app).
+// The flasher follows that manifest verbatim, so the page needs no update
+// when the layout changes.
+//
+// Older releases (no manifest) use the legacy two-OTA-slot layout below:
 //   bootloader        @ 0x0000
 //   partition-table   @ 0x8000
 //   otadata (initial) @ 0xd000   — empty/all-FF, makes ota_0 the active slot
 //   stackchan_idf.bin @ 0x10000  — the running app in ota_0
-// ota_1 is left blank; the first BLE OTA fills it. ota_data_initial.bin is
-// shipped alongside this HTML (CI deploys it from build/) so the flasher can
-// reset the bootloader state without unpacking it from the release ZIP.
+// ota_data_initial.bin is shipped alongside this HTML (CI deploys it) so the
+// flasher can reset the bootloader state without unpacking it from the ZIP.
 //
 // `source: 'zip'`   -> extract from the release ZIP staged at ./firmware/<tag>/
 // `source: 'local'` -> fetch from the same origin as this page
-const FLASH_PARTS = [
+const LEGACY_FLASH_PARTS = [
   { name: 'bootloader.bin',       address: 0x0,     source: 'zip'   },
   { name: 'partition-table.bin',  address: 0x8000,  source: 'zip'   },
   { name: 'ota_data_initial.bin', address: 0xd000,  source: 'local' },
   { name: 'stackchan_idf.bin',    address: 0x10000, source: 'zip'   },
 ];
+
+// Build the part list from the ZIP's flash_manifest.json when present.
+function flashPartsFor(entries) {
+  const m = entries.get('flash_manifest.json');
+  if (!m) return { parts: LEGACY_FLASH_PARTS, layout: 'legacy (two OTA slots)' };
+  const manifest = JSON.parse(new TextDecoder().decode(new Uint8Array(m)));
+  const parts = (manifest.parts || []).map((p) => ({
+    name: p.name,
+    address: typeof p.address === 'string' ? parseInt(p.address, 16) : p.address,
+    source: 'zip',
+  }));
+  if (!parts.length) throw new Error('flash_manifest.json has no parts');
+  return { parts, layout: `${manifest.layout || 'manifest'} (${manifest.flash_size || '?'})` };
+}
 
 const $ = (id) => document.getElementById(id);
 const logEl = $('log');
@@ -372,8 +393,20 @@ $('btnFlash').addEventListener('click', async () => {
     return;
   }
 
+  let flashParts;
+  try {
+    const sel = flashPartsFor(entries);
+    flashParts = sel.parts;
+    log(`Layout: ${sel.layout} — ${flashParts.map((p) => `${p.name}@0x${p.address.toString(16)}`).join(' ')}`);
+  } catch (e) {
+    log('flash_manifest.json is invalid: ' + e.message, 'warn');
+    $('btnFlash').disabled = false;
+    $('btnDisconnect').disabled = false;
+    return;
+  }
+
   const fileArray = [];
-  for (const part of FLASH_PARTS) {
+  for (const part of flashParts) {
     let buf;
     try {
       if (part.source === 'local') {

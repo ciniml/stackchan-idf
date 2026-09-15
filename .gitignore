@@ -44,3 +44,6 @@ components/jtts/test/host/build/
 
 # Rust BLE CLI build artifacts
 /tools/ble-cli/target/
+
+# ADR-001 release packaging output (script/pack_release.py, `make pack`)
+release/
