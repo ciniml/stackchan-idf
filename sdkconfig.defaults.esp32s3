@@ -34,3 +34,9 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # CONFIG_ESPTOOLPY_FLASHMODE_DIO=y に戻す。
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+
+# mDNS task stack + its allocations in PSRAM. mDNS never touches flash, and
+# on CoreS3 every KiB of internal RAM matters (device-side TLS needs a
+# contiguous DMA-capable block for the AES bounce buffers).
+CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM=y
+CONFIG_MDNS_MEMORY_ALLOC_SPIRAM=y

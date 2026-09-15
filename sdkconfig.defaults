@@ -91,10 +91,14 @@ CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
 
 # Keep hardware AES on (ESP32-S3 doesn't expose hardware-accelerated GCM
-# — GHASH is always done in software here regardless of config). The AES
-# block operation uses a small DMA descriptor in internal RAM; the
-# ALWAYSINTERNAL bump above is what keeps that allocation reliable under
-# WebSocket reconnect pressure.
+# — GHASH is always done in software here regardless of config). NOTE:
+# with MBEDTLS_EXTERNAL_MEM_ALLOC=y the TLS record buffers live in PSRAM,
+# and the AES-DMA driver (esp_aes_process_dma_ext_ram) bounce-copies every
+# record through two transient 1600 B MALLOC_CAP_DMA|INTERNAL buffers. So
+# device-side HTTPS needs "DMA largest" >= ~2 KiB at all times; when
+# internal RAM is squeezed (Wi-Fi + BLE + httpd + HMM voice) this shows up
+# as "esp-aes: Failed to allocate memory" → esp-tls read error -0x0001.
+# Fix that by freeing internal RAM, not by switching to software AES.
 CONFIG_MBEDTLS_HARDWARE_AES=y
 
 # Bump the preferred ATT MTU to the maximum (517 bytes). Default is 256,

@@ -5,7 +5,12 @@
 
 #include <cstdint>
 
+#include <sdkconfig.h>
+
 #include <esp_heap_caps.h>
+#if CONFIG_HEAP_TASK_TRACKING
+#include <esp_heap_task_info.h>
+#endif
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -79,6 +84,42 @@ void diag_stack_hwm()
     heap_caps_free(buf);
 #else
     ESP_LOGW(kTag, "hwm: CONFIG_FREERTOS_USE_TRACE_FACILITY disabled — rebuild with it enabled");
+#endif
+}
+
+
+void diag_heap_per_task()
+{
+#if CONFIG_HEAP_TASK_TRACKING
+    // Partition 0: PSRAM. Partition 1 (caps=0/mask=0 = "everything else"):
+    // internal RAM. Task stacks created with xTaskCreate are attributed to
+    // the CREATING task (the allocation happens there), and everything
+    // allocated before the scheduler started shows up as "Pre-Scheduler".
+    constexpr std::size_t kMaxTotals = 40;
+    static heap_task_totals_t totals[kMaxTotals];
+    std::size_t num_totals = 0;
+    heap_task_info_params_t p{};
+    p.caps[0] = MALLOC_CAP_SPIRAM;
+    p.mask[0] = MALLOC_CAP_SPIRAM;
+    p.caps[1] = 0;
+    p.mask[1] = 0;
+    p.totals = totals;
+    p.num_totals = &num_totals;
+    p.max_totals = kMaxTotals;
+    heap_caps_get_per_task_info(&p);
+    ESP_LOGI(kTag, "=== heap by task (internal bytes/blocks, PSRAM bytes) ===");
+    std::size_t int_sum = 0;
+    for (std::size_t i = 0; i < num_totals; ++i) {
+        const char* name = totals[i].task != nullptr ? pcTaskGetName(totals[i].task) : "Pre-Scheduler";
+        ESP_LOGI(kTag, "  %-18s INT=%6u B /%4u  PSRAM=%8u B",
+                 name, static_cast<unsigned>(totals[i].size[1]), static_cast<unsigned>(totals[i].count[1]),
+                 static_cast<unsigned>(totals[i].size[0]));
+        int_sum += totals[i].size[1];
+    }
+    ESP_LOGI(kTag, "  internal tracked total=%u B, free=%u B", static_cast<unsigned>(int_sum),
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
+#else
+    ESP_LOGW(kTag, "per-task heap: CONFIG_HEAP_TASK_TRACKING disabled — rebuild with it enabled");
 #endif
 }
 

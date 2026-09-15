@@ -70,7 +70,7 @@ const char* fetch_and_install(const std::string& voice_id, const InstallFn& inst
     const std::optional<int> status_opt = https::open_follow_redirects(client, cl);
     if (!status_opt.has_value()) {
         cleanup();
-        return "connect / redirect failed (STA down?)";
+        return "connect / TLS failed (STA down or internal RAM low?)";
     }
     if (*status_opt != 200) {
         cleanup();

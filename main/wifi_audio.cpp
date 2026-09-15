@@ -558,7 +558,7 @@ void receiver_task(void* /*arg*/)
     if (sock_pcm < 0 || sock_aac < 0) {
         if (sock_pcm >= 0) ::close(sock_pcm);
         if (sock_aac >= 0) ::close(sock_aac);
-        vTaskDelete(nullptr);
+        vTaskDeleteWithCaps(nullptr);
         return;
     }
 
@@ -567,7 +567,8 @@ void receiver_task(void* /*arg*/)
         ESP_LOGE(kTag, "player alloc failed");
         ::close(sock_pcm);
         ::close(sock_aac);
-        vTaskDelete(nullptr);
+        player.reset();  // vTaskDeleteWithCaps never returns: free before it
+        vTaskDeleteWithCaps(nullptr);
         return;
     }
 
@@ -679,10 +680,12 @@ void start(SharedState& state, bool conversation_enabled, bool rtp_enabled)
         return;
     }
 
-    // Internal-RAM stack: lwip + M5.Speaker + AAC decode, no flash ops. Core 1
-    // away from NimBLE. 8 KiB matches the BLE AAC worker's headroom.
-    if (xTaskCreatePinnedToCore(receiver_task, "wifi-audio", 8192, nullptr,
-                                tskIDLE_PRIORITY + 6, nullptr, 1) != pdPASS) {
+    // PSRAM stack: lwip + M5.Speaker + AAC decode, no flash ops (the only
+    // reason a stack would have to stay internal). Core 1 away from NimBLE.
+    // 8 KiB matches the BLE AAC worker's headroom.
+    if (xTaskCreatePinnedToCoreWithCaps(receiver_task, "wifi-audio", 8192, nullptr,
+                                        tskIDLE_PRIORITY + 6, nullptr, 1,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         ESP_LOGE(kTag, "xTaskCreate(wifi-audio) failed");
     }
 }

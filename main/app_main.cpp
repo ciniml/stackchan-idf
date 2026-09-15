@@ -176,6 +176,9 @@ void record_and_playback(std::uint32_t seconds, const char* label)
         // right-sized from measurement (guessed reductions broke boot twice).
         if (++tick % 6 == 0) {
             stackchan::app::diag_stack_hwm();
+#if CONFIG_HEAP_TASK_TRACKING
+            stackchan::app::diag_heap_per_task();
+#endif
         }
 
     }
@@ -238,8 +241,11 @@ extern "C" void app_main()
     // core came up. The promotion happens after core init completes; see the
     // ESP_OTA_IMG_PENDING_VERIFY self-test at the "ready" point below.
 
-    xTaskCreatePinnedToCore(heap_monitor_task, "heap_mon", 3072, nullptr, 1, nullptr, 1);
+    // PSRAM stack: only reads heap stats and logs — no flash access.
+    xTaskCreatePinnedToCoreWithCaps(heap_monitor_task, "heap_mon", 3072, nullptr, 1, nullptr, 1,
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
+    stackchan::app::diag_heap("pre-board");
     auto board_result = stackchan::board::Board::begin();
     if (!board_result) {
         ESP_LOGE(kTag, "Board::begin() failed: %d", static_cast<int>(board_result.error()));
@@ -685,6 +691,7 @@ extern "C" void app_main()
     // makes streaming playback choppy. Pass the conversation-enabled flag
     // so the sink refuses `begin` while voice chat is on.
 #if CONFIG_STACKCHAN_AUDIO_STREAM_ENABLED
+    stackchan::app::diag_heap("pre-audio_stream");
     stackchan::app::audio_stream::start(*g_state, cfg.openai_enabled);
 #else
     ESP_LOGI(kTag, "audio_stream: disabled at compile time (slim build)");
@@ -696,6 +703,7 @@ extern "C" void app_main()
     // 非BLE経路 (set_wifi_connected) は null ガード済みなので BLE off でも安全。
     // BLE は全モードで起動 (設定に必要)。ASR モードの内部/DMA RAM は
     // SPIRAM_MALLOC_RESERVE_INTERNAL 拡大 + AFE/タスクの PSRAM 寄せで捻出する。
+    stackchan::app::diag_heap("pre-config(ble)");
     if (auto r = stackchan::config::start(cfg); !r) {
         ESP_LOGE(kTag, "BLE config service failed to start: %d (continuing without BLE)",
                  static_cast<int>(r.error()));
@@ -706,6 +714,7 @@ extern "C" void app_main()
     // 後段の espnow::start が固定チャネルで行う。httpd も上がらないため HTTP sink
     // 登録も飛ばす (設定は別モードで行う)。
     if (!espnow_any) {
+        stackchan::app::diag_heap("pre-wifi");
         stackchan::app::wifi_start(cfg);
         // Same sink/getter on the Wi-Fi side. The Wi-Fi service starts on a worker
         // task after Wi-Fi STA gets an IP — the calls below race that; the setters
@@ -781,6 +790,7 @@ extern "C" void app_main()
     // with the conversation backend, so it self-disables when voice chat is on.
 #if CONFIG_STACKCHAN_WIFI_AUDIO_ENABLED
     if (!espnow_any) {
+        stackchan::app::diag_heap("pre-wifi_audio");
         stackchan::app::wifi_audio::start(*g_state, cfg.openai_enabled, cfg.rtp_audio_enabled);
     }
 #else
@@ -894,9 +904,11 @@ extern "C" void app_main()
     // flavour (device_ui on touch boards, atom_status on button-only ones —
     // profile.button_overlay_ui decides). render_task and demo_loop
     // dispatch through screens:: from here on.
+    stackchan::app::diag_heap("pre-screens/render");
     stackchan::app::screens::init(board.display(), *g_state, profile);
     stackchan::app::start_render_task(*g_render_args);
     if (!no_servo_bus && cfg.servo_enabled && g_servo_args != nullptr) {
+        stackchan::app::diag_heap("pre-servo");
         stackchan::app::start_servo_task(*g_servo_args);
     }
     // NeoPixel animation task. Driven by SharedState (led_mode / led_color /
@@ -904,6 +916,7 @@ extern "C" void app_main()
     // (CoreS3 = GPIO9, AtomNyan = GPIO38; both surface a NekomimiLedStrip).
     if (auto* strip = board.led_strip(); strip != nullptr && !kLedTaskDisabledForDebug) {
         g_led_args = new stackchan::app::LedTaskArgs{g_state, strip};
+        stackchan::app::diag_heap("pre-led");
         stackchan::app::start_led_task(*g_led_args);
     } else if (kLedTaskDisabledForDebug) {
         ESP_LOGW(kTag, "led_task intentionally NOT started (kLedTaskDisabledForDebug)");
@@ -1033,6 +1046,7 @@ extern "C" void app_main()
     // stack for the same pool. mcp_events::start allocates the queue (in
     // PSRAM) and a 3 KiB internal-RAM stack for the diff monitor — small but
     // fragmenting if it lands before the segment buffers.
+    stackchan::app::diag_heap("pre-mcp_events");
     stackchan::wifi_config::mcp_events::start(+[]() -> int {
         return g_state == nullptr ? 0
                                   : static_cast<int>(g_state->conv.status.load(
@@ -1156,6 +1170,7 @@ extern "C" void app_main()
             // ため載せる (16kHz モデルなら高速)。RAM に載るか実測で確認。
             ESP_LOGI(kTag, "ASR mode: unit voice DB skipped");
         }
+        stackchan::app::diag_heap("pre-hmm_voice(http up)");
         if (stackchan::app::hmm_voice::init()) {
             ESP_LOGI(kTag, "hts: HMM voice active — HMM TTS enabled");
         }
@@ -1174,6 +1189,7 @@ extern "C" void app_main()
     // ASR や、頭部を外部制御する ESP-NOW とは排他 (通常モードのみ)。トリガは
     // HTTP /api/dance/start|stop (BLE/画面は P4)。
     if (!asr_mode && !espnow_any) {
+        stackchan::app::diag_heap("pre-dance");
         stackchan::app::start_dance_engine(*g_state, servo_limits);
         stackchan::wifi_config::set_dance_control_sink(&stackchan::app::dance_control);
         stackchan::wifi_config::set_dance_data_sink(&stackchan::app::dance_upload);
@@ -1183,6 +1199,7 @@ extern "C" void app_main()
     // タイマー本体は demo_loop が回すので、ここは SharedState.lt の読み出しのみ。
     stackchan::wifi_config::set_lt_state_getter(&lt_state_view);
 
+    stackchan::app::diag_heap("pre-demo_loop");
     stackchan::app::run_demo_loop({
         .state = g_state,
         .board = &board,

@@ -24,4 +24,10 @@ void diag_heap(const char* label);
 // CONFIG_FREERTOS_USE_TRACE_FACILITY=y.
 void diag_stack_hwm();
 
+// Dump live heap usage per task (internal bytes/blocks and PSRAM bytes) so
+// the internal-RAM budget can be attributed. Requires
+// CONFIG_HEAP_TASK_TRACKING=y (diagnostic builds only; it costs a few bytes
+// per block); logs a warning otherwise.
+void diag_heap_per_task();
+
 } // namespace stackchan::app

@@ -85,7 +85,7 @@ void led_task_entry(void* arg)
     const std::size_t n = strip.size();
     if (n == 0) {
         ESP_LOGW(kTag, "strip size = 0, exiting");
-        vTaskDelete(nullptr);
+        vTaskDeleteWithCaps(nullptr);
         return;
     }
 
@@ -223,7 +223,11 @@ void start_led_task(LedTaskArgs& args)
 {
     // 4 KiB is comfortable for the sin/HSV math + 64 B local frame buffer.
     // Core 1 keeps the I2C bursts off core 0 where NimBLE + Wi-Fi live.
-    xTaskCreatePinnedToCore(led_task_entry, "led", 4096, &args, 2, nullptr, 1);
+    // Stack in PSRAM: I2C LED strip + HSV math only, no flash / NVS access.
+    if (xTaskCreatePinnedToCoreWithCaps(led_task_entry, "led", 4096, &args, 2, nullptr, 1,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        ESP_LOGE(kTag, "xTaskCreate(led) failed");
+    }
 }
 
 } // namespace stackchan::app

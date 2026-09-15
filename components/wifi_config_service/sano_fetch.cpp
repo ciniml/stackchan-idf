@@ -68,7 +68,13 @@ const char* fetch_and_install(const std::string& release_tag, const std::string&
     const std::optional<int> status_opt = https::open_follow_redirects(client, cl);
     if (!status_opt.has_value()) {
         cleanup();
-        return "connect / redirect failed (STA down?)";
+        return "connect / TLS failed (STA down or internal RAM low?)";
+    }
+    if (*status_opt <= 0) {
+        // esp_http_client returns status 0 when the TLS read died before a
+        // status line arrived (typically an allocation failure inside mbedTLS).
+        cleanup();
+        return "TLS read failed (internal RAM low?)";
     }
     if (*status_opt != 200) {
         cleanup();

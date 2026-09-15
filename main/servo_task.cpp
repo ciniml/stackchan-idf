@@ -32,7 +32,7 @@ void servo_task_entry(void* arg)
     auto bus_result = scs_servo::ScsBus::create(args.bus_cfg);
     if (!bus_result) {
         ESP_LOGE(kTag, "ScsBus::create failed: %d", static_cast<int>(bus_result.error()));
-        vTaskDelete(nullptr);
+        vTaskDeleteWithCaps(nullptr);
         return;
     }
     auto bus = std::move(*bus_result);
@@ -228,7 +228,14 @@ void servo_task_entry(void* arg)
 
 void start_servo_task(ServoTaskArgs& args)
 {
-    xTaskCreatePinnedToCore(servo_task_entry, "servo", 8192, &args, 4, nullptr, 0);
+    // Stack in PSRAM: this task only drives UART1 (SCS bus) and reads shared
+    // state — it never calls flash / NVS / OTA APIs, which are the only
+    // things that require an internal-RAM stack. Frees 8 KiB of internal
+    // RAM (see docs: internal RAM budget on CoreS3 is the TLS bottleneck).
+    if (xTaskCreatePinnedToCoreWithCaps(servo_task_entry, "servo", 8192, &args, 4, nullptr, 0,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        ESP_LOGE(kTag, "xTaskCreate(servo) failed");
+    }
 }
 
 } // namespace stackchan::app

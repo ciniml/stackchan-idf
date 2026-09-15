@@ -88,7 +88,7 @@ const char* conv_status_name(int s)
 void monitor_task_entry(void* /*arg*/)
 {
     if (g_conv_getter == nullptr) {
-        vTaskDelete(nullptr);
+        vTaskDeleteWithCaps(nullptr);
         return;
     }
     int last = g_conv_getter();
@@ -218,8 +218,13 @@ void start(ConvStatusGetter getter)
         // (~38 s) when an I2C-driven ISR landed on top of a state-change
         // publish — the IRQ frame + interrupted vfprintf together breached
         // the canary. 2 KiB had already been ruled out at boot.
-        xTaskCreatePinnedToCore(monitor_task_entry, "mcp-evt-mon", 4096, nullptr,
-                                tskIDLE_PRIORITY + 1, nullptr, 0);
+        // PSRAM stack: it only polls shared state and posts SSE events (no
+        // flash / NVS access), so it need not occupy internal RAM.
+        if (xTaskCreatePinnedToCoreWithCaps(monitor_task_entry, "mcp-evt-mon", 4096, nullptr,
+                                            tskIDLE_PRIORITY + 1, nullptr, 0,
+                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+            ESP_LOGE(kTag, "xTaskCreate(mcp-evt-mon) failed");
+        }
     }
 }
 
