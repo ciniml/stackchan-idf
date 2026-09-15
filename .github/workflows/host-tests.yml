@@ -81,6 +81,16 @@ jobs:
           cmake --build build-san
           ctest --test-dir build-san --output-on-failure
 
+      # --- saanotts: vendored sanoTTS-jp core (build only) -------------------
+      # The acceptance tests need the non-MIT weight blob, which is not in the
+      # repo; CI just proves the vendored C99 core compiles on a plain gcc.
+      - name: saanotts host build
+        working-directory: components/saanotts/test/host
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
       # --- scs_servo: SCS0009 protocol + path generator -------------------
       - name: scs_servo host tests
         working-directory: components/scs_servo/test/host
