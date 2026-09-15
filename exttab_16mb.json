@@ -2,13 +2,13 @@
   "_comment": "ADR-001 16 MB (CoreS3 / StopWatch) 拡張パーティションテーブル。tools/flash_layout/gen_exttab.py で生成。",
   "flash_size": "0x1000000",
   "reserved_offset": "0x1A0000",
-  "generation": 1,
+  "generation": 2,
   "entries": [
     {"label": "main",       "kind": "app",    "size": "0x500000", "required": true},
     {"label": "storage",    "kind": "spiffs", "size": "0x100000"},
     {"label": "voice",      "kind": "raw",    "size": "0x380000"},
     {"label": "model",      "kind": "spiffs", "size": "0x2E0000"},
-    {"label": "sanotts",    "kind": "raw",    "size": "0xA0000"},
+    {"label": "sanotts",    "kind": "raw",    "size": "0xB0000"},
     {"label": "bluescript", "kind": "raw",    "size": "0x100000"}
   ]
 }
