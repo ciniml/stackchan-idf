@@ -78,17 +78,32 @@ void apply_formant_scale(std::vector<internal::Segment>& segs, float scale) {
 
 }  // namespace
 
-tl::expected<void, Error> synthesize(std::u32string_view kana,
-                                     std::vector<std::int16_t>& out, const Options& opt_in) {
+namespace {
+
+tl::expected<std::uint32_t, Error> synthesize_impl(std::u32string_view kana,
+                                                   std::vector<std::int16_t>& out,
+                                                   const Options& opt_in, bool allow_native_rate) {
     out.clear();
     Options opt = resolve_defaults(opt_in);
+
+    // sanoTTS エンジン: 重みがロード済みなら最優先。出力は 22.05 kHz 固定なので、
+    // 呼び出し側がレートを受け取れる (synthesize_ex) か、要求レートが一致する
+    // ときだけ使う。
+    if (opt.engine == Engine::Auto || opt.engine == Engine::Sano) {
+        if (allow_native_rate || opt.sample_rate_hz == 22050u) {
+            std::uint32_t rate = 0;
+            if (internal::render_sano(kana, out, opt, rate)) {
+                return rate;
+            }
+        }
+    }
 
     // HMM エンジン: ボイスがロード済みなら最優先 (品質最良)。
     // アクセント記号 (' と /) は HMM のみ解釈し、他エンジンでは
     // parse_kana が読み飛ばす。
-    if (opt.engine == Engine::Auto || opt.engine == Engine::Hmm) {
+    if (opt.engine == Engine::Auto || opt.engine == Engine::Hmm || opt.engine == Engine::Sano) {
         if (internal::render_hmm(kana, out, opt)) {
-            return {};
+            return opt.sample_rate_hz;
         }
     }
 
@@ -105,7 +120,7 @@ tl::expected<void, Error> synthesize(std::u32string_view kana,
         auto db = g_voice_db.load();
         if (db && db->sample_rate() == opt.sample_rate_hz &&
             internal::render_units(moras, *db, out, opt)) {
-            return {};
+            return opt.sample_rate_hz;
         }
     }
 
@@ -124,7 +139,21 @@ tl::expected<void, Error> synthesize(std::u32string_view kana,
     out.reserve(estimated_samples);
 
     internal::render_segments(segs, out, opt);
+    return opt.sample_rate_hz;
+}
+
+}  // namespace
+
+tl::expected<void, Error> synthesize(std::u32string_view kana,
+                                     std::vector<std::int16_t>& out, const Options& opt) {
+    auto r = synthesize_impl(kana, out, opt, /*allow_native_rate=*/false);
+    if (!r) return tl::make_unexpected(r.error());
     return {};
+}
+
+tl::expected<std::uint32_t, Error> synthesize_ex(std::u32string_view kana,
+                                                 std::vector<std::int16_t>& out, const Options& opt) {
+    return synthesize_impl(kana, out, opt, /*allow_native_rate=*/true);
 }
 
 }  // namespace stackchan::jtts

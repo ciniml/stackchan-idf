@@ -32,12 +32,22 @@ add_library(jtts STATIC
     ${JTTS_ROOT}/src/unit_synth.cpp
     ${JTTS_ROOT}/src/hts_label.cpp
     ${JTTS_ROOT}/src/hmm_synth.cpp
+    ${JTTS_ROOT}/src/sano_ir.cpp
+    ${JTTS_ROOT}/src/sano_synth.cpp
 )
 target_include_directories(jtts
     PUBLIC ${JTTS_ROOT}/include ${EXPECTED_INC}
     PRIVATE ${JTTS_ROOT}/src
 )
-target_link_libraries(jtts PRIVATE hts_engine)
+# sanoTTS-jp core (vendored, C99)
+set(SAAN_ROOT ${JTTS_ROOT}/../saanotts/upstream)
+add_library(saanotts STATIC
+    ${SAAN_ROOT}/saanotts.c ${SAAN_ROOT}/saanotts_stream.c ${SAAN_ROOT}/fft.c
+    ${SAAN_ROOT}/saanotts_int8.c ${SAAN_ROOT}/g2p.c)
+target_include_directories(saanotts PUBLIC ${SAAN_ROOT})
+target_link_libraries(saanotts PUBLIC m)
+
+target_link_libraries(jtts PRIVATE hts_engine saanotts)
 target_compile_options(jtts PRIVATE -Wall -Wextra)
 
 add_executable(jtts_synth_demo main.cpp wav_writer.cpp)
@@ -77,3 +87,13 @@ add_executable(jtts_hmm_demo hmm_demo.cpp wav_writer.cpp)
 target_link_libraries(jtts_hmm_demo PRIVATE jtts)
 target_include_directories(jtts_hmm_demo PRIVATE ${JTTS_ROOT}/src)
 target_compile_options(jtts_hmm_demo PRIVATE -Wall -Wextra)
+
+# sanoTTS エンジン: かな→中間表現の単体テスト + かな→WAV デモ (重みは引数で渡す)
+add_executable(jtts_test_sano_ir test_sano_ir.cpp)
+target_link_libraries(jtts_test_sano_ir PRIVATE jtts)
+target_include_directories(jtts_test_sano_ir PRIVATE ${JTTS_ROOT}/src)
+target_compile_options(jtts_test_sano_ir PRIVATE -Wall -Wextra)
+
+add_executable(jtts_sano_demo sano_demo.cpp wav_writer.cpp)
+target_link_libraries(jtts_sano_demo PRIVATE jtts)
+target_compile_options(jtts_sano_demo PRIVATE -Wall -Wextra)

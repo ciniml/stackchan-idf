@@ -90,6 +90,8 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=n
 
 # HMM (hts_engine) 音声合成エンジン
 CONFIG_JTTS_ENABLE_HMM=y
+# sanoTTS-jp (ニューラル TTS)。重みは flash の sanotts 領域、arena 176 KB は PSRAM。
+CONFIG_JTTS_ENABLE_SANOTTS=y
 
 # hts_engine の合成 (ラベル パース等のスタック ローカル) が main タスクの
 # 既定 8 KB を溢れさせるため増量。

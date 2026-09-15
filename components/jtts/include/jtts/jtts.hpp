@@ -36,11 +36,14 @@ enum class SynthVariant : std::uint8_t {
 //             Formant へ自動フォールバック
 //   Hmm     — HMM 合成 (hts_engine)。ボイス未ロード時は Unit → Formant へ
 //             フォールバック
+//   Sano    — sanoTTS-jp (ニューラル、22.05 kHz)。重み未ロード時は Hmm →
+//             Unit → Formant へフォールバック。Auto では Hmm より優先。
 enum class Engine : std::uint8_t {
     Auto = 0,
     Formant = 1,
     Unit = 2,
     Hmm = 3,
+    Sano = 4,
 };
 
 struct Options {
@@ -95,6 +98,15 @@ tl::expected<void, Error> synthesize(std::u32string_view kana,
                                      std::vector<std::int16_t>& out,
                                      const Options& opt = {});
 
+// synthesize() と同じだが、実際に出力した PCM のサンプルレートを返す。
+// sanoTTS エンジンは 22.05 kHz 固定で、opt.sample_rate_hz を無視してこの
+// レートで出力する (再生側がレートを合わせる)。他のエンジンは
+// opt.sample_rate_hz のまま。synthesize() は Sano を「レートが一致するとき」
+// だけ使う (一致しなければ次のエンジンへフォールバック)。
+tl::expected<std::uint32_t, Error> synthesize_ex(std::u32string_view kana,
+                                                 std::vector<std::int16_t>& out,
+                                                 const Options& opt = {});
+
 // 単位連結エンジン用の音声 DB (.jvox、codec=0 の生形式) を登録する。
 // blob の寿命は呼び出し側が保証する (PSRAM バッファ / flash mmap)。
 // パースに失敗すると false を返し、DB 未ロード状態のまま。空 span で解除。
@@ -113,5 +125,15 @@ bool set_hmm_voice(std::span<const std::uint8_t> htsvoice);
 
 // HMM ボイスがロード済みか。
 bool hmm_voice_loaded();
+
+// sanoTTS-jp の重み blob (公式 Releases の saanotts-jp-v4-int8.bin、"SAAN" ヘッダ)
+// を登録する。blob の寿命は呼び出し側が保証する (flash mmap / PSRAM)。コアは
+// blob を直接参照するのでコピーしない。16 バイト境界に置くこと。空 span で解除。
+// 検証失敗 (マジック/バージョン/形状) は false。スレッド安全ではない。
+// CONFIG_JTTS_ENABLE_SANOTTS 無効ビルドでは常に false。
+bool set_sano_weights(std::span<const std::uint8_t> blob);
+
+// sanoTTS の重みがロード済みか。
+bool sano_weights_loaded();
 
 }  // namespace stackchan::jtts

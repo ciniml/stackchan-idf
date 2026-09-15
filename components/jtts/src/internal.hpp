@@ -116,4 +116,20 @@ bool build_hts_labels(std::u32string_view text, std::vector<std::string>& labels
 // レート非対応時は out を触らず false (呼び出し側がフォールバック)。
 bool render_hmm(std::u32string_view text, std::vector<std::int16_t>& out, const Options& opt);
 
+// ---- sanoTTS-jp エンジン ----
+
+// かな文字列 (HMM と同じ記法: `'` = 直前モーラがアクセント核、`/` = アクセント
+// 句境界、「、」= ポーズ、「。」= 文境界、カタカナ可) を sanoTTS-jp の
+// かな中間表現 (ひらがな + `[` 上昇 `]` 下降核 `_` ポーズ) の UTF-8 に変換する
+// (sano_ir.cpp)。アクセント核の無い句は平板 (2 モーラ目で上昇、下降なし)。
+// 無声化 `°` は付けない (上流 M-14: 規則推定は過剰無声化する)。
+// 有効なモーラが 1 つも無ければ false。
+bool build_sano_ir(std::u32string_view text, std::string& ir_utf8);
+
+// sanoTTS エンジン本体 (sano_synth.cpp)。重み未ロード・IR 変換失敗・G2P 失敗・
+// arena 不足時は out を触らず false。成功時 out は 22.05 kHz mono int16 で、
+// *out_rate_hz に SAAN_SR を書く。
+bool render_sano(std::u32string_view text, std::vector<std::int16_t>& out, const Options& opt,
+                 std::uint32_t& out_rate_hz);
+
 }  // namespace stackchan::jtts::internal

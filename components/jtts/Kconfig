@@ -9,4 +9,13 @@ config JTTS_ENABLE_HMM
         (CoreS3 / stopwatch) 向け。無効時は render_hmm がスタブになり
         hts_engine のコードはリンクされない。
 
+config JTTS_ENABLE_SANOTTS
+    bool "Enable sanoTTS-jp neural synthesis engine"
+    default n
+    help
+        sanoTTS-jp (559 K パラメータのニューラル TTS、22.05 kHz) を有効にする。
+        重み blob (654 KB、公式 Releases から取得) を flash の sanotts 領域に置き、
+        合成の作業領域 176 KB を PSRAM に取る。PSRAM のあるボード向け。
+        無効時は render_sano がスタブになり、推論コアはリンクされない。
+
 endmenu
