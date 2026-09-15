@@ -209,13 +209,17 @@ void start_say_worker(std::string_view kana_utf8)
             stackchan::jtts::Options opt = g_say_opts_ready
                 ? g_say_opts
                 : stackchan::app::resolve_speech_options("", stackchan::app::Speech::kSampleRate);
-            const std::uint32_t rate = opt.sample_rate_hz;
+            // synthesize_ex は実際の出力レートを返す (sanoTTS は 22.05 kHz、他は
+            // opt.sample_rate_hz)。BLE / HTTP の jtts-say もこれで sanoTTS を通る。
+            std::uint32_t rate = opt.sample_rate_hz;
             std::vector<std::int16_t> pcm;
-            if (auto r = stackchan::jtts::synthesize(kana, pcm, opt); !r) {
+            if (auto r = stackchan::jtts::synthesize_ex(kana, pcm, opt); !r) {
                 ESP_LOGW(kTag, "say synth fail: %s",
                          stackchan::jtts::to_string(r.error()));
                 vTaskDeleteWithCaps(nullptr);
                 return;
+            } else {
+                rate = *r;
             }
             if (pcm.empty()) {
                 vTaskDeleteWithCaps(nullptr);
