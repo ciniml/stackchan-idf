@@ -514,43 +514,50 @@ extern "C" void app_main()
     // Apply the user's gain (cfg already loaded above). 0..200 % → byte
     // is clamped at 255 so boards already at 255 are unchanged at 100 %.
     stackchan::app::settings_sinks::apply_speaker_volume(cfg.speaker_volume_pct);
-    if (cfg.startup_arpeggio_enabled) {
-        for (float freq : {523.25f, 659.25f, 783.99f}) { // C5 – E5 – G5
-            M5.Speaker.tone(freq, 150);
-            vTaskDelay(pdMS_TO_TICKS(180));
+    // 起動音 (アルペジオ + 16 kHz playRaw プローブ) は、以前はここ (音声経路の
+    // 設定直後) で鳴らしていたが、各サブシステムの初期化が済んで安定してから
+    // (起動確認の後) に移した。内容は同じで、呼び出し位置だけが変わる。
+    // M5.Speaker は playRaw / tone で自動的に begin するので、ここで end() したまま
+    // でよい。マイク リップシンク タスクは Speaker.isPlaying() を見て譲る。
+    auto play_boot_sounds = [&cfg]() {
+        if (cfg.startup_arpeggio_enabled) {
+            for (float freq : {523.25f, 659.25f, 783.99f}) { // C5 – E5 – G5
+                M5.Speaker.tone(freq, 150);
+                vTaskDelay(pdMS_TO_TICKS(180));
+            }
+            while (M5.Speaker.isPlaying()) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
+        } else {
+            ESP_LOGI(kTag, "startup arpeggio disabled");
         }
-        while (M5.Speaker.isPlaying()) {
-            vTaskDelay(pdMS_TO_TICKS(20));
+        // JTTS-rate playRaw probe: synth a brief 16 kHz 440 Hz tone and push
+        // it through M5.Speaker.playRaw. JTTS babble plays at the same
+        // sample rate so this isolates "JTTS-specific failure" from
+        // "16 kHz-playRaw-specific failure" — if this probe is audible
+        // through Module Audio, the JTTS silence is downstream of sample
+        // rate / playRaw path (we'd look at speech.cpp config / mic
+        // contention instead). If this probe is also silent while the
+        // arpeggio (48 kHz tone) was audible, the codec / I2S clock chain
+        // doesn't like the 16 kHz fs.
+        {
+            constexpr std::uint32_t kProbeRate = 16'000;
+            constexpr std::size_t kProbeSamples = kProbeRate * 300 / 1000; // 300 ms
+            static std::int16_t probe_pcm[kProbeSamples];
+            constexpr float kProbeFreq = 440.0f;
+            constexpr float kTwoPi = 6.28318530718f;
+            for (std::size_t i = 0; i < kProbeSamples; ++i) {
+                probe_pcm[i] = static_cast<std::int16_t>(
+                    20000.0f * std::sin(kTwoPi * kProbeFreq * static_cast<float>(i) /
+                                        static_cast<float>(kProbeRate)));
+            }
+            ESP_LOGI(kTag, "16 kHz playRaw probe (300 ms, 440 Hz)");
+            M5.Speaker.playRaw(probe_pcm, kProbeSamples, kProbeRate, /*stereo=*/false);
+            while (M5.Speaker.isPlaying()) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
         }
-    } else {
-        ESP_LOGI(kTag, "startup arpeggio disabled");
-    }
-    // JTTS-rate playRaw probe: synth a brief 16 kHz 440 Hz tone and push
-    // it through M5.Speaker.playRaw. JTTS babble plays at the same
-    // sample rate so this isolates "JTTS-specific failure" from
-    // "16 kHz-playRaw-specific failure" — if this probe is audible
-    // through Module Audio, the JTTS silence is downstream of sample
-    // rate / playRaw path (we'd look at speech.cpp config / mic
-    // contention instead). If this probe is also silent while the
-    // arpeggio (48 kHz tone) was audible, the codec / I2S clock chain
-    // doesn't like the 16 kHz fs.
-    {
-        constexpr std::uint32_t kProbeRate = 16'000;
-        constexpr std::size_t kProbeSamples = kProbeRate * 300 / 1000; // 300 ms
-        static std::int16_t probe_pcm[kProbeSamples];
-        constexpr float kProbeFreq = 440.0f;
-        constexpr float kTwoPi = 6.28318530718f;
-        for (std::size_t i = 0; i < kProbeSamples; ++i) {
-            probe_pcm[i] = static_cast<std::int16_t>(
-                20000.0f * std::sin(kTwoPi * kProbeFreq * static_cast<float>(i) /
-                                    static_cast<float>(kProbeRate)));
-        }
-        ESP_LOGI(kTag, "16 kHz playRaw probe (300 ms, 440 Hz)");
-        M5.Speaker.playRaw(probe_pcm, kProbeSamples, kProbeRate, /*stereo=*/false);
-        while (M5.Speaker.isPlaying()) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-        }
-    }
+    };
     M5.Speaker.end();
     vTaskDelay(pdMS_TO_TICKS(20));
 
@@ -1098,6 +1105,9 @@ extern "C" void app_main()
             }
         }
     }
+
+    // 起動音はここ (起動確認の後 = 各サブシステム初期化完了後) で鳴らす。
+    play_boot_sounds();
 
 #if CONFIG_STACKCHAN_QR_TEST_AT_BOOT
     // Phase 1+2 bring-up trigger: spawn a one-shot waiter that defers the
