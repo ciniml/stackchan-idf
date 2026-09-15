@@ -2196,8 +2196,15 @@ async function performOta(file) {
     // in NimBLE's host queue; this caps the in-flight window.
     const FLUSH_EVERY = fastPath ? 16 : 1;
     let chunksSinceFlush = 0;
+    // 診断: 書き込み 1 回と状態読み取り 1 回にかかる時間の累計。Linux Chrome で
+    // 1.3 KB/s (1 チャンク約 370 ms) を観測したので、どちらで時間を食っているかを
+    // ログに出す (2026-09-15)。
+    const diag = { writeMs: 0, writes: 0, flushMs: 0, flushes: 0, writeMaxMs: 0 };
     async function maybeFlush(forceLog) {
+      const tf = performance.now();
       const st = await readOtaStatus();
+      diag.flushMs += performance.now() - tf;
+      diag.flushes++;
       if (st.state !== 'receiving') {
         throw new Error(`flush 中に session が消失 (${st.state}: ${st.error || ''})`);
       }
@@ -2231,7 +2238,15 @@ async function performOta(file) {
       }
       let off = 0;
       while (off + OTA_CHUNK_SIZE <= buf.length) {
+        const tw = performance.now();
         await writeChunk(buf.subarray(off, off + OTA_CHUNK_SIZE));
+        const dw = performance.now() - tw;
+        diag.writeMs += dw;
+        diag.writes++;
+        if (dw > diag.writeMaxMs) diag.writeMaxMs = dw;
+        if (diag.writes === 64) {
+          log(`診断: 最初の 64 書き込み 平均 ${(diag.writeMs / diag.writes).toFixed(1)} ms/回 (最大 ${diag.writeMaxMs.toFixed(0)} ms), 状態読み取り 平均 ${(diag.flushMs / Math.max(1, diag.flushes)).toFixed(1)} ms/回`, 'info');
+        }
         off += OTA_CHUNK_SIZE;
         received += OTA_CHUNK_SIZE;
         if (++chunksSinceFlush >= FLUSH_EVERY) {
@@ -2250,6 +2265,7 @@ async function performOta(file) {
     const elapsed = (performance.now() - t0) / 1000;
     setOtaProgress(received, total, received / elapsed);
     log(`データ送信完了 (${elapsed.toFixed(1)} 秒, 平均 ${fmtBytes(received / elapsed)}/s)`);
+    log(`診断: 書き込み ${diag.writes} 回 平均 ${(diag.writeMs / Math.max(1, diag.writes)).toFixed(1)} ms/回 (最大 ${diag.writeMaxMs.toFixed(0)} ms, 合計 ${(diag.writeMs / 1000).toFixed(1)} 秒), 状態読み取り ${diag.flushes} 回 平均 ${(diag.flushMs / Math.max(1, diag.flushes)).toFixed(1)} ms/回 (合計 ${(diag.flushMs / 1000).toFixed(1)} 秒), navigator: ${navigator.userAgent.match(/Chrome\/[\d.]+/)?.[0] || '?'} on ${navigator.platform}`, 'info');
 
     // end → server sets boot partition and schedules reboot
     await writeEncrypted(chrOtaCtrl, strToBytes(JSON.stringify({op: 'end'})));
