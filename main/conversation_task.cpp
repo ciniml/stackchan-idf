@@ -1008,21 +1008,24 @@ private:
         // Robotic-katakoto preset: low monotone male voice, slightly halting
         // mora pace. Deliberately different from the assistant's normal voice
         // so the user clearly hears it as a separate "mode".
-        constexpr std::uint32_t kKatakotoRate = 16000;
+        // sanoTTS の重みがあればそちらが選ばれる (22.05 kHz、mora_ms は話速に反映)。
+        // 無ければ従来どおりフォルマント/HMM の 16 kHz。
+        std::uint32_t rate = 16000;
         stackchan::jtts::Options opt;
         opt.voice = stackchan::jtts::Voice::Male;
         opt.f0_hz = 140.0f;
         opt.mora_ms = 140.0f;
         opt.gain = 0.8f;
-        opt.sample_rate_hz = kKatakotoRate;
+        opt.sample_rate_hz = rate;
 
         std::vector<std::int16_t> pcm;
-        auto r = stackchan::jtts::synthesize(kana, pcm, opt);
+        auto r = stackchan::jtts::synthesize_ex(kana, pcm, opt);
         if (!r) {
             ESP_LOGW(kTag, "jtts synthesize failed: %s",
                      stackchan::jtts::to_string(r.error()));
             return R"({"ok":false,"error":"synthesize failed"})";
         }
+        rate = *r;
         if (pcm.empty()) {
             return R"({"ok":true,"warning":"empty audio"})";
         }
@@ -1035,7 +1038,7 @@ private:
 
         // Pre-compute peak envelope so the avatar mouth opens in sync with the
         // utterance even though we're not running the normal service_playback.
-        const std::size_t env_window = kKatakotoRate * kEnvelopeStepMs / 1000u;
+        const std::size_t env_window = rate * kEnvelopeStepMs / 1000u;
         std::vector<float> envelope;
         if (env_window > 0) {
             envelope.reserve((pcm.size() + env_window - 1) / env_window);
@@ -1062,7 +1065,7 @@ private:
             if (M5.Speaker.isPlaying(kSpeakerChannel) < kSegmentBuffers - 1) {
                 const std::size_t n = std::min(kSegmentSamples, pcm.size() - pos);
                 std::memcpy(seg_buf_[next], pcm.data() + pos, n * sizeof(std::int16_t));
-                M5.Speaker.playRaw(seg_buf_[next], n, kKatakotoRate, /*stereo=*/false,
+                M5.Speaker.playRaw(seg_buf_[next], n, rate, /*stereo=*/false,
                                    /*repeat=*/1, kSpeakerChannel, /*stop_current_sound=*/false);
                 pos += n;
                 next = (next + 1) % kSegmentBuffers;

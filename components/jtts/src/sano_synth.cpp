@@ -42,6 +42,8 @@ extern "C" {
 #if defined(ESP_PLATFORM)
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #define SANO_LOGI(...) ESP_LOGI("jtts-sano", __VA_ARGS__)
 #define SANO_LOGW(...) ESP_LOGW("jtts-sano", __VA_ARGS__)
 #else
@@ -163,6 +165,11 @@ bool render_sano(std::u32string_view text, std::vector<std::int16_t>& out, const
             return false;
         }
         if (n_out == 0) break;
+#if defined(ESP_PLATFORM)
+        // 1 チャンク (93 ms の音声) の計算は PSRAM arena では約 200 ms かかる。
+        // 低優先度の IDLE タスクを飢えさせないよう (Task WDT)、チャンクごとに 1 tick 譲る。
+        vTaskDelay(1);
+#endif
         const std::size_t n = static_cast<std::size_t>(n_out) * SAAN_HOP;
         for (std::size_t i = 0; i < n; ++i) {
             float v = chunk[i] * gain;
