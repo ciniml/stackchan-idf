@@ -2093,7 +2093,7 @@ async function performFetchOta(tag) {
     await writeEncrypted(chrOtaCtrl, strToBytes(JSON.stringify({op: 'fetch', tag})));
     let st = await readOtaStatus();
     if ((st.error || '').includes('rebooting to recovery')) {
-      log('デバイスは Recovery へ再起動して Wi-Fi で取得します (ADR-001)。', 'info');
+      log('デバイスは更新モード (Recovery) で再起動し、Wi-Fi で取得します。', 'info');
       document.getElementById('ota-stats').textContent = 'Recovery へ再起動中…';
       await reconnectForRecoveryOta();
     } else if (st.state === 'failed') {
@@ -2156,7 +2156,7 @@ async function performOta(file) {
       st = await readOtaStatus();
       if (st.state === 'receiving') break;
       if (attempt === 0 && (st.error || '').includes('rebooting to recovery')) {
-        log('デバイスは Recovery へ再起動して受信します (ADR-001)。', 'info');
+        log('デバイスは更新モード (Recovery) で再起動して受信します。', 'info');
         document.getElementById('ota-stats').textContent = 'Recovery へ再起動中…';
         await reconnectForRecoveryOta();
         continue;
@@ -2273,7 +2273,7 @@ async function performOta(file) {
     if (final.state !== 'done') {
       throw new Error(`end に失敗 (${final.state}: ${final.error || ''})`);
     }
-    log('OTA 完了 — デバイスを再起動します。ADR-001 レイアウトでは Recovery が Main を起動し、起動確認まで自動で進みます。BLE が切断されたら新ファームで再接続してください。', 'ok');
+    log('OTA 完了 — デバイスを再起動します。新ファームの起動確認は自動で行われます。BLE が切断されたら再接続してください。', 'ok');
     document.getElementById('ota-stats').textContent = '再起動中…';
   } catch (e) {
     log(`OTA エラー: ${e.message}`, 'err');
