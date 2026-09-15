@@ -167,6 +167,13 @@ extern "C" void app_main()
 
     // Main のイメージ (project "stackchan_idf") だけを受け入れる。
     stackchan::config::ota::set_expected_project_name("stackchan_idf");
+    // BLE / HTTP の {"op":"fetch","tag":...}: この場で release-fetch を始める。
+    stackchan::config::ota::set_fetch_hook([](const std::string& tag) -> const char* {
+        if (!stackchan::recovery::wifi::connected()) return "sta not connected";
+        auto r = stackchan::wifi_config::release_ota::start(
+            tag, static_cast<std::uint8_t>(CONFIG_STACKCHAN_RECOVERY_BOARD_KIND));
+        return r ? nullptr : "fetch start failed";
+    });
 
     stackchan::recovery::ble::start(s.device_name, s.auth_password);
     stackchan::recovery::wifi::start(s.wifi_ssid, s.wifi_password);

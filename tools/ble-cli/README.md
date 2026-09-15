@@ -69,3 +69,7 @@ cargo run --release -- ota ../../build-cores3/stackchan_idf.bin
 チャンクは平文 480 B (暗号化で +28 B、ATT MTU 517 に収まる) を WriteWithoutResponse で
 送り、`--check-every` (既定 32) チャンクごとに OtaControl の状態 JSON を読んで受信済み
 バイト数が追いついているか確認する。実測 16 KiB/s (CoreS3、BlueZ)。
+
+`fetch vX.Y.Z` は機体自身に GitHub Pages から取得させる (`{"op":"fetch"}`)。ADR-001 の
+Main は bootctl にタグを書いて Recovery へ再起動し、Recovery が Wi-Fi で取得する
+(3.6 MB で約 25 秒。BLE 転送の 4〜5 分に対して大幅に速い)。

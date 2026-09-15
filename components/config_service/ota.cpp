@@ -62,6 +62,7 @@ static std::string g_expected_project_name;
 static const esp_partition_t* g_target_partition = nullptr;
 static FinalizeFn g_finalize_hook = nullptr;
 static HandoffFn g_handoff_hook = nullptr;
+static FetchFn g_fetch_hook = nullptr;
 
 const char* phase_name(Phase p)
 {
@@ -267,6 +268,38 @@ std::string cmd_abort()
     return R"({"ok":true})";
 }
 
+std::string cmd_fetch(const cJSON* root)
+{
+    const cJSON* tag_item = cJSON_GetObjectItemCaseSensitive(root, "tag");
+    if (!cJSON_IsString(tag_item) || tag_item->valuestring == nullptr || tag_item->valuestring[0] == '\0') {
+        return error_response("tag required");
+    }
+    if (g_fetch_hook == nullptr) {
+        return error_response("fetch unsupported");
+    }
+    if (g_state.phase == Phase::Receiving && g_state.handle != 0) {
+        esp_ota_abort(g_state.handle);
+    }
+    g_state = State{};
+    const std::string tag = tag_item->valuestring;
+    // Main は Recovery へ引き継ぐ (再起動)。handoff 経路と同じ状態にしておくと
+    // BLE クライアントが "rebooting to recovery" を見て再接続できる。
+    if (g_handoff_hook != nullptr) {
+        if (const char* err = g_fetch_hook(tag); err != nullptr) {
+            mark_failed(err);
+            return error_response(err);
+        }
+        mark_failed("rebooting to recovery");
+        return R"({"ok":true,"reboot":true})";
+    }
+    if (const char* err = g_fetch_hook(tag); err != nullptr) {
+        mark_failed(err);
+        return error_response(err);
+    }
+    ESP_LOGI(kTag, "fetch requested: %s", tag.c_str());
+    return R"({"ok":true,"fetch":true})";
+}
+
 } // namespace
 
 std::string handle_control_command(const std::string& json)
@@ -284,6 +317,8 @@ std::string handle_control_command(const std::string& json)
             result = cmd_end();
         } else if (std::strcmp(op->valuestring, "abort") == 0) {
             result = cmd_abort();
+        } else if (std::strcmp(op->valuestring, "fetch") == 0) {
+            result = cmd_fetch(root);
         } else {
             result = error_response("unknown op");
         }
@@ -341,6 +376,11 @@ void set_finalize_hook(FinalizeFn fn)
 void set_handoff_hook(HandoffFn fn)
 {
     g_handoff_hook = fn;
+}
+
+void set_fetch_hook(FetchFn fn)
+{
+    g_fetch_hook = fn;
 }
 
 void set_expected_project_name(std::string_view name)

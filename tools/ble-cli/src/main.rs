@@ -94,6 +94,10 @@ enum Cmd {
         #[arg(long, default_value_t = 32)]
         check_every: usize,
     },
+    /// 機体自身に GitHub Pages からリリース (vX.Y.Z) を取得させる ({"op":"fetch"})。
+    /// ADR-001 の Main は Recovery へ再起動して取得する (応答 "rebooting to recovery")。
+    /// 進捗は 10 秒ほど待って Recovery に対して `status` を繰り返し読む。
+    Fetch { tag: String },
 }
 
 #[tokio::main]
@@ -302,6 +306,18 @@ async fn run_session(p: &Peripheral, cli: &Cli) -> Result<()> {
         }
         Cmd::Ota { file, chunk, check_every } => {
             ota(p, &session, file, *chunk, *check_every).await?;
+        }
+        Cmd::Fetch { tag } => {
+            let ctrl = find_chr(p, CHR_OTA_CONTROL)?;
+            let cmd = format!(r#"{{"op":"fetch","tag":"{}"}}"#, tag);
+            p.write(&ctrl, &session.encrypt(cmd.as_bytes())?, WriteType::WithResponse)
+                .await
+                .context("write OtaControl fetch")?;
+            let st = ota_status(p, &ctrl, &session).await?;
+            println!("fetch -> {}", st);
+            if st.contains("rebooting to recovery") {
+                println!("(device is rebooting into Recovery, which fetches the tag over Wi-Fi)");
+            }
         }
         Cmd::Scan => unreachable!(),
     }

@@ -649,6 +649,24 @@ extern "C" void app_main()
                                     std::memory_order_relaxed);
     stackchan::app::settings_sinks::register_ble_sinks(
         static_cast<std::uint8_t>(board.kind()));
+    // BLE OtaControl {"op":"fetch","tag":...}: 機体が自分でリリースを取りに行く。
+    // ADR-001 レイアウトでは release_ota が Recovery へ引き継ぐ (bootctl + 再起動)。
+    {
+        static std::uint8_t s_board_kind = 0;
+        s_board_kind = static_cast<std::uint8_t>(board.kind());
+        stackchan::config::ota::set_fetch_hook([](const std::string& tag) -> const char* {
+            using stackchan::wifi_config::release_ota::StartError;
+            auto r = stackchan::wifi_config::release_ota::start(tag, s_board_kind);
+            if (r) return nullptr;
+            switch (r.error()) {
+            case StartError::AlreadyRunning:    return "already running";
+            case StartError::BadTag:            return "bad tag";
+            case StartError::UnknownBoard:      return "unknown board";
+            case StartError::WorkerSpawnFailed: return "spawn failed";
+            }
+            return "fetch failed";
+        });
+    }
     // BLE audio streaming and the realtime voice conversation are mutually
     // exclusive — both saturate the radio/CPU and running them together
     // makes streaming playback choppy. Pass the conversation-enabled flag

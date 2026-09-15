@@ -154,6 +154,7 @@ voice は現行 4 MiB から 3.5 MiB に縮める。1 ファイル運用で最�
   - 新 Main は起動直後に拡張テーブルの 6 領域を登録し、`ready` 後に `confirm_boot` で pending を落とす。
   - Main からの release-fetch 要求は bootctl にタグを書いて Recovery へ引き継ぎ、Recovery が自動取得する。存在しないタグ（HTTP 404）では受信前に失敗し、`return_to_main` で旧 Main に戻った。
   - BLE OTA: `tools/ble-cli ota` で Main に begin → 「rebooting to recovery」で引き継ぎ → Recovery に再接続して 3.6 MB を 217 秒（16 KiB/s）で受信 → `arm_main` → 試行 1/3 で Main 起動 → 起動確認。
+  - BLE 経由の転送は 3.6 MB で 217〜305 秒（11〜16 KiB/s）かかる。OtaControl に `{"op":"fetch","tag":…}` を追加し、Main は bootctl にタグを書いて Recovery へ引き継ぎ、Recovery が Wi-Fi で取得する（約 25 秒）。設定ページは機体が Wi-Fi 接続中ならリリース選択時にこの経路を使い、Recovery に再接続して進捗を表示する。存在しないタグで Main → Recovery → 404 → Main 復帰を確認。
   - 標準テーブルに `recovery` が無い開発用テーブルで Recovery を動かすと、Wi-Fi ドライバの NVS 書き込みで `esp_ota_get_running_partition()` が abort した。Recovery が自分の領域を登録する対処を入れて解消。
 
 ## 未決事項

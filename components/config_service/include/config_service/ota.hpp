@@ -52,6 +52,13 @@ void set_finalize_hook(FinalizeFn fn);
 using HandoffFn = bool (*)();
 void set_handoff_hook(HandoffFn fn);
 
+// {"op":"fetch","tag":"vX.Y.Z"}: 機体自身がリリースを取りに行く (release-fetch)。
+// 呼び出し側 (Main / Recovery) が実装を渡す。戻り値 nullptr = 受理、それ以外 =
+// エラー文字列。Main では Recovery への引き継ぎ (bootctl + 再起動) になり、その
+// 場合は状態を "rebooting to recovery" にして BLE クライアントが再接続できるようにする。
+using FetchFn = const char* (*)(const std::string& tag);
+void set_fetch_hook(FetchFn fn);
+
 // Project name an incoming image must carry in its esp_app_desc_t. Default
 // (empty) = the running app's own project_name, which is what Main wants.
 // Recovery (project "stackchan_recovery") sets this to "stackchan_idf" so it

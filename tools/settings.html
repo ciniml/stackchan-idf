@@ -1330,9 +1330,11 @@ function refreshAudioButton() {
     !(connected && chrAudioData && file && !convEnabled);
 }
 
+let deviceWifiConnected = false;
 function updateStatus(data) {
   const flags = data.getUint8(0);
   const wifi  = data.getUint8(1);
+  deviceWifiConnected = !!wifi;
   document.getElementById('flag-ssid').classList.toggle('set', !!(flags & 0x01));
   document.getElementById('flag-pass').classList.toggle('set', !!(flags & 0x02));
   document.getElementById('flag-key' ).classList.toggle('set', !!(flags & 0x04));
@@ -2075,6 +2077,65 @@ async function reconnectForRecoveryOta(timeoutMs = 60000) {
   setBleUi(true);
   document.getElementById('ble-label').textContent = 'BLE 接続中 (Recovery)';
   log('Recovery に再接続、鍵交換完了', 'ok');
+}
+
+// {"op":"fetch","tag"}: 機体自身が Wi-Fi でリリースを取得する。ADR-001 の Main は
+// Recovery へ引き継ぐので、再接続して Recovery の進捗 (OtaControl の状態) を
+// 1 秒ごとに読む。書き込み完了で機体が再起動 → 切断で終了。
+async function performFetchOta(tag) {
+  if (otaInFlight) return;
+  otaInFlight = true;
+  document.getElementById('btn-ota').disabled = true;
+  document.getElementById('btn-apply').disabled = true;
+  document.getElementById('btn-disconnect').disabled = true;
+  try {
+    log(`機体に ${tag} の取得を指示します…`);
+    await writeEncrypted(chrOtaCtrl, strToBytes(JSON.stringify({op: 'fetch', tag})));
+    let st = await readOtaStatus();
+    if ((st.error || '').includes('rebooting to recovery')) {
+      log('デバイスは Recovery へ再起動して Wi-Fi で取得します (ADR-001)。', 'info');
+      document.getElementById('ota-stats').textContent = 'Recovery へ再起動中…';
+      await reconnectForRecoveryOta();
+    } else if (st.state === 'failed') {
+      throw new Error(`fetch に失敗 (${st.error || ''})`);
+    }
+    // 進捗ポーリング。取得開始 (HTTPS 接続) まで数秒は idle のまま。
+    const t0 = performance.now();
+    let lastReceived = 0, lastMs = t0, sawReceiving = false;
+    while (true) {
+      await sleep(1000);
+      if (!bleDevice.gatt.connected) break; // 書き込み完了 → 再起動で切断
+      try {
+        st = await readOtaStatus();
+      } catch (e) {
+        break; // 切断中
+      }
+      if (st.state === 'receiving') {
+        sawReceiving = true;
+        const now = performance.now();
+        const bps = ((st.received - lastReceived) * 1000) / Math.max(1, now - lastMs);
+        setOtaProgress(st.received, st.total, bps);
+        lastReceived = st.received; lastMs = now;
+      } else if (st.state === 'done') {
+        setOtaProgress(st.total, st.total, null);
+        break;
+      } else if (st.state === 'failed') {
+        throw new Error(`取得に失敗 (${st.error || ''})`);
+      } else if (!sawReceiving && performance.now() - t0 > 90000) {
+        throw new Error('90 秒待っても取得が始まりません (Wi-Fi / タグを確認)');
+      }
+    }
+    log('OTA 完了 — 機体が新ファームを起動し、起動確認まで自動で進みます。', 'ok');
+    document.getElementById('ota-stats').textContent = '再起動中…';
+  } catch (e) {
+    log(`OTA エラー: ${e.message}`, 'err');
+    document.getElementById('ota-stats').textContent = `失敗: ${e.message}`;
+    document.getElementById('btn-ota').disabled = false;
+    document.getElementById('btn-apply').disabled = false;
+    document.getElementById('btn-disconnect').disabled = false;
+  } finally {
+    otaInFlight = false;
+  }
 }
 
 async function performOta(file) {
@@ -3349,6 +3410,14 @@ document.getElementById('btn-ota').addEventListener('click', async () => {
   const fileInput = document.getElementById('ota-file');
   const releaseSel = document.getElementById('ota-release');
   const releaseTag = releaseSel.value;
+
+  // 機体が Wi-Fi に繋がっていれば、ブラウザ経由で BLE に流す (約 16 KiB/s、4 分弱)
+  // 代わりに機体自身に GitHub Pages から取らせる (約 150 KiB/s、30 秒以内)。
+  if (releaseTag && deviceWifiConnected) {
+    if (!confirm(`機体が Wi-Fi 経由で ${releaseTag} を取得して書き込みます。よろしいですか？`)) return;
+    performFetchOta(releaseTag);
+    return;
+  }
 
   let blob, name;
   if (releaseTag) {
