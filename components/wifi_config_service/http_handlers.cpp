@@ -3,6 +3,7 @@
 
 #include "http_handlers.hpp"
 #include <wifi_config_service/release_ota.hpp>
+#include <crash_report/crash_report.hpp>
 #include "voice_fetch.hpp"
 #include "sano_fetch.hpp"
 
@@ -370,6 +371,35 @@ std::string escape_json(const std::string& in)
     }
     return out;
 }
+
+// GET /api/coredump — 前回パニックの要約 (espcoredump のフラッシュ保存から)。
+// POST /api/coredump/clear — 保存済みダンプを消す。
+esp_err_t handle_coredump_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    return send_json(req, stackchan::crash_report::summary_json());
+}
+
+esp_err_t handle_coredump_clear_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    const esp_err_t err = stackchan::crash_report::clear();
+    if (err != ESP_OK) return send_error(req, "500 Internal Server Error", esp_err_to_name(err));
+    return send_empty(req);
+}
+
+#if CONFIG_WIFI_CONFIG_DEBUG_CRASH_API
+// POST /api/debug/crash — 診断ビルド専用。abort() でパニックを起こし、コアダンプ
+// 保存と再起動後の /api/coredump を検証する。
+esp_err_t handle_debug_crash_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    ESP_LOGE(kTag, "deliberate abort() requested via /api/debug/crash");
+    vTaskDelay(pdMS_TO_TICKS(100));
+    abort();
+    return ESP_OK;
+}
+#endif
 
 esp_err_t handle_status_get(httpd_req_t* req)
 {
@@ -2074,6 +2104,11 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/hmm-voice",        HTTP_POST, handle_hmm_voice_post);
     add(server, "/api/hmm-voice/clear",  HTTP_POST, handle_hmm_voice_clear_post);
     add(server, "/api/hmm-voice/fetch",  HTTP_POST, handle_hmm_voice_fetch_post);
+#if CONFIG_WIFI_CONFIG_DEBUG_CRASH_API
+    add(server, "/api/debug/crash",      HTTP_POST, handle_debug_crash_post);
+#endif
+    add(server, "/api/coredump",         HTTP_GET,  handle_coredump_get);
+    add(server, "/api/coredump/clear",   HTTP_POST, handle_coredump_clear_post);
     add(server, "/api/sanotts",          HTTP_GET,  handle_sanotts_get);
     add(server, "/api/sanotts",          HTTP_POST, handle_sanotts_post);
     add(server, "/api/sanotts/clear",    HTTP_POST, handle_sanotts_clear_post);

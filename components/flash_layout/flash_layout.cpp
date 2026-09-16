@@ -49,6 +49,7 @@ bool register_children(const fl_exttab_view_t& view, std::uint32_t reserved_offs
         case FL_KIND_SPIFFS:   subtype = ESP_PARTITION_SUBTYPE_DATA_SPIFFS; break;
         case FL_KIND_LITTLEFS: subtype = ESP_PARTITION_SUBTYPE_DATA_LITTLEFS; break;
         case FL_KIND_RAW:      subtype = kRawSubtype; break;
+        case FL_KIND_COREDUMP: subtype = ESP_PARTITION_SUBTYPE_DATA_COREDUMP; break;
         default:
             ESP_LOGW(kTag, "entry '%s': unknown kind %u — not registered", e.label, e.kind);
             g_children[i] = nullptr;

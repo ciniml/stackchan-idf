@@ -116,7 +116,8 @@ Recovery 1.5MiBは、最小構成（NimBLE peripheral、Wi-Fi STA、esp_http_ser
 | model | spiffs (esp-sr) | 0x980000 | 0x2E0000 | 0xB20000 |
 | sanotts | raw (SanoTTS-jp) | 0xC60000 | 0xB0000 | 0xE00000 |
 | bluescript | raw (iflash/dflash/autorun) | 0xD10000 | 0x100000 | 0xEB0000 |
-| （未使用） | — | 0xE10000 | 0x50000 | 0xFB0000 |
+| coredump | coredump (espcoredump, ELF) | 0xE10000 | 0x10000 | 0xFB0000 |
+| （未使用） | — | 0xE20000 | 0x40000 | 0xFC0000 |
 
 voice は現行 4 MiB から 3.5 MiB に縮める。1 ファイル運用で最大 2.15 MB なので支障はない。sanotts は blob 654,032 B (v4) に対し将来の増加 (v1→v2 で +10 KB) を見込んで 704 KiB とする (2026-09-15)。末尾 320 KiB は将来の割り当て用に空けておく。
 
@@ -129,7 +130,8 @@ voice は現行 4 MiB から 3.5 MiB に縮める。1 ファイル運用で最�
 | main | app | 0x0 | 0x400000 | 0x1A0000 |
 | storage | spiffs | 0x400000 | 0x80000 | 0x5A0000 |
 | sanotts | raw | 0x480000 | 0xB0000 | 0x620000 |
-| voice | raw (hmm_voice) | 0x530000 | 0x130000 | 0x6D0000 |
+| voice | raw (hmm_voice) | 0x530000 | 0x120000 | 0x6D0000 |
+| coredump | coredump (espcoredump, ELF) | 0x650000 | 0x10000 | 0x7F0000 |
 
 8MB 機は Main 4 MiB を確保すると残りが 2.375 MiB しかないため、storage を 512 KiB に縮める（顔バイトコードと動作データは数十 KiB 規模）。voice は 1.1875 MiB で、mei（0.86 MB）と nitech（1.17 MB）は入るが tohoku-f01 は入らない。esp-sr モデルと BlueScript 領域は 8MB 機には置かない（必要になった場合は voice を SanoTTS へ置き換えるなど、ボードごとに判断する）。
 

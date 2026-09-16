@@ -37,7 +37,7 @@ EXTTAB_MAGIC = 0x54584353  # 'SCXT'
 EXTTAB_VERSION = 1
 MAX_ENTRIES = 32
 LABEL_LEN = 16
-KINDS = {"app": 1, "raw": 2, "spiffs": 3, "littlefs": 4}
+KINDS = {"app": 1, "raw": 2, "spiffs": 3, "littlefs": 4, "coredump": 5}
 FLAG_REQUIRED = 0x0001
 
 BOOTCTL_MAGIC = 0x4C434253  # 'SBCL'

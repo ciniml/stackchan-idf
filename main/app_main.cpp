@@ -40,6 +40,7 @@
 #include "demo_loop.hpp"
 #include "device_ui.hpp"
 #include "diag.hpp"
+#include <crash_report/crash_report.hpp>
 #include "i2c_dump.hpp"
 #include "led_task.hpp"
 #include "mic_lip_sync_task.hpp"
@@ -207,6 +208,10 @@ extern "C" void app_main()
         s_adr_layout = true;
         ESP_LOGI(kTag, "ADR-001 layout: exttab gen=%lu entries=%u",
                  static_cast<unsigned long>(fl->generation), fl->entry_count);
+        // coredump 子領域が登録されたので espcoredump を再初期化し、前回の
+        // クラッシュがあれば要約 (タスク名 / PC / 原因 / バックトレース) を出す。
+        stackchan::crash_report::init();
+        stackchan::crash_report::log_boot_summary();
         // Main は自分ではイメージを受信しない。BLE / HTTP の OTA begin と
         // release-fetch はどちらも Recovery へ引き継ぐ。
         stackchan::wifi_config::release_ota::set_handoff_to_recovery(true);

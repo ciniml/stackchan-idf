@@ -17,7 +17,7 @@ idf_component_register(
         "sano_fetch.cpp"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
-    REQUIRES tl_expected config_service avatar_vm esp_http_server
+    REQUIRES tl_expected config_service avatar_vm esp_http_server crash_report
     PRIV_REQUIRES
         flash_layout
         esp_https_ota

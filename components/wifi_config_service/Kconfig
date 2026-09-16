@@ -16,4 +16,12 @@ menu "Stack-chan Channel API (Claude Code)"
             committed sdkconfig.defaults — the token is the only thing
             protecting the API from anyone who reaches the tunnel.
 
+
+config WIFI_CONFIG_DEBUG_CRASH_API
+    bool "Expose POST /api/debug/crash (deliberate abort) for crash-report testing"
+    default n
+    help
+        コアダンプ保存 → 再起動 → /api/coredump の一連を検証するための意図的な
+        abort() エンドポイント。診断ビルド専用。通常のビルドでは n。
+
 endmenu

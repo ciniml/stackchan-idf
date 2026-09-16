@@ -54,6 +54,7 @@ enum fl_kind {
     FL_KIND_RAW = 2,       // 生データ (先頭に用途ごとのヘッダ: HMM 音声など)
     FL_KIND_SPIFFS = 3,    // SPIFFS
     FL_KIND_LITTLEFS = 4,  // LittleFS
+    FL_KIND_COREDUMP = 5,  // ESP-IDF espcoredump (data/coredump)。パニック時の保存先
 };
 
 // entry.flags

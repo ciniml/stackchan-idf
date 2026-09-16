@@ -219,3 +219,22 @@ CONFIG_FREERTOS_USE_TRACE_FACILITY=y
 # (TX BA window = 6), so 10 buffers is still comfortable; failure mode if
 # exhausted is a TCP retransmit (latency, not loss).
 CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=10
+
+# --- Crash handling -------------------------------------------------------
+# OCD-aware panic handling is OFF. With it on, a panic while the USB-JTAG
+# port is plugged into a PC makes the panic handler think a debugger is
+# attached: it disables every watchdog, stalls the other core, sets a
+# breakpoint "and returns" — no reboot. Observed on CoreS3 (2026-09-17):
+# CPU1 dead (render/servo/speaker tasks frozen), CPU0 still serving HTTP,
+# all WDTs off — a zombie. Production firmware must always reboot.
+CONFIG_ESP_DEBUG_OCDAWARE=n
+
+# Core dump to the ADR-001 "coredump" exttab child (64 KiB, ELF + CRC32).
+# The partition is registered by flash_layout::init() after the system's
+# own esp_core_dump_init() ran, so crash_report::init() calls it again;
+# CHECK_BOOT is off for the same reason (crash_report logs the summary).
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+CONFIG_ESP_COREDUMP_CHECK_BOOT=n
+CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=40

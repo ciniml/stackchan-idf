@@ -147,5 +147,29 @@ PY32 0x6F へのアクセス) が走ると 数十分〜数時間で発生する�
 
 ---
 
-## 3. (将来用) ここに追記してください
+## 3. USB-JTAG 接続中のパニックで再起動せず「ゾンビ」化 (対策済み)
+
+**症状**: アイドル発話・顔アニメ・サーボが止まるが HTTP は応答する。
+吹き出しが出ず、`heap:` ログも止まる。電源再投入で復帰。
+
+**発生履歴**: 2026-09-16〜17 CoreS3。USB-C を PC に繋いだまま運用中に 3 回。
+繋いでいないときは代わりに再起動 (TG1WDT_SYS_RST) として現れていた。
+
+**確認した状態 (OpenOCD で無停止アタッチ)**: CPU1 が ROM の起動待ちループ、
+CPU0 は正常、TIMG0/TIMG1/RTC の全 WDT が無効、`pxCurrentTCBs[1]` = render、
+`balloon_in_flight` = true (吹き出し完了コールバックは render 側なので永久に来ない)。
+
+**原因**: `CONFIG_ESP_DEBUG_OCDAWARE=y` (IDF 既定)。パニックハンドラは
+`esp_cpu_dbgr_is_attached()` が真だと WDT を全部止め、他コアを stall し、
+ブレークポイントを仕掛けて**復帰する** (再起動しない)。USB-JTAG が PC に
+列挙されているだけでこの経路に入る。元のパニックは状況証拠から CPU1 の
+割り込み WDT (render 実行中)。
+
+**対策**: `CONFIG_ESP_DEBUG_OCDAWARE=n` で常に再起動させる。あわせて
+espcoredump をフラッシュ (ADR-001 exttab の `coredump` 64 KiB) に保存し、
+起動時ログと `GET /api/coredump` で前回パニックの要約 (タスク名 / PC /
+原因 / バックトレース) を取れるようにした。**元のパニックの根本原因は未解決**
+— 次回発生時に `/api/coredump` の PC / バックトレースを addr2line で解析する。
+
+## 4. (将来用) ここに追記してください
 

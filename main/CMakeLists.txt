@@ -1,5 +1,6 @@
 set(_main_priv_reqs
     board
+    crash_report
     scs_servo
     avatar
     conversation
