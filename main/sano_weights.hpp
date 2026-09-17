@@ -28,6 +28,7 @@ const char* store(std::span<const std::uint8_t> data);
 const char* clear();
 
 struct Status {
+    bool supported = false;          // このファームウェアに sanoTTS エンジンが入っているか
     bool loaded = false;             // jtts に登録済みか
     std::uint32_t stored_bytes = 0;  // 領域上の blob サイズ (0 = なし)
     std::uint32_t capacity = 0;      // 領域容量 (0 = 領域なし)

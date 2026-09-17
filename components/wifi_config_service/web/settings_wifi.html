@@ -1268,6 +1268,8 @@ async function refreshSanottsStatus() {
     const st = await fetchJSON('/api/sanotts');
     if (st.capacity === 0) {
       $('sanotts-status').textContent = '状態: sanotts 領域なし (旧パーティション表)';
+    } else if (st.supported === false) {
+      $('sanotts-status').textContent = '状態: このファームウェアには sanoTTS エンジンが入っていません (取得・書き込み不可)';
     } else if (st.loaded) {
       $('sanotts-status').textContent =
         `状態: ロード済み (${Math.round(st.stored/1024)} KiB / 上限 ${Math.round(st.capacity/1024)} KiB)`;

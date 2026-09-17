@@ -3,6 +3,8 @@
 
 #include "sano_weights.hpp"
 
+#include <sdkconfig.h>
+
 #include <cstring>
 
 #include <esp_crc.h>
@@ -103,6 +105,11 @@ bool init() {
 }
 
 const char* store(std::span<const std::uint8_t> data) {
+#if !CONFIG_JTTS_ENABLE_SANOTTS
+    // エンジンがスタブのビルドでは、保存してもロードは必ず失敗する。領域を消す前に断る。
+    (void)data;
+    return "sanoTTS engine is not built into this firmware";
+#endif
     if (data.empty()) return "empty body";
     const esp_partition_t* part = find_partition();
     if (part == nullptr) return "sanotts storage unavailable on this board";
@@ -152,6 +159,9 @@ const char* clear() {
 
 Status status() {
     Status st;
+#if CONFIG_JTTS_ENABLE_SANOTTS
+    st.supported = true;
+#endif
     st.loaded = jtts::sano_weights_loaded();
     const esp_partition_t* part = find_partition();
     if (part != nullptr) {

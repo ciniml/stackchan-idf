@@ -30,3 +30,8 @@ CONFIG_JTTS_ENABLE_HMM=y
 # hts のラベル生成 + 合成が既定 8 KiB スタックを溢れさせる (cores3/stopwatch と
 # 同じ理由で 16 KiB 必要)。HMM 有効ボードでは必須。
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+
+# sanoTTS-jp (ニューラル TTS)。重みは flash の sanotts 領域、arena 176 KB は PSRAM。
+# PSRAM のあるボードで有効 (cores3 と同じ)。無効ビルドでは取得/書き込みを断る。
+CONFIG_JTTS_ENABLE_SANOTTS=y

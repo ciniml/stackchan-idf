@@ -2378,6 +2378,13 @@ const char* sano_fetch_start_async(const std::string& release, const std::string
 {
     if (g_mutex == nullptr) return "not ready";
     if (!g_wifi_connected.load()) return "sta not connected";
+    {
+        // エンジンが入っていないビルドでは 654 KB を取りに行く前に断る。
+        xSemaphoreTake(g_mutex, portMAX_DELAY);
+        SanoWeightsStatusGetter getter = g_sano_weights_status_getter;
+        xSemaphoreGive(g_mutex);
+        if (getter && !getter().supported) return "sanoTTS engine is not built into this firmware";
+    }
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     if (g_sano_fetch_state == SanoFetchState::Running) {
         xSemaphoreGive(g_mutex);
@@ -2421,9 +2428,9 @@ std::string sano_status_json()
         xSemaphoreGive(g_mutex);
     }
     const SanoWeightsStatus st = getter ? getter() : SanoWeightsStatus{};
-    char head[128];
-    std::snprintf(head, sizeof(head), R"({"loaded":%s,"stored":%u,"capacity":%u,"fetch":{"state":"%s")",
-                  st.loaded ? "true" : "false", static_cast<unsigned>(st.stored_bytes),
+    char head[160];
+    std::snprintf(head, sizeof(head), R"({"supported":%s,"loaded":%s,"stored":%u,"capacity":%u,"fetch":{"state":"%s")",
+                  st.supported ? "true" : "false", st.loaded ? "true" : "false", static_cast<unsigned>(st.stored_bytes),
                   static_cast<unsigned>(st.capacity), sano_fetch_state_name(state));
     std::string out = head;
     // release / file は sano_fetch 側で [A-Za-z0-9._-] に制限されるが、未検証の

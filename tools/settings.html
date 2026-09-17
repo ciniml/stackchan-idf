@@ -3963,6 +3963,10 @@ function renderSanoTtsStatus(s) {
   const el = document.getElementById('sanotts-status');
   if (!el) return;
   const kb = (n) => (n / 1024).toFixed(0) + ' KiB';
+  if (s.supported === false) {
+    el.textContent = 'このファームウェアには sanoTTS エンジンが入っていません (取得不可)';
+    return (s.fetch || {}).state;
+  }
   let text = s.loaded ? `保存済み・ロード済み (${kb(s.stored)} / 領域 ${kb(s.capacity)})`
            : (s.stored ? `保存済み (${kb(s.stored)}) だが未ロード` : `未保存 (領域 ${kb(s.capacity)})`);
   const f = s.fetch || {};

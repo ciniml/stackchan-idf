@@ -38,3 +38,8 @@ CONFIG_JTTS_ENABLE_HMM=y
 # hts_engine の合成 (ラベル パース等のスタック ローカル) が main タスクの
 # 既定 8 KB を溢れさせるため増量。
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+
+# sanoTTS-jp (ニューラル TTS)。重みは flash の sanotts 領域、arena 176 KB は PSRAM。
+# PSRAM のあるボードで有効 (cores3 と同じ)。無効ビルドでは取得/書き込みを断る。
+CONFIG_JTTS_ENABLE_SANOTTS=y

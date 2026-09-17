@@ -166,7 +166,12 @@ void set_hmm_voice_status_getter(HmmVoiceStatusGetter getter);
 //                              機体が公式 GitHub Releases から取得して sink へ。
 //   GET  /api/sanotts        — status getter の内容を JSON で返す。
 using SanoWeightsSink = HmmVoiceSink;
-using SanoWeightsStatus = HmmVoiceStatus;
+struct SanoWeightsStatus {
+    bool supported = false;  // sanoTTS エンジンがこのファームウェアに入っているか
+    bool loaded = false;
+    std::uint32_t stored_bytes = 0;
+    std::uint32_t capacity = 0;  // 0 = sanotts 領域なし
+};
 using SanoWeightsStatusGetter = std::function<SanoWeightsStatus()>;
 void set_sano_weights_sink(SanoWeightsSink sink);
 void set_sano_weights_status_getter(SanoWeightsStatusGetter getter);

@@ -464,7 +464,7 @@ void register_avatar_bytecode_sinks()
     stackchan::wifi_config::set_sano_weights_status_getter(
         []() -> stackchan::wifi_config::SanoWeightsStatus {
             const auto st = sano_weights::status();
-            return {st.loaded, st.stored_bytes, st.capacity};
+            return {st.supported, st.loaded, st.stored_bytes, st.capacity};
         });
     // BLE 側は wifi_config_service の共用ジョブ / JSON をそのまま使う。
     stackchan::config::set_sanotts_status_getter(&stackchan::wifi_config::sano_status_json);
