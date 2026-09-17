@@ -27,8 +27,8 @@ idf.py build
 idf.py -p /dev/ttyACM0 flash monitor
 ```
 
-`components/M5Unified` / `components/M5GFX` / `components/tl_expected/expected`
-は upstream を指す submodule。M5Unified `RTC_PowerHub_Class::setAlarmIRQ` の
+`components/M5Unified` / `third_party/m5gfx` / `components/tl_expected/expected`
+は upstream を指す submodule。M5GFX は `components/` の外に置き、`main/idf_component.yml` の `m5stack/m5gfx` を `override_path` でそこへ向けている (managed component との 2 コピー化を防ぐため。詳細 docs/known_issues.md §5)。M5Unified `RTC_PowerHub_Class::setAlarmIRQ` の
 `buf` 初期化未指定が GCC `-Werror=maybe-uninitialized` に引っかかるため、
 [patches/m5unified.patch](patches/m5unified.patch) を
 [tools/apply-m5-patches.sh](tools/apply-m5-patches.sh) で適用する。

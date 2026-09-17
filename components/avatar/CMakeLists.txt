@@ -6,7 +6,7 @@ idf_component_register(
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES
-        M5GFX
+        m5gfx
         M5Unified
         avatar_vm
 )

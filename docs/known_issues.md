@@ -227,11 +227,15 @@ OpenOCD 経由の GPIO レジスタ読み書きは CPU 側の実態と一致し�
 - `dependencies.lock` をコミット対象にし、CI とローカルで managed component の
   解決結果を一致させる (`.gitignore` から除外)。
 
-**根本対策 (未実施)**: M5GFX を 1 コピーにする。案: submodule を `components/`
-の外 (例 `third_party/M5GFX`) へ移して自動検出を止め、`main/idf_component.yml` の
-`m5stack/m5gfx` に `override_path` でその submodule を指す。これで M5Unified
-(`m5gfx` を REQUIRES) も本体も同一ソースのヘッダ/コードになり、版更新は
-submodule の更新だけで済む。
+**根本対策 (実施済み, 2026-09-18)**: M5GFX を 1 コピーにした。submodule を
+`third_party/m5gfx` (components/ の外 = 自動検出されない) へ移し、
+`main/idf_component.yml` の `m5stack/m5gfx` を `override_path: ../third_party/m5gfx`
+でそこへ向ける。M5Unified (`m5gfx` を REQUIRES) も board / avatar / avatar_vm / main
+も同じソースのヘッダ・コードになり、リンクマップにも `libm5gfx.a` しか現れない。
+版更新は submodule の更新だけで済む。component manager は lock のローカル
+パスを絶対パスで書き戻すので、`make build` / `make set-target` の後に
+`make normalize-lock` で `third_party/m5gfx` の相対形に戻している (相対形のまま
+構成が通ることは確認済み)。
 
 ## 6. (将来用) ここに追記してください
 

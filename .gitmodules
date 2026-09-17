@@ -2,7 +2,7 @@
 	path = components/M5Unified
 	url = https://github.com/m5stack/M5Unified.git
 [submodule "components/M5GFX"]
-	path = components/M5GFX
+	path = third_party/m5gfx
 	url = https://github.com/m5stack/M5GFX.git
 [submodule "components/tl_expected/expected"]
 	path = components/tl_expected/expected

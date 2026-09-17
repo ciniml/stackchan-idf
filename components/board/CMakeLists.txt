@@ -29,7 +29,7 @@ idf_component_register(
     PRIV_INCLUDE_DIRS "."
     REQUIRES
         M5Unified
-        M5GFX
+        m5gfx
         tl_expected
     PRIV_REQUIRES ${_board_priv_reqs}
 )

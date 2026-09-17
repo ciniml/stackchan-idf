@@ -21,12 +21,14 @@ dependencies:
   # first attempt: 0x45b4e0 vs 0x371bb0 on 2.4.7). dependencies.lock is
   # gitignored, so CI always resolves fresh — the manifest must carry the cap.
   espressif/esp-sr: "~2.4.0"
-  # M5GFX is pulled in transitively by M5Unified (">=0.2.22"). Pinned to the
-  # same version as the components/M5GFX submodule: 0.2.27+ rewrote the GPIO
-  # backup/restore used by i2c_temporary_switcher_t (Atomic ECHO BASE codec
-  # I2C on GPIO 38/39) and no longer restores GPIO 38's RMT routing, which
-  # killed the AtomNyan nekomimi LED strip from v0.12.0 (CI resolved 0.2.28+).
-  # nekomimi_led_strip.cpp also self-heals the pin, but keep the version
-  # deterministic. dependencies.lock is committed since 2026-09-18 so CI and
-  # local builds resolve identically; bump deliberately, not by accident.
-  m5stack/m5gfx: "==0.2.23"
+  # M5GFX: ONE copy only. M5Unified's manifest requires m5stack/m5gfx, so the
+  # component manager would download a registry copy; override_path points it
+  # at our submodule (third_party/m5gfx, deliberately outside components/ so
+  # it is not auto-discovered as a second component). Before 2026-09-18 both
+  # copies were built: headers came from the submodule, code from the managed
+  # library, and when m5gfx 0.2.27 changed pin_backup_t's layout the ABI
+  # mismatch broke i2c_temporary_switcher_t and killed the AtomNyan nekomimi
+  # LEDs (docs/known_issues.md §5). Bump M5GFX by moving the submodule.
+  m5stack/m5gfx:
+    version: "*"
+    override_path: "../third_party/m5gfx"

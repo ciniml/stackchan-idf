@@ -76,7 +76,7 @@ Open JTalk / pyopenjtalk を使います (firmware には含みません)。
 
 | コンポーネント | ライセンス | 著作権表示 |
 |---|---|---|
-| [M5GFX](components/M5GFX/LICENSE) | MIT | © 2021 M5Stack |
+| [M5GFX](third_party/m5gfx/LICENSE) | MIT | © 2021 M5Stack |
 | [M5Unified](components/M5Unified/LICENSE) | MIT | © 2021 M5Stack |
 | [tl::expected](components/tl_expected/expected/COPYING) | CC0 1.0 (public domain) | Sy Brand |
 | ESP-IDF managed_components (`espressif/*`) | Apache-2.0 | © Espressif Systems |

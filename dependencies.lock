@@ -40,7 +40,7 @@ dependencies:
       type: service
     version: 1.8.0
   espressif/esp-nn:
-    component_hash: 41b0ab49a5a5c88fc7331d76fc5cc58d1ec3e356ff42ea9cb88270daf415ffef
+    component_hash: d655eee0d597b1bfc12ff81efc49b835c1832a5521e1ff69691e50674399dbdc
     dependencies:
     - name: idf
       require: private
@@ -48,7 +48,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.3.2
+    version: 1.4.0
   espressif/esp-now:
     component_hash: 217f4e2c1672bcc71e5890fb3659528bbce5f1a8a995b1668fec9374acbd0f45
     dependencies:
@@ -178,11 +178,10 @@ dependencies:
       type: idf
     version: 5.5.5
   m5stack/m5gfx:
-    component_hash: 96695547f4403f0864a637325b63b37276233999fcbdd5e485f4e71fd2210020
     dependencies: []
     source:
-      registry_url: https://components.espressif.com/
-      type: service
+      path: third_party/m5gfx
+      type: local
     version: 0.2.23
 direct_dependencies:
 - espressif/esp-dsp
@@ -196,6 +195,6 @@ direct_dependencies:
 - espressif/mdns
 - espressif/quirc
 - m5stack/m5gfx
-manifest_hash: 8f7ae41d077981ead461cc78ddf178c02d40f0df9d6730a40b46e7af57c6b19b
+manifest_hash: bfbe74dff92f10c7c54b537ff84d98e5d465b33116e5ce1f3abee62178e71dac
 target: esp32s3
 version: 2.0.0

@@ -60,9 +60,20 @@ MONITOR_LOG_SECONDS ?= 8
 
 set-target:
 	bash -c "source $(IDF_EXPORTS) && idf.py -B $(BUILD_DIR) -DSDKCONFIG=$(BUILD_DIR)/sdkconfig -DSDKCONFIG_DEFAULTS='$(SDKCONFIG_DEFAULTS_HW)' set-target $(TARGET)"
+	$(MAKE) normalize-lock
 
 build:
 	bash -c "source $(IDF_EXPORTS) && idf.py -B $(BUILD_DIR) -DSDKCONFIG=$(BUILD_DIR)/sdkconfig -DSDKCONFIG_DEFAULTS='$(SDKCONFIG_DEFAULTS_HW)' build"
+	$(MAKE) normalize-lock
+
+# dependencies.lock is committed so CI and local builds resolve the same
+# managed-component versions. The component manager rewrites the local
+# (override_path) M5GFX entry with an ABSOLUTE path on every configure, which
+# would make the file machine-specific; rewrite it back to a project-relative
+# path (the manager accepts that form). Run after every build / set-target.
+.PHONY: normalize-lock
+normalize-lock:
+	@sed -i 's|path: $(CURDIR)/third_party/m5gfx|path: third_party/m5gfx|' dependencies.lock 2>/dev/null || true
 
 flash:
 	bash -c "source $(IDF_EXPORTS) && idf.py -B $(BUILD_DIR) $(IDFPY_PORT) flash"

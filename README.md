@@ -148,9 +148,11 @@ OpenAI / Gemini の API キーはビルドに埋め込まず、BLE / Wi-Fi 設�
 │   ├── config_service/     BLE GATT 設定サービス + NVS + OTA + X25519/AES-GCM
 │   ├── wifi_config_service/ Wi-Fi HTTP 設定 + 内蔵 Web ページ + release OTA
 │   ├── telegram/           Telegram Bot API (TLS) 通知クライアント (oss)
-│   ├── M5GFX/              submodule (upstream)
 │   ├── M5Unified/          submodule (upstream + 1 patch)
 │   └── tl_expected/        tl::expected backport (submodule)
+├── third_party/
+│   └── M5GFX/              submodule (upstream; main/idf_component.yml の override_path で
+│                           m5stack/m5gfx として 1 コピーだけ使う)
 ├── main/                   app_main, render/servo task, demo_loop, ap_screen,
 │                           captive_portal, device_ui, atom_status, wifi_sta
 ├── patches/                upstream-targeted patches
@@ -170,7 +172,7 @@ OpenAI / Gemini の API キーはビルドに埋め込まず、BLE / Wi-Fi 設�
 `components/telegram`, `main`, `tools`) は
 **Boost Software License 1.0** ([LICENSE](LICENSE)) の下で配布されます。
 
-Submodule (`components/M5GFX` / `components/M5Unified` / `components/tl_expected/expected`)
+Submodule (`third_party/m5gfx` / `components/M5Unified` / `components/tl_expected/expected`)
 と managed_components (`espressif/esp_audio_codec` / `espressif/esp_websocket_client` /
 `espressif/mdns` / `espressif/esp_jpeg` / `espressif/esp32-camera` 等)
 はそれぞれの upstream ライセンスに従います。
