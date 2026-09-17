@@ -12,7 +12,7 @@ set(_main_priv_reqs
     espressif__esp-sr
     json
     M5Unified
-    M5GFX
+    m5gfx
     esp_timer
     esp_psram
     driver
