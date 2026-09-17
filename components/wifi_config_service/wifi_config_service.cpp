@@ -391,6 +391,21 @@ void set_sano_weights_sink(SanoWeightsSink sink)
     http::set_sano_weights_sink(std::move(sink));
 }
 
+const char* sano_fetch_start_async(const std::string& release, const std::string& file)
+{
+    return http::sano_fetch_start_async(release, file);
+}
+
+std::string sano_status_json()
+{
+    return http::sano_status_json();
+}
+
+const char* sano_command_json(std::string_view json)
+{
+    return http::sano_command_json(json);
+}
+
 void set_sano_weights_status_getter(SanoWeightsStatusGetter getter)
 {
     http::set_sano_weights_status_getter(std::move(getter));

@@ -457,6 +457,18 @@ void set_speaker_volume_sink(SpeakerVolumeSink sink);
 using JttsSayKanaSink = void (*)(std::string_view kana);
 void set_jtts_say_kana_sink(JttsSayKanaSink sink);
 
+// sanoTTS-jp weights over BLE (chr 0x2f, encrypted R/W). READ returns the
+// status JSON ({"loaded","stored","capacity","fetch":{...}}); WRITE takes a
+// command JSON ({"op":"fetch","release":"v1.1.0","file":"..."} /
+// {"op":"clear"}). The device fetches the blob itself over its Wi-Fi STA
+// link from the official GitHub Releases, so the phone needs no internet.
+// Same job + JSON as HTTP /api/sanotts*. The sink returns nullptr on
+// accept, else an error string (the write then fails at the ATT level).
+using SanoTtsStatusGetter = std::string (*)();
+using SanoTtsCommandSink  = const char* (*)(std::string_view json);
+void set_sanotts_status_getter(SanoTtsStatusGetter getter);
+void set_sanotts_command_sink(SanoTtsCommandSink sink);
+
 // Dance trigger shared by both settings transports (HTTP /api/dance/*, BLE chr)
 // and the on-device UI. cmd: 1=start, 2=stop; id selects the dance (0 today).
 // The application registers the sink; it pokes SharedState.dance for the engine.

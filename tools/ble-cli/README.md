@@ -31,6 +31,11 @@ stackchan-ble status --device IDF --password <pw>
 stackchan-ble set-mode 5 --device IDF --password <pw>
 stackchan-ble set-mode 2 --device IDF --password <pw> --no-apply   # staging のみ
 
+# sanoTTS-jp 重み: 状態 / 機体自身に公式 Releases から取得させる / 削除 (chr 0x2f)
+stackchan-ble sanotts-status --device IDF --password <pw>
+stackchan-ble sanotts-fetch v1.1.0 saanotts-jp-v4-int8.bin --device IDF --password <pw>
+stackchan-ble sanotts-clear --device IDF --password <pw>
+
 # 任意 characteristic を暗号 read / write (UUID 直指定・値は hex)
 stackchan-ble read  e3f0a005-7b1c-4d2a-9e6f-2c5a8d4b1f00 --device IDF --password <pw>
 stackchan-ble write e3f0a025-7b1c-4d2a-9e6f-2c5a8d4b1f00 05    --device IDF --password <pw>

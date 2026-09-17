@@ -68,4 +68,8 @@ void set_speaker_volume_sink(SpeakerVolumeSink sink);
 // JTTS test-say sink (BLE chr 0x2d).
 void set_jtts_say_kana_sink(JttsSayKanaSink sink);
 
+// sanoTTS weights status getter / command sink (BLE chr 0x2f).
+void set_sanotts_status_getter(SanoTtsStatusGetter getter);
+void set_sanotts_command_sink(SanoTtsCommandSink sink);
+
 } // namespace stackchan::config::gatt

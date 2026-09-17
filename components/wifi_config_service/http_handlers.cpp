@@ -146,6 +146,48 @@ VoiceDbStatusGetter g_voice_db_status_getter = nullptr;
 HmmVoiceSink g_hmm_voice_sink = nullptr;
 SanoWeightsSink g_sano_weights_sink = nullptr;
 SanoWeightsStatusGetter g_sano_weights_status_getter = nullptr;
+
+// sanoTTS 取得ジョブ (BLE / HTTP 共用)。g_mutex で保護。
+enum class SanoFetchState : std::uint8_t { Idle, Running, Done, Error };
+SanoFetchState g_sano_fetch_state = SanoFetchState::Idle;
+std::string g_sano_fetch_release;
+std::string g_sano_fetch_file;
+const char* g_sano_fetch_error = nullptr;
+
+const char* sano_fetch_state_name(SanoFetchState s)
+{
+    switch (s) {
+    case SanoFetchState::Running: return "running";
+    case SanoFetchState::Done:    return "done";
+    case SanoFetchState::Error:   return "error";
+    default:                      return "idle";
+    }
+}
+
+void sano_fetch_task(void* /*arg*/)
+{
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    const std::string release = g_sano_fetch_release;
+    const std::string file = g_sano_fetch_file;
+    SanoWeightsSink sink = g_sano_weights_sink;
+    xSemaphoreGive(g_mutex);
+
+    const char* err = nullptr;
+    if (!sink) {
+        err = "sanotts sink not ready";
+    } else {
+        err = sano_fetch::fetch_and_install(
+            release, file, [&sink](const std::uint8_t* d, std::size_t n) { return sink(d, n); });
+    }
+    if (err != nullptr) {
+        ESP_LOGE(kTag, "sanotts fetch %s/%s: %s", release.c_str(), file.c_str(), err);
+    }
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    g_sano_fetch_error = err;
+    g_sano_fetch_state = err == nullptr ? SanoFetchState::Done : SanoFetchState::Error;
+    xSemaphoreGive(g_mutex);
+    vTaskDelete(nullptr);
+}
 HmmVoiceStatusGetter g_hmm_voice_status_getter = nullptr;
 CameraCaptureSink g_camera_capture_sink = nullptr;
 CameraRegSink g_camera_reg_sink = nullptr;
@@ -1485,15 +1527,7 @@ esp_err_t handle_hmm_voice_fetch_post(httpd_req_t* req)
 esp_err_t handle_sanotts_get(httpd_req_t* req)
 {
     if (!require_auth(req)) return ESP_OK;
-    xSemaphoreTake(g_mutex, portMAX_DELAY);
-    SanoWeightsStatusGetter getter = g_sano_weights_status_getter;
-    xSemaphoreGive(g_mutex);
-    const SanoWeightsStatus st = getter ? getter() : SanoWeightsStatus{};
-    char body[128];
-    std::snprintf(body, sizeof(body), R"({"loaded":%s,"stored":%u,"capacity":%u})",
-                  st.loaded ? "true" : "false", static_cast<unsigned>(st.stored_bytes),
-                  static_cast<unsigned>(st.capacity));
-    return send_json(req, body);
+    return send_json(req, sano_status_json());
 }
 
 esp_err_t handle_sanotts_post(httpd_req_t* req)
@@ -1569,18 +1603,24 @@ esp_err_t handle_sanotts_fetch_post(httpd_req_t* req)
     const std::string file_name = file->valuestring;
     cJSON_Delete(root);
 
+    // BLE と共用の取得ジョブに乗せ、完了まで待つ (設定ページは同期応答を期待)。
+    if (const char* err = sano_fetch_start_async(release, file_name); err != nullptr) {
+        return send_error(req, "409 Conflict", err);
+    }
+    const char* err = nullptr;
+    for (int i = 0; i < 1800; ++i) {  // 最長 3 分
+        vTaskDelay(pdMS_TO_TICKS(100));
+        xSemaphoreTake(g_mutex, portMAX_DELAY);
+        const SanoFetchState s = g_sano_fetch_state;
+        err = g_sano_fetch_error;
+        xSemaphoreGive(g_mutex);
+        if (s != SanoFetchState::Running) break;
+        err = "timeout";
+    }
+    if (err != nullptr) return send_error(req, "502 Bad Gateway", err);
     xSemaphoreTake(g_mutex, portMAX_DELAY);
-    SanoWeightsSink sink = g_sano_weights_sink;
     SanoWeightsStatusGetter getter = g_sano_weights_status_getter;
     xSemaphoreGive(g_mutex);
-    if (!sink) return send_error(req, "503 Service Unavailable", "sanotts sink not ready");
-
-    const char* err = sano_fetch::fetch_and_install(
-        release, file_name, [sink](const std::uint8_t* d, std::size_t n) { return sink(d, n); });
-    if (err != nullptr) {
-        ESP_LOGE(kTag, "sanotts fetch %s/%s: %s", release.c_str(), file_name.c_str(), err);
-        return send_error(req, "502 Bad Gateway", err);
-    }
     const SanoWeightsStatus st = getter ? getter() : SanoWeightsStatus{};
     char out[96];
     std::snprintf(out, sizeof(out), R"({"ok":true,"stored":%u})", static_cast<unsigned>(st.stored_bytes));
@@ -2332,6 +2372,112 @@ void set_sano_weights_sink(SanoWeightsSink sink)
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     g_sano_weights_sink = std::move(sink);
     xSemaphoreGive(g_mutex);
+}
+
+const char* sano_fetch_start_async(const std::string& release, const std::string& file)
+{
+    if (g_mutex == nullptr) return "not ready";
+    if (!g_wifi_connected.load()) return "sta not connected";
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    if (g_sano_fetch_state == SanoFetchState::Running) {
+        xSemaphoreGive(g_mutex);
+        return "already running";
+    }
+    if (!g_sano_weights_sink) {
+        xSemaphoreGive(g_mutex);
+        return "sanotts sink not ready";
+    }
+    g_sano_fetch_release = release;
+    g_sano_fetch_file = file;
+    g_sano_fetch_error = nullptr;
+    g_sano_fetch_state = SanoFetchState::Running;
+    xSemaphoreGive(g_mutex);
+    // 内部 RAM スタック: TLS 受信の後に esp_partition_write (flash) を行うため
+    // PSRAM スタック不可。12 KiB は release-ota / vfetch ワーカーと同じ根拠。
+    if (xTaskCreatePinnedToCore(&sano_fetch_task, "sano-fetch", 12 * 1024, nullptr, tskIDLE_PRIORITY + 3,
+                                nullptr, 0) != pdPASS) {
+        xSemaphoreTake(g_mutex, portMAX_DELAY);
+        g_sano_fetch_state = SanoFetchState::Error;
+        g_sano_fetch_error = "spawn failed";
+        xSemaphoreGive(g_mutex);
+        return "spawn failed";
+    }
+    return nullptr;
+}
+
+std::string sano_status_json()
+{
+    SanoWeightsStatusGetter getter;
+    SanoFetchState state = SanoFetchState::Idle;
+    std::string release, file;
+    const char* err = nullptr;
+    if (g_mutex != nullptr) {
+        xSemaphoreTake(g_mutex, portMAX_DELAY);
+        getter = g_sano_weights_status_getter;
+        state = g_sano_fetch_state;
+        release = g_sano_fetch_release;
+        file = g_sano_fetch_file;
+        err = g_sano_fetch_error;
+        xSemaphoreGive(g_mutex);
+    }
+    const SanoWeightsStatus st = getter ? getter() : SanoWeightsStatus{};
+    char head[128];
+    std::snprintf(head, sizeof(head), R"({"loaded":%s,"stored":%u,"capacity":%u,"fetch":{"state":"%s")",
+                  st.loaded ? "true" : "false", static_cast<unsigned>(st.stored_bytes),
+                  static_cast<unsigned>(st.capacity), sano_fetch_state_name(state));
+    std::string out = head;
+    // release / file は sano_fetch 側で [A-Za-z0-9._-] に制限されるが、未検証の
+    // 文字列が入り得る (start_async 直後) ので念のためエスケープする。
+    auto append_str = [&out](const char* key, const std::string& v) {
+        out += ",\"";
+        out += key;
+        out += "\":\"";
+        for (char c : v) {
+            if (c == '"' || c == '\\') out += '\\';
+            if (static_cast<unsigned char>(c) < 0x20) continue;
+            out += c;
+        }
+        out += '"';
+    };
+    append_str("release", release);
+    append_str("file", file);
+    append_str("error", err != nullptr ? std::string{err} : std::string{});
+    out += "}}";
+    return out;
+}
+
+const char* sano_command_json(std::string_view json)
+{
+    cJSON* root = cJSON_ParseWithLength(json.data(), json.size());
+    if (root == nullptr) return "bad json";
+    const cJSON* op = cJSON_GetObjectItemCaseSensitive(root, "op");
+    if (!cJSON_IsString(op) || op->valuestring == nullptr) {
+        cJSON_Delete(root);
+        return "op required";
+    }
+    const char* err = nullptr;
+    if (std::strcmp(op->valuestring, "fetch") == 0) {
+        const cJSON* rel = cJSON_GetObjectItemCaseSensitive(root, "release");
+        const cJSON* file = cJSON_GetObjectItemCaseSensitive(root, "file");
+        if (!cJSON_IsString(rel) || !cJSON_IsString(file)) {
+            err = "release and file required";
+        } else {
+            err = sano_fetch_start_async(rel->valuestring, file->valuestring);
+        }
+    } else if (std::strcmp(op->valuestring, "clear") == 0) {
+        SanoWeightsSink sink;
+        if (g_mutex != nullptr) {
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            sink = g_sano_weights_sink;
+            if (g_sano_fetch_state != SanoFetchState::Running) g_sano_fetch_state = SanoFetchState::Idle;
+            xSemaphoreGive(g_mutex);
+        }
+        err = sink ? sink(nullptr, 0) : "sanotts sink not ready";
+    } else {
+        err = "unknown op";
+    }
+    cJSON_Delete(root);
+    return err;
 }
 
 void set_sano_weights_status_getter(SanoWeightsStatusGetter getter)

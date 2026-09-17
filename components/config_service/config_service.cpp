@@ -491,6 +491,16 @@ void set_jtts_say_kana_sink(JttsSayKanaSink sink)
     gatt::set_jtts_say_kana_sink(sink);
 }
 
+void set_sanotts_status_getter(SanoTtsStatusGetter getter)
+{
+    gatt::set_sanotts_status_getter(getter);
+}
+
+void set_sanotts_command_sink(SanoTtsCommandSink sink)
+{
+    gatt::set_sanotts_command_sink(sink);
+}
+
 void set_board_kind(std::uint8_t kind)
 {
     gatt::set_board_kind(kind);

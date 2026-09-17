@@ -335,6 +335,14 @@ static const ble_uuid128_t kSpeakerVolumeUuid = BLE_UUID128_INIT(
 static const ble_uuid128_t kJttsSayUuid = BLE_UUID128_INIT(
     0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
     0x2a, 0x4d, 0x1c, 0x7b, 0x2d, 0xa0, 0xf0, 0xe3);
+// SanoTts — encrypted R/W JSON. READ = status ({"loaded","stored",
+// "capacity","fetch":{"state","release","file","error"}}); WRITE = command
+// ({"op":"fetch","release":"v1.1.0","file":"saanotts-jp-v4-int8.bin"} or
+// {"op":"clear"}). The fetch runs on the device over its STA link; poll
+// READ until fetch.state leaves "running". Same job as HTTP /api/sanotts*.
+static const ble_uuid128_t kSanoTtsUuid = BLE_UUID128_INIT(
+    0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
+    0x2a, 0x4d, 0x1c, 0x7b, 0x2f, 0xa0, 0xf0, 0xe3);
 // DeviceName — encrypted R/W UTF-8 string (up to 24 bytes). Operator-set
 // override for the BLE advertising name AND the mDNS hostname seed (after
 // RFC-1123 sanitization). Empty means "use auto-generated Stackchan-XXXXXX".
@@ -398,6 +406,9 @@ static SpeakerVolumeGetter g_speaker_volume_getter = nullptr;
 static SpeakerVolumeSink   g_speaker_volume_sink   = nullptr;
 static uint16_t g_jtts_say_handle = 0;
 static JttsSayKanaSink g_jtts_say_sink = nullptr;
+static uint16_t g_sanotts_handle = 0;
+static SanoTtsStatusGetter g_sanotts_status_getter = nullptr;
+static SanoTtsCommandSink  g_sanotts_command_sink  = nullptr;
 static MicLipGainGetter g_mic_lip_gain_getter = nullptr;
 static MicLipGainSink g_mic_lip_gain_sink = nullptr;
 static uint16_t g_led_mouth_sync_handle = 0;
@@ -942,6 +953,23 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             xSemaphoreGive(g_mutex);
             return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
         }
+        if (attr_handle == g_sanotts_handle) {
+            // Status JSON from the getter, fetched off-lock (it takes the
+            // wifi_config_service mutex internally).
+            std::string json = "{}";
+            SanoTtsStatusGetter getter = g_sanotts_status_getter;
+            if (getter != nullptr) json = getter();
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            if (!g_session.is_established()) {
+                xSemaphoreGive(g_mutex);
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            const bool ok = append_encrypted(
+                ctxt->om,
+                {reinterpret_cast<const std::uint8_t*>(json.data()), json.size()});
+            xSemaphoreGive(g_mutex);
+            return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
+        }
         if (attr_handle == g_audio_metrics_handle) {
             // Fetch the snapshot off-lock — the getter pulls from
             // SharedState's own mutex and we don't want to nest g_mutex
@@ -1426,6 +1454,23 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             if (sink != nullptr) sink(kana);
             return 0;
         }
+        if (attr_handle == g_sanotts_handle) {
+            // Command JSON ({"op":"fetch",...} / {"op":"clear"}). The sink
+            // validates and kicks off the worker; an error string fails the
+            // write so the client sees it immediately (details via READ).
+            constexpr std::size_t kMaxSanoCmdBytes = 256;
+            if (pt.empty() || pt.size() > kMaxSanoCmdBytes) {
+                return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            }
+            SanoTtsCommandSink sink = g_sanotts_command_sink;
+            if (sink == nullptr) return BLE_ATT_ERR_UNLIKELY;
+            const char* err = sink(std::string_view{reinterpret_cast<const char*>(pt.data()), pt.size()});
+            if (err != nullptr) {
+                ESP_LOGW(kTag, "sanotts command rejected: %s", err);
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            return 0;
+        }
         if (attr_handle == g_avatar_bc_handle) {
             // Avatar bytecode chunked upload. Wire framing: [op:u8][...].
             if (pt.empty()) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
@@ -1721,6 +1766,13 @@ static ble_gatt_chr_def kChrs[] = {
         // worker. No read (idempotent test trigger).
         .flags = BLE_GATT_CHR_F_WRITE,
         .val_handle = &g_jtts_say_handle,
+    },
+    {
+        .uuid = &kSanoTtsUuid.u,
+        .access_cb = gatt_access_cb,
+        // R = status JSON, W = command JSON (fetch / clear). See kSanoTtsUuid.
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+        .val_handle = &g_sanotts_handle,
     },
     {
         .uuid = &kLedMouthSyncUuid.u,
@@ -2073,6 +2125,16 @@ void set_speaker_volume_sink(SpeakerVolumeSink sink)
 void set_jtts_say_kana_sink(JttsSayKanaSink sink)
 {
     g_jtts_say_sink = sink;
+}
+
+void set_sanotts_status_getter(SanoTtsStatusGetter getter)
+{
+    g_sanotts_status_getter = getter;
+}
+
+void set_sanotts_command_sink(SanoTtsCommandSink sink)
+{
+    g_sanotts_command_sink = sink;
 }
 
 void set_board_kind(std::uint8_t kind)

@@ -659,6 +659,25 @@
       <button type="button" id="btn-jtts-say" class="primary" disabled style="margin-top:0.5rem">話す</button>
     </div>
 
+    <div id="sanotts-section">
+      <h2 class="section-title">sanoTTS-jp 音声モデル</h2>
+      <p class="hint" style="margin-bottom:0.5rem">
+        機体が自分の Wi-Fi で公式 GitHub Releases (ayutaz/sanoTTS-jp) から重みを取得して保存します。
+        モデルの利用条件 (LICENSE-MODEL.md) は利用者が確認してください。
+        取得済みなら sanoTTS が優先して使われます。ファイルからの書き込みは Wi-Fi 設定画面で行えます。
+      </p>
+      <div id="sanotts-status" class="hint" style="margin-bottom:0.5rem">—</div>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
+        <input type="text" id="sanotts-release" value="v1.1.0" placeholder="release tag" style="flex:0 1 6rem">
+        <input type="text" id="sanotts-file" value="saanotts-jp-v4-int8.bin" placeholder="asset file" style="flex:1 1 12rem">
+      </div>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.5rem">
+        <button type="button" id="btn-sanotts-fetch" class="primary" disabled>取得して保存</button>
+        <button type="button" id="btn-sanotts-refresh" disabled>状態を更新</button>
+        <button type="button" id="btn-sanotts-clear" disabled>削除</button>
+      </div>
+    </div>
+
     <div id="audio-output-section">
       <h2 class="section-title">音声出力</h2>
       <p class="hint">
@@ -1218,6 +1237,9 @@ const CHR_SPEAKER_VOLUME = 'e3f0a02c-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // JttsSay — encrypted WRITE-only. UTF-8 kana bytes; the device spawns
 // a worker to synthesise + play through M5.Speaker. Test trigger only.
 const CHR_JTTS_SAY = 'e3f0a02d-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+// sanoTTS-jp 重み: R = 状態 JSON, W = {"op":"fetch","release","file"} / {"op":"clear"}。
+// 機体が自分の Wi-Fi で公式 GitHub Releases から取得する (スマホ側の通信は不要)。
+const CHR_SANOTTS = 'e3f0a02f-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // AvatarBytecode — encrypted RW. Chunked upload of the avatar face .avbc
 // (mirrors `POST /api/avatar-dsl` on the HTTP side). READ returns a status
 // JSON; WRITE accepts a 1-byte op header followed by op-specific payload:
@@ -1278,7 +1300,7 @@ const DIS_CHRS = {
 
 // --- State ---
 let bleDevice = null, bleServer = null, svc = null;
-let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJttsIdleEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrStartupArp = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null, chrMicLipGain = null, chrLedMouthSync = null, chrLipSyncMode = null, chrMicLipAgc = null, chrSpeakerVolume = null, chrJttsSay = null, chrOperationMode = null, chrAudioOutput = null, chrBargeIn = null, chrDeviceName = null, chrAuthPassword = null, chrAvatarBc = null;
+let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJttsIdleEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrStartupArp = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null, chrMicLipGain = null, chrLedMouthSync = null, chrLipSyncMode = null, chrMicLipAgc = null, chrSpeakerVolume = null, chrJttsSay = null, chrSanoTts = null, chrOperationMode = null, chrAudioOutput = null, chrBargeIn = null, chrDeviceName = null, chrAuthPassword = null, chrAvatarBc = null;
 let boardKind = null; // null = unknown (older firmware), else 0/1/2 from BOARD_*
 let batteryPollTimer = null;  // setInterval handle while connected
 let jttsInitialJson = '';  // last read JSON, used to detect Apply-time changes
@@ -1311,6 +1333,7 @@ function setBleUi(connected) {
   // is present (older firmware won't expose it).
   const sayBtn = document.getElementById('btn-jtts-say');
   if (sayBtn) sayBtn.disabled = !(connected && chrJttsSay);
+  if (typeof refreshSanoTtsSection === 'function') refreshSanoTtsSection(connected);
   // OTA button gating moved to refreshOtaButton() — it now also considers
   // the release dropdown and the connection's actual chr availability.
   if (typeof refreshOtaButton === 'function') refreshOtaButton();
@@ -2659,6 +2682,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       ['micLipAgc',    CHR_MIC_LIP_AGC],
       ['speakerVolume', CHR_SPEAKER_VOLUME],
       ['jttsSay',       CHR_JTTS_SAY],
+      ['sanoTts',       CHR_SANOTTS],
       ['operationMode', CHR_OPERATION_MODE],
       ['audioOutput',   CHR_AUDIO_OUTPUT],
       ['bargeIn',       CHR_BARGE_IN_ENABLED],
@@ -2715,6 +2739,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
     chrMicLipAgc = found.micLipAgc ?? null;
     chrSpeakerVolume = found.speakerVolume ?? null;
     chrJttsSay = found.jttsSay ?? null;
+    chrSanoTts = found.sanoTts ?? null;
     chrOperationMode = found.operationMode ?? null;
     chrAudioOutput = found.audioOutput ?? null;
     chrBargeIn = found.bargeIn ?? null;
@@ -3915,6 +3940,95 @@ async function sayJtts(text) {
     log(`jtts 試し発話 失敗: ${e?.message ?? e}`, 'err');
   }
 }
+
+// ===== sanoTTS-jp weights over BLE (chr 0x2f) ================================
+let sanoTtsPollTimer = null;
+
+function refreshSanoTtsSection(connected) {
+  const on = !!(connected && chrSanoTts && aesKey);
+  for (const id of ['btn-sanotts-fetch', 'btn-sanotts-refresh', 'btn-sanotts-clear']) {
+    const b = document.getElementById(id);
+    if (b) b.disabled = !on;
+  }
+  if (!on) {
+    if (sanoTtsPollTimer) { clearInterval(sanoTtsPollTimer); sanoTtsPollTimer = null; }
+    const st = document.getElementById('sanotts-status');
+    if (st) st.textContent = connected ? '(このファームウェアは BLE からの sanoTTS 操作に未対応)' : '—';
+  } else {
+    readSanoTtsStatus().catch(() => {});
+  }
+}
+
+function renderSanoTtsStatus(s) {
+  const el = document.getElementById('sanotts-status');
+  if (!el) return;
+  const kb = (n) => (n / 1024).toFixed(0) + ' KiB';
+  let text = s.loaded ? `保存済み・ロード済み (${kb(s.stored)} / 領域 ${kb(s.capacity)})`
+           : (s.stored ? `保存済み (${kb(s.stored)}) だが未ロード` : `未保存 (領域 ${kb(s.capacity)})`);
+  const f = s.fetch || {};
+  if (f.state === 'running') text += ` — 取得中: ${f.release}/${f.file}`;
+  else if (f.state === 'error') text += ` — 取得失敗: ${f.error || '?'}`;
+  else if (f.state === 'done') text += ` — 取得完了: ${f.release}/${f.file}`;
+  el.textContent = text;
+  return f.state;
+}
+
+async function readSanoTtsStatus() {
+  if (!chrSanoTts || !aesKey) return null;
+  const s = JSON.parse(dec.decode(await readEncrypted(chrSanoTts)));
+  return renderSanoTtsStatus(s);
+}
+
+function startSanoTtsPoll() {
+  if (sanoTtsPollTimer) clearInterval(sanoTtsPollTimer);
+  let ticks = 0;
+  sanoTtsPollTimer = setInterval(async () => {
+    ticks++;
+    try {
+      const state = await readSanoTtsStatus();
+      if (state !== 'running' || ticks > 120) {
+        clearInterval(sanoTtsPollTimer); sanoTtsPollTimer = null;
+        log(state === 'done' ? 'sanoTTS 重みを取得+保存しました' : `sanoTTS 取得: ${state}`, state === 'done' ? 'ok' : 'err');
+      }
+    } catch (e) {
+      clearInterval(sanoTtsPollTimer); sanoTtsPollTimer = null;
+      log(`sanoTTS 状態取得 失敗: ${e?.message ?? e}`, 'err');
+    }
+  }, 2000);
+}
+
+async function sanoTtsCommand(cmd) {
+  if (!chrSanoTts || !aesKey) return false;
+  try {
+    await writeEncrypted(chrSanoTts, enc.encode(JSON.stringify(cmd)));
+    return true;
+  } catch (e) {
+    log(`sanoTTS ${cmd.op} 失敗: ${e?.message ?? e} (機体側が拒否 — Wi-Fi 未接続 / 取得中 など。状態を更新して確認)`, 'err');
+    readSanoTtsStatus().catch(() => {});
+    return false;
+  }
+}
+
+document.getElementById('btn-sanotts-fetch').addEventListener('click', async () => {
+  const release = document.getElementById('sanotts-release').value.trim();
+  const file = document.getElementById('sanotts-file').value.trim();
+  if (!release || !file) { log('sanoTTS: release と file を入力してください', 'err'); return; }
+  if (!confirm(`機体が GitHub Releases (ayutaz/sanoTTS-jp ${release}/${file}) から取得します。LICENSE-MODEL.md の条件に同意していますか？`)) return;
+  if (await sanoTtsCommand({ op: 'fetch', release, file })) {
+    log(`sanoTTS 重みの取得を開始: ${release}/${file} (機体の Wi-Fi 経由、10〜30 秒)`, 'ok');
+    startSanoTtsPoll();
+  }
+});
+document.getElementById('btn-sanotts-refresh').addEventListener('click', () => {
+  readSanoTtsStatus().catch((e) => log(`sanoTTS 状態取得 失敗: ${e?.message ?? e}`, 'err'));
+});
+document.getElementById('btn-sanotts-clear').addEventListener('click', async () => {
+  if (!confirm('保存済みの sanoTTS 重みを削除しますか？ (以後は HMM / 他エンジンにフォールバック)')) return;
+  if (await sanoTtsCommand({ op: 'clear' })) {
+    log('sanoTTS 重みを削除しました', 'ok');
+    readSanoTtsStatus().catch(() => {});
+  }
+});
 
 document.getElementById('btn-jtts-say').addEventListener('click', () => {
   const text = document.getElementById('jtts-say-text').value;

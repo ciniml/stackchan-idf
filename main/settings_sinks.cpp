@@ -454,7 +454,7 @@ void register_avatar_bytecode_sinks()
             return {st.loaded, st.stored_bytes, st.capacity};
         });
 
-    // sanoTTS-jp 重み (/api/sanotts、HTTP のみ)。
+    // sanoTTS-jp 重み (/api/sanotts と BLE chr 0x2f。取得ジョブは wifi_config_service が持つ)。
     stackchan::wifi_config::set_sano_weights_sink(
         [](const std::uint8_t* data, std::size_t len) -> const char* {
             if (data == nullptr || len == 0) return sano_weights::clear();
@@ -465,6 +465,9 @@ void register_avatar_bytecode_sinks()
             const auto st = sano_weights::status();
             return {st.loaded, st.stored_bytes, st.capacity};
         });
+    // BLE 側は wifi_config_service の共用ジョブ / JSON をそのまま使う。
+    stackchan::config::set_sanotts_status_getter(&stackchan::wifi_config::sano_status_json);
+    stackchan::config::set_sanotts_command_sink(&stackchan::wifi_config::sano_command_json);
 }
 
 void register_mcp_sinks()

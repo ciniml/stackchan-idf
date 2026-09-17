@@ -171,6 +171,20 @@ using SanoWeightsStatusGetter = std::function<SanoWeightsStatus()>;
 void set_sano_weights_sink(SanoWeightsSink sink);
 void set_sano_weights_status_getter(SanoWeightsStatusGetter getter);
 
+// sanoTTS-jp 重みの取得ジョブ (HTTP POST /api/sanotts/fetch と BLE chr 0x2f が共用)。
+// 機体自身が公式 GitHub Releases から取得し sink へ渡す。ワーカータスク 1 本で
+// 排他 (同時に 1 件)。
+//   sano_fetch_start_async — 開始。nullptr = 受理、それ以外 = エラー文字列
+//                            ("already running" / "sta not connected" / ...)。
+//   sano_status_json       — {"loaded":..,"stored":..,"capacity":..,
+//                             "fetch":{"state":"idle|running|done|error",
+//                                      "release":"..","file":"..","error":".."}}
+//   sano_command_json      — {"op":"fetch","release":"v1.1.0","file":"..."} /
+//                            {"op":"clear"} を解釈して実行。nullptr = 受理。
+const char* sano_fetch_start_async(const std::string& release, const std::string& file);
+std::string sano_status_json();
+const char* sano_command_json(std::string_view json);
+
 // One-shot camera capture for `GET /api/camera/capture`. The sink fills
 // `out` with a raw row-major frame, reports its dimensions, and names the
 // pixel encoding in `format` — served verbatim as the X-Frame-Format

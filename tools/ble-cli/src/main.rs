@@ -39,6 +39,8 @@ const CHR_OPERATION_MODE: Uuid = Uuid::from_u128(0xe3f0a025_7b1c_4d2a_9e6f_2c5a8
 // OTA (gatt_settings.cpp / recovery/main/ble.cpp と一致)。
 const CHR_OTA_CONTROL: Uuid = Uuid::from_u128(0xe3f0a009_7b1c_4d2a_9e6f_2c5a8d4b1f00);
 const CHR_OTA_DATA: Uuid = Uuid::from_u128(0xe3f0a00a_7b1c_4d2a_9e6f_2c5a8d4b1f00);
+// sanoTTS-jp 重み: R = 状態 JSON / W = {"op":"fetch",...} or {"op":"clear"}
+const CHR_SANOTTS: Uuid = Uuid::from_u128(0xe3f0a02f_7b1c_4d2a_9e6f_2c5a8d4b1f00);
 
 const HKDF_INFO: &[u8] = b"stackchan-config-v1";
 const NONCE_LEN: usize = 12;
@@ -98,6 +100,20 @@ enum Cmd {
     /// ADR-001 の Main は Recovery へ再起動して取得する (応答 "rebooting to recovery")。
     /// 進捗は 10 秒ほど待って Recovery に対して `status` を繰り返し読む。
     Fetch { tag: String },
+    /// sanoTTS-jp 重みの状態 (保存済み / 取得ジョブ) を表示。
+    SanottsStatus,
+    /// 機体自身に公式 GitHub Releases (ayutaz/sanoTTS-jp) から重みを取得・保存させる。
+    /// 完了まで状態を 2 秒おきに読んで待つ (最長 3 分)。
+    SanottsFetch {
+        /// release tag (例 v1.1.0)
+        #[arg(default_value = "v1.1.0")]
+        release: String,
+        /// asset file (例 saanotts-jp-v4-int8.bin)
+        #[arg(default_value = "saanotts-jp-v4-int8.bin")]
+        file: String,
+    },
+    /// 保存済みの sanoTTS-jp 重みを削除。
+    SanottsClear,
 }
 
 #[tokio::main]
@@ -319,9 +335,40 @@ async fn run_session(p: &Peripheral, cli: &Cli) -> Result<()> {
                 println!("(device is rebooting into Recovery, which fetches the tag over Wi-Fi)");
             }
         }
+        Cmd::SanottsStatus => {
+            println!("{}", sanotts_status(p, &session).await?);
+        }
+        Cmd::SanottsFetch { release, file } => {
+            let cmd = format!(r#"{{"op":"fetch","release":"{}","file":"{}"}}"#, release, file);
+            session
+                .write_chr(p, CHR_SANOTTS, cmd.as_bytes())
+                .await
+                .context("write SanoTts fetch (rejected: STA down / already running?)")?;
+            println!("[ok] fetch started: {}/{}", release, file);
+            for _ in 0..90 {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let st = sanotts_status(p, &session).await?;
+                println!("  {}", st);
+                if !st.contains(r#""state":"running""#) {
+                    break;
+                }
+            }
+        }
+        Cmd::SanottsClear => {
+            session
+                .write_chr(p, CHR_SANOTTS, br#"{"op":"clear"}"#)
+                .await
+                .context("write SanoTts clear")?;
+            println!("[ok] cleared: {}", sanotts_status(p, &session).await?);
+        }
         Cmd::Scan => unreachable!(),
     }
     Ok(())
+}
+
+async fn sanotts_status(p: &Peripheral, s: &SecureSession) -> Result<String> {
+    let bytes = s.read_chr(p, CHR_SANOTTS).await?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 async fn ota_status(
