@@ -199,28 +199,39 @@ Web flasher で入れた機体は、修正版を **もう一度 USB (Web flasher
 **原因**: ネコミミの WS2812 データ線 GPIO 38 は Atomic ECHO BASE の I2C SDA と
 共用。M5Unified はコーデック (ES8311) を叩くたびに M5GFX の
 `i2c_temporary_switcher_t` で I2C1 を GPIO 38/39 に一時的に載せ替え、終わったら
-`pin_backup_t` でピン設定を元に戻す。この復元処理が **managed component
-`m5stack/m5gfx` 0.2.27 以降で書き換えられ、GPIO 38 の RMT 出力信号とプッシュプル
-設定が戻らなくなった** (オープンドレインの素の GPIO のまま)。リポジトリの
-submodule `components/M5GFX` (0.2.23) は M5Unified からは参照されておらず、実際に
-リンクされるのは managed component 側。dependencies.lock が gitignore で CI が毎回
-最新を解決していたため、v0.12.0 (0.2.28) から壊れた。手元の lock は 0.2.23 だった
-ので再現しなかった。
+`pin_backup_t` でピン設定を元に戻す。この復元が動かなくなった直接の原因は
+**リポジトリ内に M5GFX が 2 コピーあり、ヘッダとコードで版が食い違う ABI 不整合**:
+- M5Unified / board / main は include 順で先に来る submodule `components/M5GFX`
+  (0.2.23) の**ヘッダ**でコンパイルされる。
+- リンクされる**コード**はほぼ全て managed component `m5stack/m5gfx` (M5Unified の
+  idf_component.yml が要求。dependencies.lock が gitignore だったので CI は毎回
+  最新: v0.12.0 で 0.2.28、以降 0.2.29) 側。
+- 0.2.27 以降は `pin_backup_t` に `_gpio_out` が増えて構造体サイズが変わり、0.2.23
+  レイアウトで確保した `i2c_temporary_switcher_t` を 0.2.28 のコードが操作する。
+  実機ログでは restore 時に `_backuped=76 _need_reinit=40` というゴミ値が出て復元が
+  スキップされ、GPIO 38 が I2C (オープンドレインの素の GPIO) のまま残る。
+- 0.2.24〜0.2.26 はレイアウト互換だったため偶然無事。手元は lock が 0.2.23 だった。
+M5GFX 上流のバグではない (上流への報告は不要)。
 
-**確認方法**: IDF は関係ない (v0.12.0 のソースを IDF v5.5.5 でビルドしても再現、
-現行ソースを m5gfx 0.2.29 でビルドすると `nekomimi-led: GPIO 38 was
-re-configured (sig lost, pad open-drain)` が出る)。OpenOCD 経由の GPIO レジスタ
-読み書きは CPU 側の実態と一致しないので、この切り分けには使えない。
+**確認方法**: IDF は関係ない (v0.12.0 のソースを IDF v5.5.5 でビルドしても再現)。
+現行ソースを m5gfx 0.2.27〜0.2.29 でビルドすると `nekomimi-led: GPIO 38 was
+re-configured (sig lost, pad open-drain)` が出る (0.2.24〜0.2.26 では出ない)。
+OpenOCD 経由の GPIO レジスタ読み書きは CPU 側の実態と一致しないので、この
+切り分けには使えない。
 
-**対策**:
+**対策 (v0.14.2)**:
 - `NekomimiLedStrip::show()` の先頭で GPIO 38 の出力信号 (RMT) とパッド設定を
   毎フレーム確認し、崩れていれば復元する (`restore_pin_routing`)。
-- `main/idf_component.yml` で `m5stack/m5gfx` を submodule と同じ `==0.2.23` に固定。
+- `main/idf_component.yml` で `m5stack/m5gfx` を submodule と同じ `==0.2.23` に固定
+  (ヘッダとコードの版を一致させる対症療法)。
 - `dependencies.lock` をコミット対象にし、CI とローカルで managed component の
   解決結果を一致させる (`.gitignore` から除外)。
 
-**残課題**: submodule `components/M5GFX` と managed `m5stack/m5gfx` の二重化の整理。
-M5GFX 上流への報告 (0.2.27+ の pin_backup_t::restore で RMT ルーティングが戻らない)。
+**根本対策 (未実施)**: M5GFX を 1 コピーにする。案: submodule を `components/`
+の外 (例 `third_party/M5GFX`) へ移して自動検出を止め、`main/idf_component.yml` の
+`m5stack/m5gfx` に `override_path` でその submodule を指す。これで M5Unified
+(`m5gfx` を REQUIRES) も本体も同一ソースのヘッダ/コードになり、版更新は
+submodule の更新だけで済む。
 
 ## 6. (将来用) ここに追記してください
 
