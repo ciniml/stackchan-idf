@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
 // SPDX-License-Identifier: BSL-1.0
 
+#include <config_service/task_stack.hpp>
 #include "render_task.hpp"
 
 #include <cstdio>
@@ -279,7 +280,7 @@ void start_render_task(RenderTaskArgs& args)
     // touch/settings persistence happens on the main task (demo_loop), so
     // this task never touches flash / NVS. Frees 8 KiB of internal RAM.
     if (xTaskCreatePinnedToCoreWithCaps(render_task_entry, "render", 8192, &args, 5, nullptr, 1,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+                                        stackchan::kNoFlashTaskStackCaps) != pdPASS) {
         ESP_LOGE(kTag, "xTaskCreate(render) failed");
     }
 }

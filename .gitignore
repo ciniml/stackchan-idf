@@ -9,7 +9,8 @@ sdkconfig.defaults.local
 sdkconfig.defaults.*.local
 
 managed_components/
-dependencies.lock
+# dependencies.lock is COMMITTED (2026-09-18): CI and local must resolve the
+# same managed-component versions. Regenerate deliberately when bumping.
 
 # Pinned PROJECT_VER override written by CI's release workflow (overrides
 # git_describe for esp_app_desc.version). Local builds rely on git_describe

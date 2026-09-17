@@ -36,6 +36,15 @@ public:
     static constexpr int kDataGpioAtomNyan = 38;
 
     explicit NekomimiLedStrip(int data_gpio) noexcept : data_gpio_{data_gpio} {}
+
+    // Re-attach the RMT TX signal to the data pin if something re-configured
+    // the pad since begin(). On AtomNyan the strip's GPIO 38 doubles as the
+    // Atomic ECHO BASE I2C SDA: M5Unified's speaker / mic enable callback
+    // temporarily switches I2C1 onto GPIO 38/39 and, when releasing, resets
+    // the pad to plain open-drain GPIO — after which every led_strip_refresh
+    // "succeeds" but nothing reaches the LEDs (first LED stuck bright, rest
+    // dark). Called from show(); cheap when nothing changed.
+    void restore_pin_routing() noexcept;
     ~NekomimiLedStrip() noexcept override;
 
     NekomimiLedStrip(const NekomimiLedStrip&) = delete;
@@ -56,6 +65,8 @@ public:
     std::size_t size() const noexcept override { return kCount; }
 
 private:
+    std::uint32_t rmt_out_sig_{0};  // GPIO matrix out signal captured at begin()
+    unsigned restore_count_{0};
     int data_gpio_{kDataGpioCoreS3};
     led_strip_handle_t handle_{nullptr};
     // Local frame buffer in GRB byte order so the underlying espressif driver

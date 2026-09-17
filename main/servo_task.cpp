@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
 // SPDX-License-Identifier: BSL-1.0
 
+#include <config_service/task_stack.hpp>
 #include "servo_task.hpp"
 
 #include <driver/gpio.h>
@@ -233,7 +234,7 @@ void start_servo_task(ServoTaskArgs& args)
     // things that require an internal-RAM stack. Frees 8 KiB of internal
     // RAM (see docs: internal RAM budget on CoreS3 is the TLS bottleneck).
     if (xTaskCreatePinnedToCoreWithCaps(servo_task_entry, "servo", 8192, &args, 4, nullptr, 0,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+                                        stackchan::kNoFlashTaskStackCaps) != pdPASS) {
         ESP_LOGE(kTag, "xTaskCreate(servo) failed");
     }
 }

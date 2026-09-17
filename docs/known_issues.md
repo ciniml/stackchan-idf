@@ -191,5 +191,36 @@ https へ昇格して `esp_http_client_set_url()` で再接続する (set_redire
 Web flasher で入れた機体は、修正版を **もう一度 USB (Web flasher) で書き込む**
 必要がある。それ以降は OTA が使える。
 
-## 5. (将来用) ここに追記してください
+## 5. AtomNyan のネコミミ LED が v0.12.0〜v0.14.1 で壊れる (対策済み)
+
+**症状**: 1 個目の LED だけ黄色で高輝度に光り、残りが消灯。`led` タスクは生きていて
+`led_strip_refresh` も成功する。v0.11.0 までは正常。
+
+**原因**: ネコミミの WS2812 データ線 GPIO 38 は Atomic ECHO BASE の I2C SDA と
+共用。M5Unified はコーデック (ES8311) を叩くたびに M5GFX の
+`i2c_temporary_switcher_t` で I2C1 を GPIO 38/39 に一時的に載せ替え、終わったら
+`pin_backup_t` でピン設定を元に戻す。この復元処理が **managed component
+`m5stack/m5gfx` 0.2.27 以降で書き換えられ、GPIO 38 の RMT 出力信号とプッシュプル
+設定が戻らなくなった** (オープンドレインの素の GPIO のまま)。リポジトリの
+submodule `components/M5GFX` (0.2.23) は M5Unified からは参照されておらず、実際に
+リンクされるのは managed component 側。dependencies.lock が gitignore で CI が毎回
+最新を解決していたため、v0.12.0 (0.2.28) から壊れた。手元の lock は 0.2.23 だった
+ので再現しなかった。
+
+**確認方法**: IDF は関係ない (v0.12.0 のソースを IDF v5.5.5 でビルドしても再現、
+現行ソースを m5gfx 0.2.29 でビルドすると `nekomimi-led: GPIO 38 was
+re-configured (sig lost, pad open-drain)` が出る)。OpenOCD 経由の GPIO レジスタ
+読み書きは CPU 側の実態と一致しないので、この切り分けには使えない。
+
+**対策**:
+- `NekomimiLedStrip::show()` の先頭で GPIO 38 の出力信号 (RMT) とパッド設定を
+  毎フレーム確認し、崩れていれば復元する (`restore_pin_routing`)。
+- `main/idf_component.yml` で `m5stack/m5gfx` を submodule と同じ `==0.2.23` に固定。
+- `dependencies.lock` をコミット対象にし、CI とローカルで managed component の
+  解決結果を一致させる (`.gitignore` から除外)。
+
+**残課題**: submodule `components/M5GFX` と managed `m5stack/m5gfx` の二重化の整理。
+M5GFX 上流への報告 (0.2.27+ の pin_backup_t::restore で RMT ルーティングが戻らない)。
+
+## 6. (将来用) ここに追記してください
 

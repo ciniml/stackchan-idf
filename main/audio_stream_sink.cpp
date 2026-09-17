@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
 // SPDX-License-Identifier: BSL-1.0
 
+#include <config_service/task_stack.hpp>
 #include "audio_stream_sink.hpp"
 
 #include <algorithm>
@@ -551,7 +552,7 @@ void start(SharedState& state, bool conversation_enabled)
     // and BLE throughput collapses from ~22 KiB/s to ~10 KiB/s.
     if (xTaskCreatePinnedToCoreWithCaps(worker_task, "audio-stream", 8192, nullptr,
                                          tskIDLE_PRIORITY + 7, &g_worker, 1,
-                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+                                         stackchan::kNoFlashTaskStackCaps) != pdPASS) {
         ESP_LOGE(kTag, "xTaskCreate audio-stream failed");
         return;
     }

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
 // SPDX-License-Identifier: BSL-1.0
 
+#include <config_service/task_stack.hpp>
 #include "speech.hpp"
 #include "utf8.hpp"
 
@@ -299,7 +300,7 @@ bool Speech::say(std::u32string_view reading)
     // スタックは PSRAM (flash への書き込みはしない)。CPU 0 — CPU 1 は描画 / サーボ / スピーカー。
     const BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(&synth_task, "speech_synth", 16 * 1024, job,
                                                           tskIDLE_PRIORITY + 2, nullptr, 0,
-                                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                                                          stackchan::kNoFlashTaskStackCaps);
     if (rc != pdPASS) {
         ESP_LOGE("speech", "synth task create failed");
         delete job;

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
 // SPDX-License-Identifier: BSL-1.0
 
+#include <config_service/task_stack.hpp>
 #include "wifi_config_service/mcp_events.hpp"
 
 #include <array>
@@ -222,7 +223,7 @@ void start(ConvStatusGetter getter)
         // flash / NVS access), so it need not occupy internal RAM.
         if (xTaskCreatePinnedToCoreWithCaps(monitor_task_entry, "mcp-evt-mon", 4096, nullptr,
                                             tskIDLE_PRIORITY + 1, nullptr, 0,
-                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+                                            stackchan::kNoFlashTaskStackCaps) != pdPASS) {
             ESP_LOGE(kTag, "xTaskCreate(mcp-evt-mon) failed");
         }
     }

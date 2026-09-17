@@ -21,3 +21,12 @@ dependencies:
   # first attempt: 0x45b4e0 vs 0x371bb0 on 2.4.7). dependencies.lock is
   # gitignored, so CI always resolves fresh — the manifest must carry the cap.
   espressif/esp-sr: "~2.4.0"
+  # M5GFX is pulled in transitively by M5Unified (">=0.2.22"). Pinned to the
+  # same version as the components/M5GFX submodule: 0.2.27+ rewrote the GPIO
+  # backup/restore used by i2c_temporary_switcher_t (Atomic ECHO BASE codec
+  # I2C on GPIO 38/39) and no longer restores GPIO 38's RMT routing, which
+  # killed the AtomNyan nekomimi LED strip from v0.12.0 (CI resolved 0.2.28+).
+  # nekomimi_led_strip.cpp also self-heals the pin, but keep the version
+  # deterministic. dependencies.lock is committed since 2026-09-18 so CI and
+  # local builds resolve identically; bump deliberately, not by accident.
+  m5stack/m5gfx: "==0.2.23"

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
 // SPDX-License-Identifier: BSL-1.0
 
+#include <config_service/task_stack.hpp>
 #include "wifi_audio.hpp"
 #include "wifi_audio_depacketizer.hpp"
 #include "wifi_sta.hpp"
@@ -685,7 +686,7 @@ void start(SharedState& state, bool conversation_enabled, bool rtp_enabled)
     // 8 KiB matches the BLE AAC worker's headroom.
     if (xTaskCreatePinnedToCoreWithCaps(receiver_task, "wifi-audio", 8192, nullptr,
                                         tskIDLE_PRIORITY + 6, nullptr, 1,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+                                        stackchan::kNoFlashTaskStackCaps) != pdPASS) {
         ESP_LOGE(kTag, "xTaskCreate(wifi-audio) failed");
     }
 }

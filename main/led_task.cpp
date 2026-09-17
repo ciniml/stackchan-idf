@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
 // SPDX-License-Identifier: BSL-1.0
 
+#include <config_service/task_stack.hpp>
 #include "led_task.hpp"
 
 #include <array>
@@ -225,7 +226,7 @@ void start_led_task(LedTaskArgs& args)
     // Core 1 keeps the I2C bursts off core 0 where NimBLE + Wi-Fi live.
     // Stack in PSRAM: I2C LED strip + HSV math only, no flash / NVS access.
     if (xTaskCreatePinnedToCoreWithCaps(led_task_entry, "led", 4096, &args, 2, nullptr, 1,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+                                        stackchan::kNoFlashTaskStackCaps) != pdPASS) {
         ESP_LOGE(kTag, "xTaskCreate(led) failed");
     }
 }

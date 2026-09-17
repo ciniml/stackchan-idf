@@ -4,8 +4,13 @@
 #include "board/nekomimi_led_strip.hpp"
 
 #include <esp_log.h>
+#include <driver/gpio.h>
+#include <esp_rom_gpio.h>
+#include <hal/gpio_ll.h>
 #include <led_strip.h>
 #include <led_strip_rmt.h>
+#include <soc/gpio_sig_map.h>
+#include <soc/gpio_struct.h>
 
 namespace stackchan::board {
 
@@ -55,8 +60,34 @@ tl::expected<void, Error> NekomimiLedStrip::begin()
         handle_ = nullptr;
         return tl::unexpected{Error::LedStripIo};
     }
+    // Remember which RMT TX signal the driver routed to our pin so that
+    // restore_pin_routing() can put it back after someone else (the ECHO BASE
+    // I2C switcher in M5Unified) resets the pad.
+    rmt_out_sig_ = GPIO.func_out_sel_cfg[data_gpio_].func_sel;
+    if (rmt_out_sig_ < RMT_SIG_OUT0_IDX || rmt_out_sig_ >= RMT_SIG_OUT0_IDX + 4) {
+        ESP_LOGW(kTag, "unexpected out signal %lu on GPIO %d after RMT init",
+                 static_cast<unsigned long>(rmt_out_sig_), data_gpio_);
+        rmt_out_sig_ = 0;
+    }
     clear();
     return show();
+}
+
+void NekomimiLedStrip::restore_pin_routing() noexcept
+{
+    if (rmt_out_sig_ == 0 || data_gpio_ < 0) return;
+    const auto pin = static_cast<gpio_num_t>(data_gpio_);
+    const bool sig_ok = GPIO.func_out_sel_cfg[data_gpio_].func_sel == rmt_out_sig_;
+    const bool pad_ok = GPIO.pin[data_gpio_].pad_driver == 0;  // push-pull, not open-drain
+    if (sig_ok && pad_ok) return;
+    gpio_ll_func_sel(&GPIO, static_cast<std::uint32_t>(data_gpio_), PIN_FUNC_GPIO);
+    gpio_set_pull_mode(pin, GPIO_FLOATING);
+    gpio_set_direction(pin, GPIO_MODE_OUTPUT);  // clears open-drain
+    esp_rom_gpio_connect_out_signal(data_gpio_, rmt_out_sig_, false, false);
+    if (restore_count_++ < 3) {
+        ESP_LOGW(kTag, "GPIO %d was re-configured (sig %s, pad %s) — RMT routing restored (#%u)",
+                 data_gpio_, sig_ok ? "ok" : "lost", pad_ok ? "ok" : "open-drain", restore_count_);
+    }
 }
 
 void NekomimiLedStrip::clear() noexcept
@@ -88,6 +119,7 @@ void NekomimiLedStrip::set(std::size_t index, std::uint8_t r, std::uint8_t g, st
 tl::expected<void, Error> NekomimiLedStrip::show()
 {
     if (handle_ == nullptr) return tl::unexpected{Error::LedStripIo};
+    restore_pin_routing();
     for (std::size_t i = 0; i < kCount; ++i) {
         const std::uint8_t g = buf_[i * 3 + 0];
         const std::uint8_t r = buf_[i * 3 + 1];

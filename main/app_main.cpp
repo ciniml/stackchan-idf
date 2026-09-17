@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
 // SPDX-License-Identifier: BSL-1.0
 
+#include <config_service/task_stack.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -248,7 +249,7 @@ extern "C" void app_main()
 
     // PSRAM stack: only reads heap stats and logs — no flash access.
     xTaskCreatePinnedToCoreWithCaps(heap_monitor_task, "heap_mon", 3072, nullptr, 1, nullptr, 1,
-                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                                    stackchan::kNoFlashTaskStackCaps);
 
     stackchan::app::diag_heap("pre-board");
     auto board_result = stackchan::board::Board::begin();

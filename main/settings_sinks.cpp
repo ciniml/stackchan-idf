@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
 // SPDX-License-Identifier: BSL-1.0
 
+#include <config_service/task_stack.hpp>
 #include "settings_sinks.hpp"
 
 #include "voice_db.hpp"
@@ -192,7 +193,7 @@ void start_say_worker(std::string_view kana_utf8)
     // conversation_task TLS, so an internal-RAM 12 KiB stack alloc would
     // silently fail). The worker only touches PSRAM-friendly surfaces
     // (jtts buffers, PCM vector, M5.Speaker.playRaw enqueue).
-    constexpr UBaseType_t kCaps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+    constexpr UBaseType_t kCaps = stackchan::kNoFlashTaskStackCaps;
     const BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
         +[](void* arg) {
             // Body in an immediately-invoked lambda: vTaskDeleteWithCaps()
