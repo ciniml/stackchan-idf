@@ -51,7 +51,7 @@ jobs:
       # `json` (cJSON) component in favour of an IDF component-manager
       # dependency; our `conversation` component requires it directly and
       # we don't ship a manifest entry for it yet.
-      image: espressif/idf:release-v5.5
+      image: espressif/idf:v5.5.5
 
     steps:
       - name: Checkout repository
@@ -275,7 +275,7 @@ jobs:
                `stackchan_idf.bin` を選ぶと BLE で転送します (4〜5 分)
 
             ## Build Information
-            - **ESP-IDF**: release-v5.5
+            - **ESP-IDF**: v5.5.5
             - **Target**: ESP32-S3
             - **Build Date**: ${{ steps.version.outputs.build_date }}
             - **Commit**: ${{ github.sha }}

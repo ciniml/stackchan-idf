@@ -171,5 +171,25 @@ espcoredump をフラッシュ (ADR-001 exttab の `coredump` 64 KiB) に保存�
 原因 / バックトレース) を取れるようにした。**元のパニックの根本原因は未解決**
 — 次回発生時に `/api/coredump` の PC / バックトレースを addr2line で解析する。
 
-## 4. (将来用) ここに追記してください
+## 4. v0.13.0〜v0.14.0 のリリース版 Recovery は OTA 取得ができない (対策済み)
+
+**症状**: BLE / Wi-Fi どちらの設定画面からリリースを選んでも、Main が Recovery へ
+再起動した後に `release-fetch failed before receiving — returning to main` で
+元のファームウェアに戻る。
+
+**原因**: GitHub Pages のカスタムドメインは `https://ciniml.github.io/...` への
+要求を **`http://`**www.fugafuga.org への 301 で返す。ESP-IDF v5.5.5 以降の
+`esp_http_client_set_redirection()` はこの https→http リダイレクトを
+`ESP_ERR_HTTP_REDIRECT_DOWNGRADE` で拒否する (CI は `release-v5.5` ブランチ先端で
+ビルドしていたため該当、手元の 5.5.4 では再現しなかった)。
+
+**対策**: `https_fetch.cpp` で Location ヘッダを HTTP イベントで捕捉し、自前で
+https へ昇格して `esp_http_client_set_url()` で再接続する (set_redirection 不使用)。
+ローカル / CI とも IDF を **v5.5.5 タグに固定**。
+
+**注意**: Recovery は OTA で更新されないため、上記バージョンのリリース版を
+Web flasher で入れた機体は、修正版を **もう一度 USB (Web flasher) で書き込む**
+必要がある。それ以降は OTA が使える。
+
+## 5. (将来用) ここに追記してください
 

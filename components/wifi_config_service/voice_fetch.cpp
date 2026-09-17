@@ -56,8 +56,10 @@ const char* fetch_and_install(const std::string& voice_id, const InstallFn& inst
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
     cfg.timeout_ms = 30000;
     cfg.keep_alive_enable = false;
-    cfg.disable_auto_redirect = false;
+    cfg.disable_auto_redirect = true;  // https::attach() が 30x を自前で追う
     cfg.max_redirection_count = 4;
+    https::RedirectCapture redirect;
+    https::attach(cfg, redirect);  // 30x は自前で追う (https_fetch.cpp 参照)
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (client == nullptr) return "http client init failed";
@@ -67,7 +69,7 @@ const char* fetch_and_install(const std::string& voice_id, const InstallFn& inst
     };
 
     std::int64_t cl = 0;
-    const std::optional<int> status_opt = https::open_follow_redirects(client, cl);
+    const std::optional<int> status_opt = https::open_follow_redirects(client, cl, redirect);
     if (!status_opt.has_value()) {
         cleanup();
         return "connect / TLS failed (STA down or internal RAM low?)";
@@ -116,8 +118,10 @@ bool fetch_manifest(std::string& out) {
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
     cfg.timeout_ms = 15000;
     cfg.keep_alive_enable = false;
-    cfg.disable_auto_redirect = false;
+    cfg.disable_auto_redirect = true;  // https::attach() が 30x を自前で追う
     cfg.max_redirection_count = 4;
+    https::RedirectCapture redirect;
+    https::attach(cfg, redirect);  // 30x は自前で追う (https_fetch.cpp 参照)
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (client == nullptr) return false;
@@ -125,7 +129,7 @@ bool fetch_manifest(std::string& out) {
     bool ok = false;
     do {
         std::int64_t cl = 0;
-        const std::optional<int> status_opt = https::open_follow_redirects(client, cl);
+        const std::optional<int> status_opt = https::open_follow_redirects(client, cl, redirect);
         if (!status_opt.has_value() || *status_opt != 200) break;
         if (cl <= 0 || cl > kManifestMaxBytes) break;
         out.resize(static_cast<std::size_t>(cl));

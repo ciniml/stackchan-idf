@@ -49,8 +49,10 @@ const char* fetch_and_install(const std::string& release_tag, const std::string&
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
     cfg.timeout_ms = 30000;
     cfg.keep_alive_enable = false;
-    cfg.disable_auto_redirect = false;
+    cfg.disable_auto_redirect = true;  // https::attach() が 30x を自前で追う
     cfg.max_redirection_count = 4;
+    https::RedirectCapture redirect;
+    https::attach(cfg, redirect);  // 30x は自前で追う (https_fetch.cpp 参照)
     // GitHub の Releases は objects.githubusercontent.com の署名付き URL (数百
     // バイトの Location ヘッダ) へリダイレクトする。既定 512 B の受信バッファでは
     // "Out of buffer" で open に失敗する。
@@ -65,7 +67,7 @@ const char* fetch_and_install(const std::string& release_tag, const std::string&
     };
 
     std::int64_t cl = 0;
-    const std::optional<int> status_opt = https::open_follow_redirects(client, cl);
+    const std::optional<int> status_opt = https::open_follow_redirects(client, cl, redirect);
     if (!status_opt.has_value()) {
         cleanup();
         return "connect / TLS failed (STA down or internal RAM low?)";

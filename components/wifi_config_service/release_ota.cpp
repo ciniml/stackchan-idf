@@ -108,8 +108,10 @@ void worker(void* arg)
     cfg.timeout_ms = 30000;
     cfg.keep_alive_enable = false;
     // Pages serves us a redirect for the custom-domain path; follow it.
-    cfg.disable_auto_redirect = false;
+    cfg.disable_auto_redirect = true;  // https::attach() が 30x を自前で追う
     cfg.max_redirection_count = 4;
+    https::RedirectCapture redirect;
+    https::attach(cfg, redirect);  // 30x は自前で追う (https_fetch.cpp 参照)
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (client == nullptr) {
@@ -124,7 +126,7 @@ void worker(void* arg)
     };
 
     int64_t cl = 0;
-    const std::optional<int> status_opt = https::open_follow_redirects(client, cl);
+    const std::optional<int> status_opt = https::open_follow_redirects(client, cl, redirect);
     if (!status_opt.has_value()) {
         // open_follow_redirects already logged the concrete failure.
         cleanup_client();
@@ -314,8 +316,10 @@ void versions_fetch_task(void* arg)
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
     cfg.timeout_ms = kVersionsTimeoutMs;
     cfg.keep_alive_enable = false;
-    cfg.disable_auto_redirect = false;
+    cfg.disable_auto_redirect = true;  // https::attach() が 30x を自前で追う
     cfg.max_redirection_count = 4;
+    https::RedirectCapture redirect;
+    https::attach(cfg, redirect);  // 30x は自前で追う (https_fetch.cpp 参照)
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (client == nullptr) {
@@ -326,7 +330,7 @@ void versions_fetch_task(void* arg)
 
     do {
         int64_t cl = 0;
-        const std::optional<int> status_opt = https::open_follow_redirects(client, cl);
+        const std::optional<int> status_opt = https::open_follow_redirects(client, cl, redirect);
         if (!status_opt.has_value()) {
             // open_follow_redirects already logged the concrete failure.
             break;
