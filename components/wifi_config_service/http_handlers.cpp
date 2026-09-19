@@ -2376,15 +2376,17 @@ void set_sano_weights_sink(SanoWeightsSink sink)
 
 const char* sano_fetch_start_async(const std::string& release, const std::string& file)
 {
-    if (g_mutex == nullptr) return "not ready";
-    if (!g_wifi_connected.load()) return "sta not connected";
     {
-        // エンジンが入っていないビルドでは 654 KB を取りに行く前に断る。
-        xSemaphoreTake(g_mutex, portMAX_DELAY);
+        // エンジンが入っていないビルドでは 654 KB を取りに行く前に断る (getter は
+        // 起動時登録のみなので g_mutex 無しでも読める)。
+        const bool locked = g_mutex != nullptr;
+        if (locked) xSemaphoreTake(g_mutex, portMAX_DELAY);
         SanoWeightsStatusGetter getter = g_sano_weights_status_getter;
-        xSemaphoreGive(g_mutex);
+        if (locked) xSemaphoreGive(g_mutex);
         if (getter && !getter().supported) return "sanoTTS engine is not built into this firmware";
     }
+    // 取得は STA (Wi-Fi 設定サービス) が前提。BLE のみの機体では STA が無い。
+    if (g_mutex == nullptr || !g_wifi_connected.load()) return "sta not connected";
     xSemaphoreTake(g_mutex, portMAX_DELAY);
     if (g_sano_fetch_state == SanoFetchState::Running) {
         xSemaphoreGive(g_mutex);
@@ -2414,19 +2416,20 @@ const char* sano_fetch_start_async(const std::string& release, const std::string
 
 std::string sano_status_json()
 {
-    SanoWeightsStatusGetter getter;
-    SanoFetchState state = SanoFetchState::Idle;
-    std::string release, file;
-    const char* err = nullptr;
-    if (g_mutex != nullptr) {
-        xSemaphoreTake(g_mutex, portMAX_DELAY);
-        getter = g_sano_weights_status_getter;
-        state = g_sano_fetch_state;
-        release = g_sano_fetch_release;
-        file = g_sano_fetch_file;
-        err = g_sano_fetch_error;
-        xSemaphoreGive(g_mutex);
-    }
+    // g_mutex は Wi-Fi 設定サービス (httpd) の起動時に作られる。BLE だけで使って
+    // いる機体 (Wi-Fi 未設定 / ESP-NOW モード) では nullptr のままなので、その場合は
+    // ロックせずに読む: getter / sink は起動時に一度登録されるだけで、取得ジョブの
+    // 状態も (ジョブは g_mutex 無しでは走らない) Idle のまま変わらない。
+    // 以前は g_mutex が無いと既定値 (supported=false) を返していて、BLE 側に
+    // 「sanoTTS エンジンが入っていません」と誤表示していた (StopWatch v0.14.3)。
+    const bool locked = g_mutex != nullptr;
+    if (locked) xSemaphoreTake(g_mutex, portMAX_DELAY);
+    SanoWeightsStatusGetter getter = g_sano_weights_status_getter;
+    const SanoFetchState state = g_sano_fetch_state;
+    std::string release = g_sano_fetch_release;
+    std::string file = g_sano_fetch_file;
+    const char* err = g_sano_fetch_error;
+    if (locked) xSemaphoreGive(g_mutex);
     const SanoWeightsStatus st = getter ? getter() : SanoWeightsStatus{};
     char head[160];
     std::snprintf(head, sizeof(head), R"({"supported":%s,"loaded":%s,"stored":%u,"capacity":%u,"fetch":{"state":"%s")",
@@ -2472,13 +2475,13 @@ const char* sano_command_json(std::string_view json)
             err = sano_fetch_start_async(rel->valuestring, file->valuestring);
         }
     } else if (std::strcmp(op->valuestring, "clear") == 0) {
-        SanoWeightsSink sink;
-        if (g_mutex != nullptr) {
-            xSemaphoreTake(g_mutex, portMAX_DELAY);
-            sink = g_sano_weights_sink;
-            if (g_sano_fetch_state != SanoFetchState::Running) g_sano_fetch_state = SanoFetchState::Idle;
-            xSemaphoreGive(g_mutex);
-        }
+        // 同上: BLE のみの機体では g_mutex が無い。sink は起動時登録のみなので
+        // ロック無しで読んでよい。
+        const bool locked = g_mutex != nullptr;
+        if (locked) xSemaphoreTake(g_mutex, portMAX_DELAY);
+        SanoWeightsSink sink = g_sano_weights_sink;
+        if (g_sano_fetch_state != SanoFetchState::Running) g_sano_fetch_state = SanoFetchState::Idle;
+        if (locked) xSemaphoreGive(g_mutex);
         err = sink ? sink(nullptr, 0) : "sanotts sink not ready";
     } else {
         err = "unknown op";
