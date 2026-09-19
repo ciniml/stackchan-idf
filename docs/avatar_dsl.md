@@ -436,9 +436,13 @@ end
 | 0x04 | `breath` | 0x0E | `balloon_bg` | 0x18 | `mouth_min_h` |
 | 0x05 | `eye_open` | 0x0F | `eye_radius` | 0x19 | `mouth_max_h` |
 | 0x06 | `gaze_h` | 0x10 | `eye_off_x` | 0x1A | `eyebrows_visible` |
-| 0x07 | `gaze_v` | 0x11 | `eye_off_y` | | |
-| 0x08 | `mouth_open` | 0x12 | `brow_off_x` | | |
-| 0x09 | `expr` | 0x13 | `brow_off_y` | | |
+| 0x07 | `gaze_v` | 0x11 | `eye_off_y` | 0x1B | `cheeks_visible` |
+| 0x08 | `mouth_open` | 0x12 | `brow_off_x` | 0x1C | `cheek_radius` |
+| 0x09 | `expr` | 0x13 | `brow_off_y` | 0x1D | `cheek_off_x` |
+| | | | | 0x1E | `cheek_off_y` |
+| 0x20 | `accessories` | 0x21..0x28 | `accessory_0`..`accessory_7` | | |
+
+`0x1F` は予約 (PR #7 の `mouth_form` 用に空けてある)。
 
 > 真実源: [components/avatar_vm/include/avatar_vm/opcodes.hpp](https://github.com/ciniml/stackchan-idf/blob/main/components/avatar_vm/include/avatar_vm/opcodes.hpp)
 > (C++ 側) / [tools/avatar_dsl/opcodes.js](https://github.com/ciniml/stackchan-idf/blob/main/tools/avatar_dsl/opcodes.js) (JS 側 ミラー)

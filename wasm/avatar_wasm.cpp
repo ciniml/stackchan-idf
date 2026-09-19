@@ -299,6 +299,12 @@ EMSCRIPTEN_KEEPALIVE void avatar_set_eyebrow_params(float off_x, float off_y)
     g_direct.request_full_repaint();
 }
 
+EMSCRIPTEN_KEEPALIVE void avatar_set_accessories(int mask)
+{
+    g_tune.accessories = static_cast<std::uint8_t>(mask & 0xFF);
+    g_direct.request_full_repaint();
+}
+
 EMSCRIPTEN_KEEPALIVE void avatar_set_cheeks_visible(int on)
 {
     g_tune.cheeks_visible = on != 0;

@@ -96,6 +96,12 @@ inline float read_var(Var v, const avatar::Canvas& canvas, const avatar::DrawCon
     case Var::CheekRadius: return t.cheek_radius;
     case Var::CheekOffX: return t.cheek_off_x;
     case Var::CheekOffY: return t.cheek_off_y;
+    case Var::Accessories: return static_cast<float>(t.accessories);
+    case Var::Accessory0: case Var::Accessory1: case Var::Accessory2: case Var::Accessory3:
+    case Var::Accessory4: case Var::Accessory5: case Var::Accessory6: case Var::Accessory7: {
+        const unsigned n = static_cast<unsigned>(v) - static_cast<unsigned>(Var::Accessory0);
+        return ((t.accessories >> n) & 1u) ? 1.0f : 0.0f;
+    }
     default: return 0.0f;
     }
 }

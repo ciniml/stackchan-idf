@@ -103,6 +103,15 @@ enum class Var : std::uint8_t {
     CheekRadius = 0x1C,
     CheekOffX = 0x1D,
     CheekOffY = 0x1E,
+    Accessories = 0x20, // FaceTuning::accessories bitmask (0..255)
+    Accessory0 = 0x21,  // (accessories >> n) & 1, n = 0..7
+    Accessory1 = 0x22,
+    Accessory2 = 0x23,
+    Accessory3 = 0x24,
+    Accessory4 = 0x25,
+    Accessory5 = 0x26,
+    Accessory6 = 0x27,
+    Accessory7 = 0x28,
     VarCount,
 };
 

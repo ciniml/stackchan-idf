@@ -164,6 +164,31 @@ end
 --   right cheek  (x=255, y=153)
 -- All coords flow through tx/ty so the same bytecode scales to any panel
 -- (CoreS3 320×240, AtomS3R 128×128, future StopWatch 466×466).
+
+----------------------------------------------------------------------
+-- Accessory slot 0: cat collar — a red band across the bottom of the
+-- screen with a gold bell hanging from its centre. Static (no breath
+-- offset): it sits on the "neck", not the face. Drawn last so it paints
+-- over the mouth / effects. Enable via FaceTuning accessories bit 0
+-- (settings UI "アクセサリ 1", JSON "acc": 1).
+----------------------------------------------------------------------
+fn collar()
+  let band_y = ty(214)
+  let band_h = sz(24)
+  let gx = tx(0)
+  let gw = sz(320)
+  begin_group(gx, band_y - sz(14), gw, band_h + sz(16))
+  fill_rect(gx, band_y, gw, band_h, 0xF800)
+  -- bell: gold disc on the band, dark slit + clapper dot below
+  let bx = tx(160)
+  let by = ty(224)
+  let br = sz(13)
+  fill_circle(bx, by, br, 0xFEA0)
+  fill_rect(bx - sz(9), by - sz(1), sz(18), sz(2), 0x8200)
+  fill_circle(bx, by + sz(8), sz(3), 0x8200)
+  end_group()
+end
+
 ----------------------------------------------------------------------
 fn draw()
   let bo = breath * 3
@@ -191,4 +216,6 @@ fn draw()
     hexagram_cheek(tx(65  - cheek_off_x), ty(153 + cheek_off_y) + bo, cr, primary)
     hexagram_cheek(tx(255 + cheek_off_x), ty(153 + cheek_off_y) + bo, cr, primary)
   end
+  -- accessories (FaceTuning slots; slot 0 = collar + bell)
+  if accessory_0 then collar() end
 end

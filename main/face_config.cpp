@@ -78,6 +78,25 @@ avatar::FaceTuning parse_face_tuning(std::string_view json)
     apply_number(root, "cheek_ox", t.cheek_off_x);
     apply_number(root, "cheek_oy", t.cheek_off_y);
 
+    // "acc": accessory slots. Either a bitmask number (bit n = slot n) or an
+    // array of up to 8 bool/0-1 entries. Slot 0 = collar + bell in the
+    // bundled presets.
+    const cJSON* acc = cJSON_GetObjectItemCaseSensitive(root, "acc");
+    if (cJSON_IsNumber(acc)) {
+        const int v = acc->valueint;
+        t.accessories = static_cast<std::uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v));
+    } else if (cJSON_IsArray(acc)) {
+        std::uint8_t mask = 0;
+        int i = 0;
+        const cJSON* e = nullptr;
+        cJSON_ArrayForEach(e, acc) {
+            if (i >= 8) break;
+            const bool on = cJSON_IsTrue(e) || (cJSON_IsNumber(e) && e->valueint != 0);
+            if (on) mask |= static_cast<std::uint8_t>(1u << i);
+            ++i;
+        }
+        t.accessories = mask;
+    }
     const cJSON* face_color = cJSON_GetObjectItemCaseSensitive(root, "face_color");
     if (cJSON_IsString(face_color)) t.face_color = hex_to_565(face_color->valuestring, t.face_color);
     const cJSON* bg_color = cJSON_GetObjectItemCaseSensitive(root, "bg_color");

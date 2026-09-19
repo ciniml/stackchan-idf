@@ -75,7 +75,11 @@ while cond do ... end                   -- 無限ループ防止策は無し、�
 --   brow_off_x brow_off_y
 --   mouth_off_x mouth_off_y
 --   mouth_min_w mouth_max_w mouth_min_h mouth_max_h
---   eyebrows_visible
+--   eyebrows_visible cheeks_visible cheek_radius cheek_off_x cheek_off_y
+--   accessories                                   -- FaceTuning のアクセサリ ビットマスク (0..255)
+--   accessory_0 .. accessory_7                    -- 各スロットの 0/1 (設定 UI「アクセサリ 1〜8」、JSON "acc")
+--     同梱プリセットは accessory_0 を「首輪 (赤い帯) と鈴」に割り当てて画面下部に描く。
+--     他のスロットの意味は DSL 側で自由に決められる。
 
 -- エントリ ポイント (必須・引数なし)
 fn draw()
