@@ -36,13 +36,15 @@ public:
     // apply its face/background colours. Takes effect on the next tick(); safe
     // to call live (e.g. from the render task on a config change).
     void set_face_tuning(const FaceTuning& tuning) noexcept;
-    // Show `text` in the balloon. `hold_ms` overrides the default display
-    // time (0 = use balloon defaults: short text holds for a few seconds,
-    // long text plays one full marquee pass).
+    // Show `text` left-aligned in the balloon. Text that does not fit scrolls
+    // once (start of the text first, then the rest is revealed); text that fits
+    // never scrolls. `hold_ms` is the on-screen time: 0 = defaults (fitting text
+    // holds a few seconds, overflowing text scrolls at a fixed speed); when set,
+    // overflowing text is scrolled so its end is reached within that time.
     void set_balloon_text(std::string_view text, std::uint32_t hold_ms = 0);
     void clear_balloon() noexcept;
     // True once the current balloon has been fully displayed (hold elapsed
-    // or one marquee pass completed). Stays true until the next
+    // or the scroll finished). Stays true until the next
     // set_balloon_text / clear_balloon.
     bool is_balloon_done() const noexcept;
 

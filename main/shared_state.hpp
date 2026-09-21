@@ -322,10 +322,11 @@ public:
     // --- Balloon (mutex + completion callback; render_task consumes) -------
 
     // Show `text` in the balloon.
-    //  - hold_ms: minimum on-screen time (0 = use avatar defaults — short
-    //    text holds a few seconds, long text plays one marquee pass).
+    //  - hold_ms: on-screen time (0 = use avatar defaults — fitting text holds
+    //    a few seconds, overflowing text scrolls once; with a value the scroll
+    //    is timed to reach the end of the text within it).
     //  - on_complete: invoked once when the balloon finishes (after hold or
-    //    after a marquee pass). Fired from the render task; the
+    //    after the scroll). Fired from the render task; the
     //    implementation must be cheap and thread-safe.
     void set_balloon_text(std::string_view text,
                           std::uint32_t hold_ms = 0,
