@@ -138,6 +138,7 @@ void render_task_entry(void* arg)
 
     int last_expression = -1;
     std::uint32_t last_balloon_version = 0;
+    std::uint32_t balloon_applied_version = 0; // version of the balloon the avatar is showing
     std::uint32_t last_face_config_version = 0;
     std::uint32_t last_face_bytecode_version = 0;
     std::string balloon_scratch;
@@ -225,14 +226,15 @@ void render_task_entry(void* arg)
         if (balloon_version != last_balloon_version) {
             if (args.state->balloon_visible()) {
                 std::uint32_t hold_ms = 0;
-                args.state->snapshot_balloon(balloon_scratch, hold_ms);
+                args.state->snapshot_balloon(balloon_scratch, hold_ms, balloon_applied_version);
                 avatar.set_balloon_text(balloon_scratch, hold_ms);
                 balloon_pending = true;
+                last_balloon_version = balloon_applied_version;
             } else {
                 avatar.clear_balloon();
                 balloon_pending = false;
+                last_balloon_version = balloon_version;
             }
-            last_balloon_version = balloon_version;
         }
 
         // avatar.tick() opens the frame (begin_frame) and draws the face;
@@ -263,7 +265,10 @@ void render_task_entry(void* arg)
 
         if (balloon_pending && avatar.is_balloon_done()) {
             balloon_pending = false;
-            args.state->notify_balloon_complete();
+            // Completion of *this* balloon only: if the next one was set in the
+            // meantime (chunk subtitles), the notify is ignored and it gets applied
+            // on the next loop instead of being wiped.
+            args.state->notify_balloon_complete(balloon_applied_version);
         }
 
         // Use vTaskDelay (not vTaskDelayUntil) so the IDLE task on this core

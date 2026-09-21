@@ -351,16 +351,22 @@ public:
         balloon_visible_.store(false, std::memory_order_release);
     }
 
-    // Called by the render task when the avatar finishes displaying the
-    // current balloon. Hides the balloon and invokes the completion callback
-    // (if any) outside the lock.
-    void notify_balloon_complete()
+    // Called by the render task when the avatar finishes displaying a balloon.
+    // `version` is the balloon_version() of the balloon that finished (the one
+    // snapshot_balloon() returned when the render task applied it). If the
+    // balloon has been replaced or cleared since — e.g. the next chunk's
+    // subtitle was set while the previous one was timing out — the completion is
+    // stale and is ignored, so it can never hide the newer balloon. Otherwise
+    // hides the balloon and invokes the completion callback (if any) outside the
+    // lock.
+    void notify_balloon_complete(std::uint32_t version)
     {
         BalloonCompletionCallback cb;
         {
             std::lock_guard lock{balloon_mutex_};
-            if (!balloon_visible_.load(std::memory_order_relaxed)) {
-                return; // already cleared
+            if (!balloon_visible_.load(std::memory_order_relaxed) ||
+                balloon_version_.load(std::memory_order_relaxed) != version) {
+                return; // already cleared, or replaced by a newer balloon
             }
             balloon_text_.clear();
             balloon_hold_ms_ = 0;
@@ -385,12 +391,15 @@ public:
         return balloon_visible_.load(std::memory_order_acquire);
     }
 
-    // Copies the current text + hold time into the supplied outputs.
-    void snapshot_balloon(std::string& text_out, std::uint32_t& hold_ms_out) const
+    // Copies the current text + hold time + version into the supplied outputs
+    // (one consistent snapshot: all three are read under the lock). Pass the
+    // version back to notify_balloon_complete() when this balloon finishes.
+    void snapshot_balloon(std::string& text_out, std::uint32_t& hold_ms_out, std::uint32_t& version_out) const
     {
         std::lock_guard lock{balloon_mutex_};
         text_out = balloon_text_;
         hold_ms_out = balloon_hold_ms_;
+        version_out = balloon_version_.load(std::memory_order_relaxed);
     }
 
     // --- Versioned slots (VersionedValue facade — see the template above) --
