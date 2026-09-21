@@ -248,6 +248,12 @@ EMSCRIPTEN_KEEPALIVE void avatar_set_mouth(float ratio)
     g_ctx.mouth_open_ratio = ratio < 0.0f ? 0.0f : (ratio > 1.0f ? 1.0f : ratio);
 }
 
+// Mouth shape, 0 = wide .. 1 = narrow; negative = follow mouth_open.
+EMSCRIPTEN_KEEPALIVE void avatar_set_mouth_form(float ratio)
+{
+    g_ctx.mouth_form_ratio = ratio < 0.0f ? -1.0f : (ratio > 1.0f ? 1.0f : ratio);
+}
+
 EMSCRIPTEN_KEEPALIVE void avatar_set_manual_gaze(int on, float h, float v)
 {
     g_manual_gaze = on != 0;

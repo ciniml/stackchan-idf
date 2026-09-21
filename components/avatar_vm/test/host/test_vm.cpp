@@ -48,7 +48,8 @@ struct RunResult {
     RecordingCanvas canvas{320, 240};
 };
 
-RunResult run_program(const std::vector<std::uint8_t>& buf)
+RunResult run_program(const std::vector<std::uint8_t>& buf,
+                      const stackchan::avatar::DrawContext& ctx = stackchan::avatar::DrawContext{})
 {
     RunResult rr;
     rr.decoded = decode(std::span<const std::uint8_t>(buf));
@@ -56,7 +57,6 @@ RunResult run_program(const std::vector<std::uint8_t>& buf)
         rr.ran = tl::unexpected(rr.decoded.error());
         return rr;
     }
-    stackchan::avatar::DrawContext ctx;
     stackchan::avatar::FaceTuning tuning;
     Vm vm;
     rr.ran = vm.run(*rr.decoded, rr.canvas, ctx, tuning);
@@ -185,6 +185,37 @@ int main()
         auto rr = run_program(b.build(0));
         CHECK(rr.ran.has_value());
         CHECK(rr.canvas.ops.size() == 1 && rr.canvas.ops[0].a == 320);
+    }
+
+    // --- PushVar MouthForm: explicit value wins, unset follows MouthOpen ---
+    {
+        BytecodeBuilder b;
+        b.code(PUSH_VAR);
+        b.code(0x1F); // Var::MouthForm
+        b.code(PUSH_I8);
+        b.code(1);
+        b.code(PUSH_I8);
+        b.code(1);
+        b.code(PUSH_I8);
+        b.code(3);
+        b.code(FILL_CIRCLE);
+        b.code(RET);
+        b.add_fn(0, 0, 0);
+        const auto buf = b.build(0);
+
+        stackchan::avatar::DrawContext ctx;
+        ctx.mouth_open_ratio = 1.0f;
+        auto rr = run_program(buf, ctx);  // form unset (-1) → follows open
+        CHECK(rr.ran.has_value() && rr.canvas.ops.size() == 1 && rr.canvas.ops[0].a == 1);
+
+        ctx.mouth_form_ratio = 0.0f;  // explicitly wide, even though fully open
+        rr = run_program(buf, ctx);
+        CHECK(rr.ran.has_value() && rr.canvas.ops.size() == 1 && rr.canvas.ops[0].a == 0);
+
+        ctx.mouth_open_ratio = 0.0f;
+        ctx.mouth_form_ratio = 1.0f;  // explicitly narrow, even though closed
+        rr = run_program(buf, ctx);
+        CHECK(rr.ran.has_value() && rr.canvas.ops.size() == 1 && rr.canvas.ops[0].a == 1);
     }
 
     // --- function call with a parameter ----------------------------------

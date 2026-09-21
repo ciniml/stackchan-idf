@@ -27,6 +27,11 @@ struct DrawContext {
     float gaze_saccade_v{0.0f};
     float eye_open_ratio{1.0f};
     float mouth_open_ratio{0.0f};
+    // Mouth shape: 0 = wide, 1 = narrow (pursed). Set by Avatar::set_mouth_form
+    // (e.g. TTS vowel lip-sync: い is wide, う is narrow). Negative = "not set":
+    // Var::MouthForm then falls back to mouth_open_ratio so faces driven only
+    // by a level meter keep the classic "narrower as it opens" behaviour.
+    float mouth_form_ratio{-1.0f};
     Palette palette{kDefaultPalette};
     std::uint32_t rng_state{0xC0FFEEu};
     std::optional<std::string> balloon_text{};

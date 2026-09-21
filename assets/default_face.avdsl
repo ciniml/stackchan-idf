@@ -10,13 +10,17 @@
 -- A `fn draw()` is mandatory (entry point, fn id 0). Helper functions follow.
 
 ----------------------------------------------------------------------
--- Mouth: single rectangle whose width shrinks and height grows with
--- mouth_open. The group box covers the maximum extent so the direct
--- canvas strategy clears stale frames correctly.
+-- Mouth: single rectangle whose height grows with mouth_open and whose width
+-- shrinks with mouth_form (0 = wide, 1 = narrow). Hosts that only drive
+-- mouth_open (level meters) get mouth_form == mouth_open, i.e. the classic
+-- "narrower as it opens" look; TTS vowel lip-sync sets the two independently
+-- (い = wide + slightly open, う = narrow, あ = wide-ish + fully open).
+-- The group box covers the maximum extent so the direct canvas strategy
+-- clears stale frames correctly.
 ----------------------------------------------------------------------
 fn mouth(cx, cy, min_w, max_w, min_h, max_h, bo)
   let h = min_h + (max_h - min_h) * mouth_open
-  let w = min_w + (max_w - min_w) * (1 - mouth_open)
+  let w = min_w + (max_w - min_w) * (1 - mouth_form)
   let x = cx - w / 2
   let y = cy - h / 2 + breath * 2 + bo
   let gx = cx - max_w / 2 - 1

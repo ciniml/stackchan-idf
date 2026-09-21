@@ -134,6 +134,16 @@ void Avatar::set_mouth_open(float ratio) noexcept
     impl_->context().mouth_open_ratio = ratio;
 }
 
+void Avatar::set_mouth_form(float ratio) noexcept
+{
+    if (ratio > 1.0f) {
+        ratio = 1.0f;
+    } else if (ratio < 0.0f) {
+        ratio = -1.0f;
+    }
+    impl_->context().mouth_form_ratio = ratio;
+}
+
 void Avatar::set_gaze(float horizontal, float vertical) noexcept
 {
     impl_->context().gaze_horizontal = horizontal;

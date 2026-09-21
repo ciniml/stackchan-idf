@@ -213,6 +213,7 @@ end_group()
 | `eye_open` | float | 0..1 | まばたき (0 = 閉) |
 | `gaze_h`, `gaze_v` | float | -1..+1 | 視線サッカード |
 | `mouth_open` | float | 0..1 | 口の開き |
+| `mouth_form` | float | 0..1 | 口の形 (0 = 横広、1 = すぼめ)。ホストが設定しない場合は `mouth_open` と同値 |
 | `expr` | enum | 0..5 | 表情 (下記定数で名前指定可) |
 | `primary` | u16 → float | RGB565 | 前景色 (デフォルト 白 `0xFFFF`) |
 | `background` | u16 → float | RGB565 | 背景色 (デフォルト 黒 `0x0000`) |
@@ -436,9 +437,11 @@ end
 | 0x04 | `breath` | 0x0E | `balloon_bg` | 0x18 | `mouth_min_h` |
 | 0x05 | `eye_open` | 0x0F | `eye_radius` | 0x19 | `mouth_max_h` |
 | 0x06 | `gaze_h` | 0x10 | `eye_off_x` | 0x1A | `eyebrows_visible` |
-| 0x07 | `gaze_v` | 0x11 | `eye_off_y` | | |
-| 0x08 | `mouth_open` | 0x12 | `brow_off_x` | | |
-| 0x09 | `expr` | 0x13 | `brow_off_y` | | |
+| 0x07 | `gaze_v` | 0x11 | `eye_off_y` | 0x1B | `cheeks_visible` |
+| 0x08 | `mouth_open` | 0x12 | `brow_off_x` | 0x1C | `cheek_radius` |
+| 0x09 | `expr` | 0x13 | `brow_off_y` | 0x1D | `cheek_off_x` |
+| | | | | 0x1E | `cheek_off_y` |
+| | | | | 0x1F | `mouth_form` |
 
 > 真実源: [components/avatar_vm/include/avatar_vm/opcodes.hpp](https://github.com/ciniml/stackchan-idf/blob/main/components/avatar_vm/include/avatar_vm/opcodes.hpp)
 > (C++ 側) / [tools/avatar_dsl/opcodes.js](https://github.com/ciniml/stackchan-idf/blob/main/tools/avatar_dsl/opcodes.js) (JS 側 ミラー)

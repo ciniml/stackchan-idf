@@ -69,6 +69,7 @@ while cond do ... end                   -- 無限ループ防止策は無し、�
 -- read-only コンテキスト変数 (ホストから注入):
 --   canvas_w canvas_h canvas_scale now_ms
 --   breath eye_open gaze_h gaze_v mouth_open    -- 0..1 / -1..1
+--   mouth_form                                    -- 0 (wide) .. 1 (narrow)。未設定時は mouth_open と同値
 --   expr                                          -- enum 0..5
 --   primary background secondary balloon_fg balloon_bg   -- RGB565
 --   eye_radius eye_off_x eye_off_y

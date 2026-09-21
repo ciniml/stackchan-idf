@@ -30,6 +30,9 @@ public:
 
     void set_expression(Expression expression) noexcept;
     void set_mouth_open(float ratio) noexcept;
+    // Mouth shape, 0 = wide .. 1 = narrow (see DrawContext::mouth_form_ratio).
+    // A negative value clears it: the shape then follows set_mouth_open.
+    void set_mouth_form(float ratio) noexcept;
     void set_gaze(float horizontal, float vertical) noexcept;
     void set_palette(const Palette& palette) noexcept;
     // Rebuild the face layout from user tuning (eye/eyebrow/mouth geometry) and
