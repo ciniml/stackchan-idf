@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: BSL-1.0
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -52,6 +55,9 @@ struct Segment {
     FormantFrame start;
     FormantFrame end;
     float duration_ms = 0.0f;
+    // リップシンク用: この区間で口が取る母音形。None = 閉口 (無音・「ん」・
+    // 両唇子音の閉鎖・無声化母音)。音の合成には使わない。
+    Vowel vowel = Vowel::None;
 };
 
 bool parse_kana(std::u32string_view kana, std::vector<Mora>& out);
@@ -90,6 +96,22 @@ void render_segments(std::span<const Segment> segs, std::vector<std::int16_t>& o
 void render_segments_classic(std::span<const Segment> segs, std::vector<std::int16_t>& out,
                              const Options& opt);
 
+// 口形イベント列の組み立て (jtts.cpp)。区間を時間順に add() していくと、
+// 口形が変わる所だけがイベントになる。finish() で最後が閉口でなければ
+// 終端に閉口イベントを付ける。
+class VisemeBuilder {
+public:
+    explicit VisemeBuilder(std::vector<VisemeEvent>& out) : out_(out) {}
+    void add(Vowel v, float duration_ms);
+    void finish();
+
+private:
+    std::vector<VisemeEvent>& out_;
+    float t_ms_ = 0.0f;
+    Vowel last_ = Vowel::None;
+    bool have_last_ = false;
+};
+
 }  // namespace stackchan::jtts::internal
 
 namespace stackchan::jtts::jvox {
@@ -112,9 +134,66 @@ bool render_units(std::span<const Mora> moras, const jvox::Db& db,
 // 検証リファレンス: tools/jvox/hts_label_kana.py
 bool build_hts_labels(std::u32string_view text, std::vector<std::string>& labels);
 
-// HMM エンジン本体 (hmm_synth.cpp)。ボイス未ロード・ラベル生成失敗・
-// レート非対応時は out を触らず false (呼び出し側がフォールバック)。
-bool render_hmm(std::u32string_view text, std::vector<std::int16_t>& out, const Options& opt);
+// 口形の 1 区間 (口形 + 継続時間)。HMM は音素ごとの継続長からこれを作る。
+struct VisemeSpan {
+    Vowel vowel = Vowel::None;
+    float duration_ms = 0.0f;
+};
+
+// spans → 口形イベント列 (先頭を 0 ms とし、同じ口形は連結、最後は閉口で終わる)。
+void spans_to_events(std::span<const VisemeSpan> spans, std::vector<VisemeEvent>& out);
+
+// HMM の 1 チャンク分の受け取り側 (PCM と口形区間)。false で中断。
+using ChunkFn =
+    std::function<bool(std::vector<std::int16_t>&&, std::vector<VisemeSpan>&&, const std::u32string& text)>;
+
+enum class HmmOutcome {
+    Ok,        // 全チャンクを emit した
+    NoOutput,  // 何も emit せずに諦めた (ボイス未ロード / メモリ不足など): 呼び出し側がフォールバック
+    Aborted,   // 1 つ以上 emit した後にメモリ不足で諦めた
+    Cancelled, // emit が false を返した
+};
+
+// HMM エンジン本体 (hmm_synth.cpp)。長い発話はメモリ予算に収まるチャンクに分けて
+// 順に合成し、チャンクごとに emit する。
+//   stream = false: 一括 (synthesize 用)。チャンクは予算いっぱいまで詰める。
+//   stream = true : 低遅延 (synthesize_stream 用)。最初のチャンクを小さく、以降を
+//                   徐々に大きくして、再生しながら次を合成しても途切れにくくする。
+HmmOutcome render_hmm_stream(std::u32string_view text, const Options& opt, const ChunkFn& emit, bool stream);
+
+// HMM 合成 1 回分のテキスト チャンク (hmm_chunk.cpp)。
+struct HmmChunk {
+    std::u32string text;
+    bool pause_after = false;  // 末尾が句読点 (次のチャンクとの間に本来ポーズが入る)
+    std::size_t moras = 0;
+};
+
+// text を、各チャンクが max_moras 以下になるよう句読点 / アクセント句境界
+// (最後の手段でモーラ境界) で分割する。全体が収まるなら text をそのまま
+// 1 チャンクにする。max_moras == 0 や発声できる内容が無いときは false。
+//
+// first_moras > 0 のときは低遅延モード: 最初のチャンクを first_moras 程度に抑え、
+// 以降は直前のチャンクの 1.3 倍まで (max_moras を上限に) 徐々に大きくする。合成時間は
+// 音声長の約 0.72 倍なので、次のチャンクの合成が前のチャンクの再生中に終わる。分割は
+// 句読点 / アクセント句境界だけで行い、ここでは句の途中では切らない。
+bool split_hmm_text(std::u32string_view text, std::size_t max_moras, std::vector<HmmChunk>& out,
+                    std::size_t first_moras = 0);
+
+// かな文字列 → 発話長 [ms] の粗い上限見積り (hmm_chunk.cpp)。PCM バッファの
+// 確保量の事前見積りに使う。
+float estimate_utterance_ms(std::u32string_view text, float mora_ms);
+
+// samples 個の int16 PCM (+ 合成中の作業余裕) が空きメモリに収まるか。ESP では
+// 空き PSRAM を見る。ホストでは常に true。収まらない発話は合成前に断り、
+// std::vector の確保失敗 (例外無効なので abort) を避ける。
+bool pcm_fits_in_memory(std::size_t samples);
+
+// テスト用: PCM に使える空きメモリ [byte] を固定する (0 で実機同様に自動判定)。
+void set_pcm_memory_limit_for_test(std::size_t bytes);
+
+// テスト用: HMM 合成のメモリ予算 [byte] を固定する (0 で実機同様に自動算出 /
+// ホストでは無制限)。分割合成をホストで検証するために使う。
+void set_hmm_memory_budget_for_test(std::size_t bytes);
 
 // ---- sanoTTS-jp エンジン ----
 

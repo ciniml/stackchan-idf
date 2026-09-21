@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSL-1.0
 #include "jtts/jtts.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -41,6 +42,7 @@ const char* to_string(Error e) {
     switch (e) {
         case Error::InvalidKana: return "InvalidKana";
         case Error::OutOfMemory: return "OutOfMemory";
+        case Error::Cancelled: return "Cancelled";
     }
     return "Unknown";
 }
@@ -76,35 +78,34 @@ void apply_formant_scale(std::vector<internal::Segment>& segs, float scale) {
     }
 }
 
-}  // namespace
+// セグメント列 (時間軸は PCM と一致) を口形イベント列にまとめる。
+void collect_visemes(std::span<const internal::Segment> segs, std::vector<VisemeEvent>& out) {
+    internal::VisemeBuilder b(out);
+    for (const auto& s : segs) b.add(s.vowel, s.duration_ms);
+    b.finish();
+}
 
-namespace {
+// sanoTTS: Auto では最優先、Sano 指定では必須。出力は 22.05 kHz 固定なので、呼び出し側が
+// レートを受け取れる (synthesize_ex / synthesize_stream) か、要求レートが一致するとき
+// だけ使う。
+bool wants_sano(const Options& opt) {
+    return opt.engine == Engine::Auto || opt.engine == Engine::Sano;
+}
 
-tl::expected<std::uint32_t, Error> synthesize_impl(std::u32string_view kana,
-                                                   std::vector<std::int16_t>& out,
-                                                   const Options& opt_in, bool allow_native_rate) {
-    out.clear();
-    Options opt = resolve_defaults(opt_in);
+// HMM: Auto / Hmm、および Sano 指定 (重み未ロード時のフォールバック先)。
+bool wants_hmm(const Options& opt) {
+    return opt.engine == Engine::Auto || opt.engine == Engine::Hmm || opt.engine == Engine::Sano;
+}
 
-    // sanoTTS エンジン: 重みがロード済みなら最優先。出力は 22.05 kHz 固定なので、
-    // 呼び出し側がレートを受け取れる (synthesize_ex) か、要求レートが一致する
-    // ときだけ使う。
-    if (opt.engine == Engine::Auto || opt.engine == Engine::Sano) {
-        if (allow_native_rate || opt.sample_rate_hz == 22050u) {
-            std::uint32_t rate = 0;
-            if (internal::render_sano(kana, out, opt, rate)) {
-                return rate;
-            }
-        }
-    }
-
-    // HMM エンジン: ボイスがロード済みなら最優先 (品質最良)。
-    // アクセント記号 (' と /) は HMM のみ解釈し、他エンジンでは
-    // parse_kana が読み飛ばす。
-    if (opt.engine == Engine::Auto || opt.engine == Engine::Hmm || opt.engine == Engine::Sano) {
-        if (internal::render_hmm(kana, out, opt)) {
-            return opt.sample_rate_hz;
-        }
+// HMM 以外のエンジン (単位連結 → フォルマント) で発話全体を 1 本の PCM にする。
+// 全体を 1 つの std::vector に作るので、空きメモリに収まらない長さは合成前に断る
+// (std::vector の確保失敗は例外無効ビルドでは abort = 再起動になる)。
+tl::expected<void, Error> render_whole(std::u32string_view kana, const Options& opt,
+                                       std::vector<std::int16_t>& out, std::vector<VisemeEvent>* visemes) {
+    const auto est_samples = static_cast<std::size_t>(
+        internal::estimate_utterance_ms(kana, opt.mora_ms) * static_cast<float>(opt.sample_rate_hz) / 1000.0f);
+    if (!internal::pcm_fits_in_memory(est_samples)) {
+        return tl::make_unexpected(Error::OutOfMemory);
     }
 
     std::vector<Mora> moras;
@@ -120,7 +121,7 @@ tl::expected<std::uint32_t, Error> synthesize_impl(std::u32string_view kana,
         auto db = g_voice_db.load();
         if (db && db->sample_rate() == opt.sample_rate_hz &&
             internal::render_units(moras, *db, out, opt)) {
-            return opt.sample_rate_hz;
+            return {};
         }
     }
 
@@ -138,22 +139,162 @@ tl::expected<std::uint32_t, Error> synthesize_impl(std::u32string_view kana,
     }
     out.reserve(estimated_samples);
 
+    if (visemes) collect_visemes(segs, *visemes);
+
     internal::render_segments(segs, out, opt);
+    return {};
+}
+
+// 一括合成。戻り値は出力 PCM のサンプルレート (sanoTTS は 22.05 kHz、他は opt.sample_rate_hz)。
+tl::expected<std::uint32_t, Error> synthesize_impl(std::u32string_view kana, std::vector<std::int16_t>& out,
+                                                   std::vector<VisemeEvent>* visemes, const Options& opt_in,
+                                                   bool allow_native_rate) {
+    out.clear();
+    if (visemes) visemes->clear();
+    Options opt = resolve_defaults(opt_in);
+
+    // 発話が長すぎて PCM が空きメモリに収まらないなら、どのエンジンでも合成せず断る。
+    const std::uint32_t est_rate =
+        wants_sano(opt) && sano_weights_loaded() ? std::max<std::uint32_t>(opt.sample_rate_hz, 22050u) : opt.sample_rate_hz;
+    const auto est_samples = static_cast<std::size_t>(
+        internal::estimate_utterance_ms(kana, opt.mora_ms) * static_cast<float>(est_rate) / 1000.0f);
+    if (!internal::pcm_fits_in_memory(est_samples)) {
+        return tl::make_unexpected(Error::OutOfMemory);
+    }
+
+    // sanoTTS エンジン: 重みがロード済みなら最優先 (口形は出せない)。
+    if (wants_sano(opt) && (allow_native_rate || opt.sample_rate_hz == 22050u)) {
+        std::uint32_t rate = 0;
+        if (internal::render_sano(kana, out, opt, rate)) {
+            return rate;
+        }
+        out.clear();
+    }
+
+    // HMM エンジン: ボイスがロード済みなら次に優先 (品質最良)。
+    // アクセント記号 (' と /) は HMM のみ解釈し、他エンジンでは
+    // parse_kana が読み飛ばす。全チャンクを 1 本の PCM に連結する。
+    if (wants_hmm(opt) && hmm_voice_loaded()) {
+        // PCM は最初に 1 回だけ確保し (途中の再確保 = 旧 + 新の一時倍増を避ける)、
+        // 合成後に余りを返す。
+        out.reserve(est_samples);
+        std::vector<VisemeEvent> scratch;
+        internal::VisemeBuilder builder(visemes ? *visemes : scratch);
+        const auto outcome = internal::render_hmm_stream(
+            kana, opt,
+            [&](std::vector<std::int16_t>&& pcm, std::vector<internal::VisemeSpan>&& spans, const std::u32string&) {
+                out.insert(out.end(), pcm.begin(), pcm.end());
+                for (const auto& sp : spans) builder.add(sp.vowel, sp.duration_ms);
+                return true;
+            },
+            /*stream=*/false);
+        if (outcome == internal::HmmOutcome::Ok) {
+            builder.finish();
+            if (out.capacity() - out.size() > 32 * 1024) out.shrink_to_fit();
+            return opt.sample_rate_hz;
+        }
+        // 諦めた (メモリ不足など): 途中まで作った分は捨てて他エンジンへ。
+        out.clear();
+        if (visemes) visemes->clear();
+    }
+
+    if (auto r = render_whole(kana, opt, out, visemes); !r) return tl::make_unexpected(r.error());
     return opt.sample_rate_hz;
 }
 
 }  // namespace
 
-tl::expected<void, Error> synthesize(std::u32string_view kana,
-                                     std::vector<std::int16_t>& out, const Options& opt) {
-    auto r = synthesize_impl(kana, out, opt, /*allow_native_rate=*/false);
+namespace internal {
+
+void VisemeBuilder::add(Vowel v, float duration_ms) {
+    if (duration_ms <= 0.0f) return;
+    if (!have_last_ || v != last_) {
+        out_.push_back({static_cast<std::uint32_t>(t_ms_ + 0.5f), v});
+        last_ = v;
+        have_last_ = true;
+    }
+    t_ms_ += duration_ms;
+}
+
+void spans_to_events(std::span<const VisemeSpan> spans, std::vector<VisemeEvent>& out) {
+    out.clear();
+    VisemeBuilder b(out);
+    for (const auto& sp : spans) b.add(sp.vowel, sp.duration_ms);
+    b.finish();
+}
+
+void VisemeBuilder::finish() {
+    if (have_last_ && last_ != Vowel::None) {
+        out_.push_back({static_cast<std::uint32_t>(t_ms_ + 0.5f), Vowel::None});
+        last_ = Vowel::None;
+    }
+}
+
+}  // namespace internal
+
+tl::expected<void, Error> synthesize(std::u32string_view kana, std::vector<std::int16_t>& out,
+                                     const Options& opt) {
+    auto r = synthesize_impl(kana, out, nullptr, opt, /*allow_native_rate=*/false);
+    if (!r) return tl::make_unexpected(r.error());
+    return {};
+}
+
+tl::expected<void, Error> synthesize(std::u32string_view kana, std::vector<std::int16_t>& out,
+                                     std::vector<VisemeEvent>& visemes, const Options& opt) {
+    auto r = synthesize_impl(kana, out, &visemes, opt, /*allow_native_rate=*/false);
     if (!r) return tl::make_unexpected(r.error());
     return {};
 }
 
 tl::expected<std::uint32_t, Error> synthesize_ex(std::u32string_view kana,
                                                  std::vector<std::int16_t>& out, const Options& opt) {
-    return synthesize_impl(kana, out, opt, /*allow_native_rate=*/true);
+    return synthesize_impl(kana, out, nullptr, opt, /*allow_native_rate=*/true);
+}
+
+tl::expected<void, Error> synthesize_stream(std::u32string_view kana, const ChunkSink& sink, const Options& opt_in) {
+    const Options opt = resolve_defaults(opt_in);
+
+    // sanoTTS: 全体が 1 チャンク (22.05 kHz)。重み未ロードなら false で次へ。
+    if (wants_sano(opt)) {
+        SynthChunk chunk;
+        std::uint32_t rate = 0;
+        if (internal::render_sano(kana, chunk.pcm, opt, rate) && !chunk.pcm.empty()) {
+            chunk.text = std::u32string(kana);
+            chunk.sample_rate = rate;
+            if (!sink(std::move(chunk))) return tl::make_unexpected(Error::Cancelled);
+            return {};
+        }
+    }
+
+    if (wants_hmm(opt) && hmm_voice_loaded()) {
+        const auto outcome = internal::render_hmm_stream(
+            kana, opt,
+            [&](std::vector<std::int16_t>&& pcm, std::vector<internal::VisemeSpan>&& spans, const std::u32string& text) {
+                SynthChunk chunk;
+                chunk.text = text;
+                chunk.pcm = std::move(pcm);
+                chunk.sample_rate = opt.sample_rate_hz;
+                internal::spans_to_events(spans, chunk.visemes);
+                return sink(std::move(chunk));
+            },
+            /*stream=*/true);
+        switch (outcome) {
+            case internal::HmmOutcome::Ok: return {};
+            case internal::HmmOutcome::Cancelled: return tl::make_unexpected(Error::Cancelled);
+            // 途中まで渡してしまった分は取り消せないので、他エンジンでやり直さない。
+            case internal::HmmOutcome::Aborted: return tl::make_unexpected(Error::OutOfMemory);
+            case internal::HmmOutcome::NoOutput: break;  // 何も渡していない → 他エンジンへ
+        }
+    }
+
+    // HMM 以外 / HMM を使えなかった: 発話全体が 1 チャンク。
+    SynthChunk chunk;
+    chunk.text = std::u32string(kana);
+    chunk.sample_rate = opt.sample_rate_hz;
+    if (auto r = render_whole(kana, opt, chunk.pcm, &chunk.visemes); !r) return r;
+    if (chunk.pcm.empty()) return tl::make_unexpected(Error::InvalidKana);
+    if (!sink(std::move(chunk))) return tl::make_unexpected(Error::Cancelled);
+    return {};
 }
 
 }  // namespace stackchan::jtts

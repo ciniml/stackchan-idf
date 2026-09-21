@@ -14,6 +14,8 @@ idf_component_register(
         "src/hmm_synth.cpp"
         "src/sano_ir.cpp"
         "src/sano_synth.cpp"
+        "src/hmm_chunk.cpp"
+        "src/subtitle.cpp"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "src"
     REQUIRES tl_expected

@@ -128,3 +128,11 @@ jobs:
           cmake --build build
           ./build/jtts_test_vowels
           ./build/jtts_test_sano_ir
+          # Vowel lip-sync events, long-text chunking, streaming synthesis and
+          # subtitle mapping. Without arguments only the formant / pure-logic
+          # cases run; with .htsvoice files the HMM cases run too (16 kHz voice
+          # = native rate, fast).
+          ./build/jtts_test_visemes
+          ./build/jtts_test_hmm_chunk
+          ./build/jtts_test_visemes ../../../../assets/voices/mei16.htsvoice
+          ./build/jtts_test_hmm_chunk ../../../../assets/voices/mei16.htsvoice
