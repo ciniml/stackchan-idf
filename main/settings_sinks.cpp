@@ -24,6 +24,7 @@
 #include "avatar/expression.hpp"
 #include "config_service/config_service.hpp"
 #include "config_service/config_store.hpp"
+#include "chunk_player.hpp"
 #include "config_service/settings_registry.hpp"
 #include "speech.hpp"
 #include "utf8.hpp"
@@ -180,9 +181,55 @@ std::uint16_t read_speaker_volume_pct()
     return g_state->speaker.volume_pct.load(std::memory_order_relaxed);
 }
 
+// Body of the say worker: synthesise `kana_utf8` chunk by chunk and play it.
+// Kept out of the task lambda so every local (PCM buffers, the player) is
+// destroyed before the task deletes itself — vTaskDelete never returns, so
+// anything still alive in the task function would leak.
+void say_worker_body(std::unique_ptr<std::string> kana_text)
+{
+    std::u32string kana = stackchan::app::decode_utf8(*kana_text);
+    if (kana.empty()) {
+        ESP_LOGW(kTag, "say: empty / invalid utf8");
+        return;
+    }
+    // Use the user's jtts settings (voice / pitch / mora /
+    // formant / vibrato) cached at boot. Falls back to the
+    // default-options preset when no JSON has been saved yet
+    // (g_say_opts_ready stays false until app_main sets it).
+    stackchan::jtts::Options opt = g_say_opts_ready
+        ? g_say_opts
+        : stackchan::app::resolve_speech_options("", stackchan::app::Speech::kSampleRate);
+
+    // Synthesise chunk by chunk and play while the next chunk is being made
+    // (sound starts after the first chunk, not the whole text). Wait for the
+    // speaker to be free first so we never talk over another utterance.
+    // Channel 2: Speech uses 1, conversation 0.
+    while (M5.Speaker.isPlaying()) vTaskDelay(pdMS_TO_TICKS(20));
+    stackchan::app::ChunkPlayer player{2};
+    bool any = false;
+    const auto r = stackchan::jtts::synthesize_stream(
+        kana,
+        [&](stackchan::jtts::SynthChunk&& chunk) {
+            if (chunk.pcm.empty()) return true;
+            // sanoTTS は 22.05 kHz 固定なので、チャンクが持つ出力レートで鳴らす
+            // (BLE / HTTP の jtts-say もこれで sanoTTS を通る)。
+            player.enqueue(std::move(chunk.pcm), chunk.sample_rate);
+            any = true;
+            return true;
+        },
+        opt);
+    if (!r) {
+        ESP_LOGW(kTag, "say synth fail: %s%s", stackchan::jtts::to_string(r.error()),
+                 any ? " (cut short)" : "");
+    }
+    if (!any) return;
+    while (!player.finished() || M5.Speaker.isPlaying()) vTaskDelay(pdMS_TO_TICKS(20));
+    stackchan::wifi_config::mcp_events::publish_say_done();
+}
+
 // Spawn a PSRAM-stack worker that synthesises `kana_utf8` via jtts and
-// pushes it through M5.Speaker.playRaw. Shared by /mcp/say (external MCP
-// gate) and the settings-page test-speak buttons (BLE chr + /api/jtts-say,
+// pushes it through M5.Speaker (chunk by chunk). Shared by /mcp/say (external
+// MCP gate) and the settings-page test-speak buttons (BLE chr + /api/jtts-say,
 // HTTP-auth gate). Returns immediately; the heap-owned string is freed
 // either by the worker or on task-create failure here.
 void start_say_worker(std::string_view kana_utf8)
@@ -192,46 +239,11 @@ void start_say_worker(std::string_view kana_utf8)
     // /mcp/say wiring (steady-state internal-RAM largest is ~10 KiB after
     // conversation_task TLS, so an internal-RAM 12 KiB stack alloc would
     // silently fail). The worker only touches PSRAM-friendly surfaces
-    // (jtts buffers, PCM vector, M5.Speaker.playRaw enqueue).
+    // (jtts buffers, PCM vectors, M5.Speaker.playRaw enqueue).
     constexpr UBaseType_t kCaps = stackchan::kNoFlashTaskStackCaps;
     const BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
         +[](void* arg) {
-            // Body in an immediately-invoked lambda: vTaskDeleteWithCaps()
-            // never returns, so locals (PCM buffer, text) must be destroyed
-            // before it — otherwise each /api/say leaks the whole buffer.
-            [&] {
-            std::unique_ptr<std::string> kana_text{static_cast<std::string*>(arg)};
-            std::u32string kana = stackchan::app::decode_utf8(*kana_text);
-            if (kana.empty()) {
-                ESP_LOGW(kTag, "say: empty / invalid utf8");
-                return;
-            }
-            // Use the user's jtts settings (voice / pitch / mora /
-            // formant / vibrato) cached at boot. Falls back to the
-            // default-options preset when no JSON has been saved yet
-            // (g_say_opts_ready stays false until app_main sets it).
-            stackchan::jtts::Options opt = g_say_opts_ready
-                ? g_say_opts
-                : stackchan::app::resolve_speech_options("", stackchan::app::Speech::kSampleRate);
-            // synthesize_ex は実際の出力レートを返す (sanoTTS は 22.05 kHz、他は
-            // opt.sample_rate_hz)。BLE / HTTP の jtts-say もこれで sanoTTS を通る。
-            std::uint32_t rate = opt.sample_rate_hz;
-            std::vector<std::int16_t> pcm;
-            if (auto r = stackchan::jtts::synthesize_ex(kana, pcm, opt); !r) {
-                ESP_LOGW(kTag, "say synth fail: %s",
-                         stackchan::jtts::to_string(r.error()));
-                return;
-            } else {
-                rate = *r;
-            }
-            if (pcm.empty()) {
-                return;
-            }
-            while (M5.Speaker.isPlaying()) vTaskDelay(pdMS_TO_TICKS(20));
-            M5.Speaker.playRaw(pcm.data(), pcm.size(), rate, /*stereo=*/false);
-            while (M5.Speaker.isPlaying()) vTaskDelay(pdMS_TO_TICKS(20));
-            stackchan::wifi_config::mcp_events::publish_say_done();
-            }();
+            say_worker_body(std::unique_ptr<std::string>{static_cast<std::string*>(arg)});
             vTaskDeleteWithCaps(nullptr);
         },
         // Pin to CPU 0 — CPU 1 hosts speaker/mic/render/servo and a

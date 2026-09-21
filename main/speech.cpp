@@ -4,12 +4,15 @@
 #include <config_service/task_stack.hpp>
 #include "speech.hpp"
 #include "utf8.hpp"
+#include <jtts/subtitle.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -101,6 +104,30 @@ void apply_engine(jtts::Options& opt, const cJSON* item)
         opt.engine = jtts::Engine::Sano;
     }
 }
+
+// Mouth pose per vowel, in the avatar's terms: `open` scales the rectangle's
+// height, `form` its width (0 = wide, 1 = narrow). None = lips closed.
+//   あ: tall, a little narrower than at rest    い: wide and flat
+//   う: narrow, small opening                   え: wide, half open
+//   お: narrow-ish, fairly tall (rounded)
+constexpr Speech::Mouth kClosedMouth{0.0f, 0.0f};
+
+constexpr Speech::Mouth mouth_for_vowel(jtts::Vowel v) noexcept
+{
+    switch (v) {
+    case jtts::Vowel::A: return {1.00f, 0.30f};
+    case jtts::Vowel::I: return {0.25f, 0.00f};
+    case jtts::Vowel::U: return {0.30f, 1.00f};
+    case jtts::Vowel::E: return {0.55f, 0.15f};
+    case jtts::Vowel::O: return {0.75f, 0.85f};
+    case jtts::Vowel::None: break;
+    }
+    return kClosedMouth;
+}
+
+// Time to glide from the previous vowel's pose to the next one. Short enough
+// to keep fast speech crisp, long enough that the lips don't snap.
+constexpr float kMouthBlendMs = 60.0f;
 
 void build_envelope_from_pcm(const std::vector<std::int16_t>& pcm,
                              std::vector<float>& envelope, std::uint32_t sample_rate,
@@ -252,58 +279,162 @@ std::string Speech::babble(std::uint32_t seed)
         index = seed % phrases_.size();
     }
     const Phrase& phrase = phrases_[index];
-    // Couldn't pronounce → still return the display text so the caller shows
-    // the matching balloon (no audio / mouth movement in that case).
-    (void)say(phrase.reading);
+    // Couldn't start (busy / task create failed) → still show the text once, so
+    // the caller's balloon is never lost. Otherwise the subtitle sink is driven
+    // by the synthesis task, chunk by chunk (and shows the whole text if nothing
+    // could be synthesised). The display text is returned either way.
+    if (!say_impl(phrase.reading, &phrase.display) && subtitle_sink_) {
+        subtitle_sink_(phrase.display, 0);
+    }
     return phrase.display;
 }
 
 struct Speech::SynthJob {
     Speech* self;
     std::u32string reading;
+    std::string display;  // 吹き出しに出す表示テキスト (空 = 吹き出しは呼び出し側に任せる)
     jtts::Options opt;
     std::uint32_t gen;
 };
 
 void Speech::synth_task(void* arg)
 {
-    // vTaskDeleteWithCaps() never returns, so every local (the old PCM buffer
-    // handed back by swap(), the envelope, the job) must be destroyed BEFORE
-    // it is called — otherwise ~60 KB leak per utterance. Hence the body
-    // lives in an immediately-invoked lambda and the delete happens after it.
+    // vTaskDeleteWithCaps() never returns, so every local (the job, PCM buffers,
+    // the subtitle mapper, ...) must be destroyed BEFORE it is called —
+    // otherwise ~60 KB leak per utterance. Hence the body lives in an
+    // immediately-invoked lambda and the delete happens after it.
     [&] {
-    std::unique_ptr<SynthJob> job{static_cast<SynthJob*>(arg)};
-    Speech* self = job->self;
-    std::vector<std::int16_t> pcm;
-    auto r = jtts::synthesize_ex(job->reading, pcm, job->opt);
-    if (!r || pcm.empty() || self->gen_.load(std::memory_order_acquire) != job->gen) {
-        // 合成失敗、無音、または stop() で取り消された。
+        std::unique_ptr<SynthJob> job{static_cast<SynthJob*>(arg)};
+        Speech* self = job->self;
+        self->run_utterance(*job);
         self->synthesizing_.store(false, std::memory_order_release);
-        return;
-    }
-    const std::uint32_t rate = *r;
-    std::vector<float> envelope;
-    build_envelope_from_pcm(pcm, envelope, rate, kEnvelopeStepMs);
-    {
-        std::lock_guard<std::mutex> lock(self->buf_mutex_);
-        self->pcm_.swap(pcm);
-        self->envelope_.swap(envelope);
-        self->play_rate_ = rate;
-        self->duration_ms_.store(
-            static_cast<std::uint32_t>(static_cast<float>(self->pcm_.size()) * 1000.0f /
-                                       static_cast<float>(rate)),
-            std::memory_order_relaxed);
-        self->start_ms_.store(static_cast<std::uint32_t>(esp_timer_get_time() / 1000),
-                              std::memory_order_release);
-        M5.Speaker.playRaw(self->pcm_.data(), self->pcm_.size(), rate, /*stereo=*/false,
-                           /*repeat=*/1, /*channel=*/-1, /*stop_current_sound=*/true);
-    }
-    self->synthesizing_.store(false, std::memory_order_release);
     }();
     vTaskDeleteWithCaps(nullptr);
 }
 
+void Speech::run_utterance(const SynthJob& job)
+{
+    // Balloon text follows the chunks (only when there is text and a sink).
+    std::optional<jtts::SubtitleMapper> subtitles;
+    if (!job.display.empty() && subtitle_sink_) {
+        subtitles.emplace(job.display, job.reading);
+    }
+
+    // stop() bumps gen_: everything after that is discarded.
+    const auto cancelled = [&] { return gen_.load(std::memory_order_acquire) != job.gen; };
+
+    bool first = true;
+    bool any = false;
+    const auto on_chunk = [&](jtts::SynthChunk&& chunk) -> bool {
+        const std::size_t samples = chunk.pcm.size();
+        if (samples == 0) {
+            return true;
+        }
+        if (cancelled()) {
+            return false;
+        }
+        // sanoTTS outputs 22.05 kHz; the chunk carries the actual rate.
+        const std::uint32_t rate = chunk.sample_rate != 0 ? chunk.sample_rate : job.opt.sample_rate_hz;
+
+        // This chunk's part of the balloon text (chunks arrive in order).
+        std::string subtitle;
+        if (subtitles) {
+            subtitle = subtitles->next(chunk.text);
+        }
+        // Envelope (only for engines without a vowel timeline) must be taken
+        // before the PCM is handed to the player.
+        std::vector<float> env;
+        if (chunk.visemes.empty()) {
+            build_envelope_from_pcm(chunk.pcm, env, rate, kEnvelopeStepMs);
+        }
+        const auto dur_ms = static_cast<std::uint32_t>(static_cast<std::uint64_t>(samples) * 1000u / rate);
+
+        if (first) {
+            // Diagnostic: dump the live Speaker config pins right before playRaw so
+            // we can confirm the Module Audio overrides (mck=G7 / bck=G0 / ws=G6 /
+            // data_out=G13) are still in effect at JTTS playback time. If a stray
+            // task has re-configured the speaker to internal AW88298 pins
+            // (mck=NC / bck=34 / ws=33 / data_out=13) the line-out goes silent
+            // even though the channel mixer says "playing". Remove once JTTS-on-
+            // Module-Audio is stable.
+            auto live = M5.Speaker.config();
+            ESP_LOGI("speech",
+                     "play: mck=%d bck=%d ws=%d dout=%d sr=%u first chunk samples=%u @%u Hz",
+                     live.pin_mck, live.pin_bck, live.pin_ws, live.pin_data_out,
+                     static_cast<unsigned>(live.sample_rate),
+                     static_cast<unsigned>(samples), static_cast<unsigned>(rate));
+            // A previous utterance may still be sounding: cut it now that the new
+            // one has audio, and free its buffers.
+            player_.begin();
+        }
+
+        // Queue the chunk (blocks while the speaker's 2 slots are full) and learn
+        // when it will actually start sounding.
+        const auto start_opt = player_.enqueue(std::move(chunk.pcm), rate, cancelled);
+        if (!start_opt) {
+            return false; // stop() came in
+        }
+        const std::uint32_t start = *start_opt;
+
+        {
+            std::lock_guard<std::mutex> lock(buf_mutex_);
+            if (first) {
+                visemes_.clear();
+                envelope_.clear();
+                subs_.clear();
+                next_sub_ = 0;
+                duration_ms_.store(dur_ms, std::memory_order_relaxed);
+                // 0 means "idle", so never publish a start of exactly 0.
+                start_ms_.store(start != 0 ? start : 1, std::memory_order_release);
+            }
+            const std::uint32_t base = start_ms_.load(std::memory_order_relaxed);
+            const std::uint32_t offset = first ? 0 : start - base;
+            for (const auto& e : chunk.visemes) {
+                visemes_.push_back({e.start_ms + offset, e.vowel});
+            }
+            if (!env.empty()) {
+                if (envelope_.size() < offset / kEnvelopeStepMs) {
+                    envelope_.resize(offset / kEnvelopeStepMs, 0.0f); // silence up to the chunk
+                }
+                envelope_.insert(envelope_.end(), env.begin(), env.end());
+            }
+            if (!subtitle.empty()) {
+                subs_.push_back({offset, dur_ms, std::move(subtitle)});
+            }
+            duration_ms_.store(offset + dur_ms, std::memory_order_relaxed);
+        }
+        if (first) {
+            // The first balloon text goes up right now, before the timer takes over.
+            pump_subtitles();
+            start_mouth_timer();
+        }
+        first = false;
+        any = true;
+        return true;
+    };
+
+    const auto r = jtts::synthesize_stream(job.reading, on_chunk, job.opt);
+    if (!r && r.error() != jtts::Error::Cancelled) {
+        ESP_LOGW(kTag, "say: synthesis %s%s", jtts::to_string(r.error()),
+                 any ? " (utterance cut short)" : "");
+    }
+    if (cancelled()) {
+        // stop() already stopped the speaker; give it a moment to finish reading the
+        // last block, then free what we queued.
+        vTaskDelay(pdMS_TO_TICKS(30));
+        player_.release();
+    } else if (!any && subtitle_sink_ && !job.display.empty()) {
+        // Nothing could be synthesised: still show the text once.
+        subtitle_sink_(job.display, 0);
+    }
+}
+
 bool Speech::say(std::u32string_view reading)
+{
+    return say_impl(reading, nullptr);
+}
+
+bool Speech::say_impl(std::u32string_view reading, const std::string* display)
 {
     if (!initialised_) {
         configure(""); // first-call lazy init with defaults
@@ -314,7 +445,8 @@ bool Speech::say(std::u32string_view reading)
     }
     jtts::Options opt = opts_;
     opt.sample_rate_hz = kSampleRate; // 他エンジンの既定レート。sanoTTS は 22.05 kHz を返す
-    auto* job = new SynthJob{this, std::u32string{reading}, opt, gen_.load(std::memory_order_acquire)};
+    auto* job = new SynthJob{this, std::u32string{reading}, display != nullptr ? *display : std::string{},
+                             opt, gen_.load(std::memory_order_acquire)};
     // スタックは PSRAM (flash への書き込みはしない)。CPU 0 — CPU 1 は描画 / サーボ / スピーカー。
     const BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(&synth_task, "speech_synth", 16 * 1024, job,
                                                           tskIDLE_PRIORITY + 2, nullptr, 0,
@@ -330,13 +462,18 @@ bool Speech::say(std::u32string_view reading)
 
 void Speech::stop()
 {
-    // 進行中の合成があれば結果を捨てさせる (タスク自体は合成完了まで走る)。
-    gen_.fetch_add(1, std::memory_order_acq_rel);
-    if (M5.Speaker.isPlaying()) {
-        M5.Speaker.stop();
-    }
+    stop_mouth_timer();
+    // 進行中の合成があれば結果を捨てさせ (gen_)、鳴っている音を止める (タスク自体は今の
+    // チャンクの合成が終わるまで走る)。gen_ の更新と停止は ChunkPlayer のミューテックスの
+    // 下で行うので、stop() の後に遅れて鳴り出すチャンクは無い。
+    player_.stop([this] { gen_.fetch_add(1, std::memory_order_acq_rel); });
+    std::lock_guard<std::mutex> lock(buf_mutex_);
     start_ms_.store(0, std::memory_order_release);
     duration_ms_.store(0, std::memory_order_release);
+    visemes_.clear();
+    envelope_.clear();
+    subs_.clear();
+    next_sub_ = 0;
 }
 
 bool Speech::is_speaking() const
@@ -352,23 +489,127 @@ bool Speech::is_speaking() const
     return (now - start) < duration_ms_.load(std::memory_order_relaxed);
 }
 
-float Speech::current_mouth_open() const
+void Speech::set_mouth_sink(MouthSink sink)
 {
-    std::lock_guard<std::mutex> lock(buf_mutex_);
+    mouth_sink_ = std::move(sink);
+}
+
+void Speech::set_subtitle_sink(SubtitleSink sink)
+{
+    subtitle_sink_ = std::move(sink);
+}
+
+// Show the newest balloon text whose chunk has started sounding. If several are
+// due (the timer was late) only the latest is shown — the earlier ones are stale.
+void Speech::pump_subtitles()
+{
+    if (!subtitle_sink_) {
+        return;
+    }
+    Subtitle due;
+    bool have = false;
+    {
+        std::lock_guard<std::mutex> lock(buf_mutex_);
+        const std::uint32_t start = start_ms_.load(std::memory_order_relaxed);
+        if (start == 0) {
+            return;
+        }
+        const std::uint32_t elapsed = static_cast<std::uint32_t>(esp_timer_get_time() / 1000) - start;
+        while (next_sub_ < subs_.size() && elapsed >= subs_[next_sub_].at_ms) {
+            due = subs_[next_sub_];
+            have = true;
+            ++next_sub_;
+        }
+    }
+    if (have) {
+        subtitle_sink_(due.text, due.hold_ms);
+    }
+}
+
+void Speech::start_mouth_timer()
+{
+    if (!mouth_sink_ && !subtitle_sink_) {
+        return;
+    }
+    if (mouth_timer_ == nullptr) {
+        esp_timer_create_args_t args{};
+        args.callback = [](void* self) { static_cast<Speech*>(self)->on_mouth_timer(); };
+        args.arg = this;
+        args.dispatch_method = ESP_TIMER_TASK;
+        args.name = "speech_mouth";
+        args.skip_unhandled_events = true;
+        if (esp_timer_create(&args, &mouth_timer_) != ESP_OK) {
+            mouth_timer_ = nullptr;
+            ESP_LOGW(kTag, "mouth timer create failed — mouth/balloon will not follow the chunks");
+            return;
+        }
+    }
+    // Already running (ESP_ERR_INVALID_STATE) is fine.
+    (void)esp_timer_start_periodic(mouth_timer_, kMouthTimerUs);
+}
+
+void Speech::stop_mouth_timer()
+{
+    if (mouth_timer_ != nullptr) {
+        (void)esp_timer_stop(mouth_timer_); // not running (ESP_ERR_INVALID_STATE) is fine
+    }
+}
+
+void Speech::on_mouth_timer()
+{
+    if (mouth_sink_) {
+        mouth_sink_(current_mouth());
+    }
+    pump_subtitles();
+    // Nothing left to animate: close the mouth once and go quiet. is_speaking() is
+    // also true while chunks are still being synthesised, so a slow chunk leaves
+    // a gap, not an end.
+    if (!is_speaking()) {
+        (void)esp_timer_stop(mouth_timer_);
+        if (mouth_sink_) {
+            mouth_sink_(Mouth{});
+        }
+    }
+}
+
+Speech::Mouth Speech::current_mouth() const
+{
     const std::uint32_t start = start_ms_.load(std::memory_order_acquire);
-    if (start == 0 || envelope_.empty()) {
-        return 0.0f;
+    if (start == 0) {
+        return {};
     }
     const std::uint32_t now = static_cast<std::uint32_t>(esp_timer_get_time() / 1000);
     const std::uint32_t elapsed = now - start;
+
+    std::lock_guard<std::mutex> lock(buf_mutex_);
     if (elapsed >= duration_ms_.load(std::memory_order_relaxed)) {
-        return 0.0f;
+        return {};
     }
+
+    if (!visemes_.empty()) {
+        // Vowel lip-sync: find the event in effect and glide toward its pose
+        // from the previous event's pose.
+        const auto next = std::upper_bound(
+            visemes_.begin(), visemes_.end(), elapsed,
+            [](std::uint32_t t, const jtts::VisemeEvent& e) { return t < e.start_ms; });
+        if (next == visemes_.begin()) {
+            return {kClosedMouth.open, kClosedMouth.form};
+        }
+        const auto cur = std::prev(next);
+        const Mouth to = mouth_for_vowel(cur->vowel);
+        const Mouth from = cur == visemes_.begin() ? kClosedMouth : mouth_for_vowel(std::prev(cur)->vowel);
+        float t = static_cast<float>(elapsed - cur->start_ms) / kMouthBlendMs;
+        t = t > 1.0f ? 1.0f : t;
+        t = t * t * (3.0f - 2.0f * t);  // smoothstep
+        return {from.open + (to.open - from.open) * t, from.form + (to.form - from.form) * t};
+    }
+
+    // No vowel timeline (unit-concatenation / sanoTTS): mouth follows the loudness.
     const std::size_t idx = elapsed / kEnvelopeStepMs;
     if (idx >= envelope_.size()) {
-        return 0.0f;
+        return {};
     }
-    return envelope_[idx];
+    return {envelope_[idx], -1.0f};
 }
 
 } // namespace stackchan::app

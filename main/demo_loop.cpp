@@ -73,6 +73,18 @@ constexpr const char* kTag = "stackchan";
 
     static app::Speech speech;
     speech.configure(jtts_config_json);
+    // say() blocks this task while it synthesises (audio already plays chunk by
+    // chunk), so the mouth is animated from Speech's own timer meanwhile.
+    speech.set_mouth_sink([g_state](const app::Speech::Mouth& m) {
+        g_state->face.mouth_open.store(m.open, std::memory_order_relaxed);
+        g_state->face.mouth_form.store(m.form, std::memory_order_relaxed);
+    });
+    // Balloon text follows the chunks: each chunk's part of the phrase goes up
+    // when that chunk starts sounding (same timer, so it also works while say()
+    // is blocked synthesising the later chunks).
+    speech.set_subtitle_sink([g_state](const std::string& text, std::uint32_t hold_ms) {
+        g_state->set_balloon_text(text, hold_ms);
+    });
 
     // LT timekeeper — ticked every loop iteration; speaks through the same
     // Speech instance (so the avatar's mouth moves) and publishes state for
@@ -351,6 +363,7 @@ constexpr const char* kTag = "stackchan";
         // bus) and don't touch mouth_open.
         if (audio_streaming) {
             if (speech.is_speaking()) speech.stop();
+            g_state->face.mouth_form.store(-1.0f, std::memory_order_relaxed);
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
@@ -366,6 +379,7 @@ constexpr const char* kTag = "stackchan";
         // While the conversation is thinking / speaking it owns the avatar —
         // stand down completely.
         if (!allow_idle_demo) {
+            g_state->face.mouth_form.store(-1.0f, std::memory_order_relaxed);
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
@@ -377,8 +391,11 @@ constexpr const char* kTag = "stackchan";
             // lip-sync task (main/mic_lip_sync_task.cpp), if active, owns
             // `mouth_open` without us overwriting it with 0 every tick.
             if (jtts_idle_enabled) {
-                // Mouth opens with the current speech envelope; closed while silent.
-                g_state->face.mouth_open.store(speech.current_mouth_open(), std::memory_order_relaxed);
+                // Mouth follows the vowel being spoken (or the speech envelope
+                // when the engine has no vowel timeline); closed while silent.
+                const auto mouth = speech.current_mouth();
+                g_state->face.mouth_open.store(mouth.open, std::memory_order_relaxed);
+                g_state->face.mouth_form.store(mouth.form, std::memory_order_relaxed);
 
                 // The "Wi-Fi: 切断中" balloon and the babble suppression below only
                 // make sense when the assistant actually needs the network — i.e.
@@ -399,27 +416,29 @@ constexpr const char* kTag = "stackchan";
                     next_speech_ms = now_ms + 1500;
                 }
 
-                // Kick off a new babble + balloon once the previous balloon is done
-                // (callback resets balloon_in_flight) AND audio is idle AND the
-                // random dwell time has elapsed. Suppressed while Wi-Fi is down so
-                // the disconnected balloon stays visible.
+                // Kick off a new babble once the previous balloon is gone AND audio
+                // is idle AND the random dwell time has elapsed. Suppressed while
+                // Wi-Fi is down so the disconnected balloon stays visible.
                 if (!wifi_warning_active &&
                     now_ms >= next_speech_ms &&
                     !speech.is_speaking() &&
-                    !balloon_in_flight.load(std::memory_order_acquire)) {
+                    !balloon_in_flight.load(std::memory_order_acquire) &&
+                    !g_state->balloon_visible()) {
                     // Speak a phrase and show ITS display text in the balloon —
-                    // babble() returns the display (発話内容) of the same phrase
-                    // it synthesises (発声内容), so screen and voice always match.
-                    const std::string display = speech.babble(esp_random());
-                    if (!display.empty()) {
-                        balloon_in_flight.store(true, std::memory_order_release);
-                        g_state->set_balloon_text(display, /*hold_ms=*/0, [] {
-                            balloon_in_flight.store(false, std::memory_order_release);
-                        });
-                    }
+                    // babble() speaks the reading (発声内容) of the same phrase
+                    // whose display text (発話内容) the subtitle sink above shows
+                    // chunk by chunk, in step with the sound (or all at once if
+                    // nothing could be synthesised), so screen and voice always match.
+                    (void)speech.babble(esp_random());
                     next_speech_ms = now_ms + rand_range_ms(kSpeechMinMs, kSpeechMaxMs);
                 }
+            } else {
+                // Someone else (mic lip-sync) owns the mouth: follow mouth_open.
+                g_state->face.mouth_form.store(-1.0f, std::memory_order_relaxed);
             }
+        } else {
+            // Conversation is (idly) active and owns the mouth.
+            g_state->face.mouth_form.store(-1.0f, std::memory_order_relaxed);
         }
 
         // Nadenade: poll the top sensor and look for a directional stroke

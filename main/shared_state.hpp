@@ -76,6 +76,11 @@ public:
     // --- Avatar face (render_task reads every frame) -----------------------
     struct Face {
         std::atomic<float> mouth_open{0.0f};
+        // Mouth shape, 0 = wide .. 1 = narrow (avatar DSL `mouth_form`). Only
+        // the jtts vowel lip-sync (demo_loop) sets it; every other mouth_open
+        // producer (mic, conversation, audio stream) leaves it at -1 = "not
+        // set", which makes the face follow mouth_open like a level meter.
+        std::atomic<float> mouth_form{-1.0f};
         std::atomic<int> expression{static_cast<int>(stackchan::avatar::Expression::Neutral)};
         // External gaze target (Avatar::set_gaze inputs). Updated by the
         // touch-driven gaze-follow path in demo_loop; read by render_task
