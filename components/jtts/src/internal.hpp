@@ -206,12 +206,22 @@ void set_hmm_memory_budget_for_test(std::size_t bytes);
 // 有効なモーラが 1 つも無ければ false。
 bool build_sano_ir(std::u32string_view text, std::string& ir_utf8);
 
-// ---- sanoTTS -------------------------------------------------------------
+// ---- 句ごとの合成 (sanoTTS / フォルマント / 単位連結で共通) --------------------
 //
-// sanoTTS は発話全体を 1 回で合成すると、「、」「。」が同じ短いポーズ (長さは
-// ニューラル モデル任せ) になって句の区切りが弱くなり、長い文は arena 上限
-// (350 ids) で失敗する。そこで HMM と同じく句読点 (、。，,．.) ごとに 1 句ずつ合成し、
-// 句と句の間に HMM の pau と同じ長さの無音を明示的に挟む。
+// 発話全体を 1 回で合成すると、「、」「。」で間が入らない (フォルマント / 単位連結は
+// 句読点を読み飛ばす) か、モデル任せの短いポーズになる (sanoTTS) ので、句の区切りが
+// 弱い。HMM と同じく句読点 (、。，,．.) ごとに 1 句ずつ合成し、句と句の間に HMM の
+// pau と同じ長さの無音を明示的に挟む。HMM はモデルが句をまとめて合成して pau を
+// 生成する (その方が速く自然) ので、この経路は通さないが、区切りの定義と間の長さは
+// 共有する (下の clause_pause_ms / split_clauses)。
+
+// 句と句の間の無音 [ms]。等速 (mora_ms = 110) で 420 ms、話速に比例する (HMM の pau と
+// 同じ: 両側の sil の残り 210 ms ずつ、hmm_synth.cpp)。sanoTTS の s_v / HMM の speed と
+// 同じ写像で、mora_ms は [55, 220] に丸める。
+inline float clause_pause_ms(float mora_ms) {
+    const float scale = mora_ms / 110.0f;
+    return 420.0f * (scale < 0.5f ? 0.5f : (scale > 2.0f ? 2.0f : scale));
+}
 
 // 句 (先頭から、直後の句読点までを 1 つ。続く句読点はまとめる) に分ける。区切りは
 // HMM と同じ (、。，,．.)。モーラを持たない断片は前の句に含める。HmmChunk::pause_after
@@ -225,23 +235,25 @@ enum class ClauseResult {
     Fail,  // 合成失敗 (重み未ロード / G2P / arena 不足など)
 };
 // 1 句を合成する。spans は pcm 全体を覆う口形の区間 (母音 / 閉口 + 継続時間)。作れなければ空。
-using SanoClauseSynth = std::function<ClauseResult(const std::u32string& clause, std::vector<std::int16_t>& pcm,
+using ClauseSynth = std::function<ClauseResult(const std::u32string& clause, std::vector<std::int16_t>& pcm,
                                                    std::uint32_t& rate_hz, std::vector<VisemeSpan>& spans)>;
 
-// sanoTTS の 1 チャンク (句の音声 + 句間の無音) の受け取り側。spans は pcm 全体を覆う
+// 句ごとの合成の 1 チャンク (句の音声 + 句間の無音) の受け取り側。spans は pcm 全体を覆う
 // 口形の区間 (句間の無音は閉口)。false で中断。
-using SanoChunkFn = std::function<bool(std::vector<std::int16_t>&& pcm, std::uint32_t rate_hz,
+using ClauseChunkFn = std::function<bool(std::vector<std::int16_t>&& pcm, std::uint32_t rate_hz,
                                        std::vector<VisemeSpan>&& spans, const std::u32string& text)>;
 
 // 句ごとに synth_one で合成し、句と句の間の境界を整えて emit する:
-//   - 内側の境界では、各句の前後の無音 (モデルが付ける) を切り詰め、句の後ろに
-//     句間の無音 (等速 420 ms × mora_ms / 110 = HMM の pau と同じ長さ) を足す。
-//     口形の区間も同じだけ切り詰め / 閉口を足す (音と口形の時刻が揃ったまま)。
-//   - 発話の先頭 / 末尾は切り詰めない (従来どおり)。
+//   - 内側の境界では、句の後ろに句間の無音 (clause_pause_ms) を足す。口形の区間にも
+//     閉口を足す (音と口形の時刻が揃ったまま)。
+//   - trim_edges = true (sanoTTS): 内側の境界で、各句の前後の無音 (モデルが付ける) を
+//     先に切り詰めて (口形の区間も同じだけ)、間の長さがモデル任せにならないようにする。
+//     false (フォルマント / 単位連結): 句の音声はそのまま。
+//   - 発話の先頭 / 末尾は切り詰めない。
 // 最初の句が Fail なら何も出さず NoOutput (呼び出し側が他エンジンへフォールバック)、
-// 途中の Fail は Aborted、Skip は飛ばす。
-StreamOutcome stream_sano_clauses(std::u32string_view text, const Options& opt, const SanoClauseSynth& synth_one,
-                                  const SanoChunkFn& emit);
+// 途中の Fail は Aborted、Skip は飛ばす。句が 1 つだけなら加工せず、全体をそのまま渡す。
+StreamOutcome stream_clauses(std::u32string_view text, const Options& opt, const ClauseSynth& synth_one,
+                             const ClauseChunkFn& emit, bool trim_edges);
 
 // trim_silence が削った量 [サンプル]。
 struct SilenceTrim {
@@ -269,9 +281,9 @@ void crop_spans(std::vector<VisemeSpan>& spans, float drop_front_ms, float keep_
 void sano_ids_to_spans(const std::int32_t* ids, const std::int32_t* d_hat, std::int32_t n, float ms_per_frame,
                        std::vector<VisemeSpan>& out);
 
-// sanoTTS エンジン本体 (sano_synth.cpp)。句ごとに合成して emit する (上記)。重み未ロード
+// sanoTTS エンジン本体 (sano_synth.cpp)。stream_clauses (trim_edges) で句ごとに合成して emit する。重み未ロード
 // なら NoOutput。出力は 22.05 kHz mono int16。
-StreamOutcome render_sano_stream(std::u32string_view text, const Options& opt, const SanoChunkFn& emit);
+StreamOutcome render_sano_stream(std::u32string_view text, const Options& opt, const ClauseChunkFn& emit);
 
 // render_sano_stream の全チャンクを 1 本に連結する (synthesize / synthesize_ex 用)。
 // 重み未ロード・IR 変換失敗・G2P 失敗・arena 不足時は out を空にして false。

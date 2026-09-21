@@ -200,13 +200,14 @@ std::size_t max_moras_for_budget(std::size_t budget, std::size_t voice_rate, std
 //
 // チャンクごとの合成は前後に sil (≈ 0.32 s) を持つので、そのままつなぐと
 // 間延びする。境界では両側の sil を切り詰め、句読点なら元の pau (≈ 0.46 s) と
-// 同じ長さ、それ以外 (アクセント句境界 / 強制分割) ならごく短い無音だけ残す。
-constexpr float kPauseHalfMs = 210.0f;       // 句読点境界で片側に残す無音 (等速時)
+// 同じ長さ (clause_pause_ms、sanoTTS / フォルマントの句間の無音と共通)、それ以外
+// (アクセント句境界 / 強制分割) ならごく短い無音だけ残す。
 constexpr std::size_t kSoftKeepFrames = 2;   // その他の境界で片側に残す無音 (≈ 10 ms)
 
-std::size_t boundary_keep_frames(bool pause, float ms_per_frame, float speed) {
+// half_pause_ms: 句読点の境界で片側に残す無音 [ms] (= clause_pause_ms / 2)。
+std::size_t boundary_keep_frames(bool pause, float ms_per_frame, float half_pause_ms) {
     if (!pause) return kSoftKeepFrames;
-    const auto frames = static_cast<std::size_t>(kPauseHalfMs / speed / ms_per_frame + 0.5f);
+    const auto frames = static_cast<std::size_t>(half_pause_ms / ms_per_frame + 0.5f);
     return frames > kSoftKeepFrames ? frames : kSoftKeepFrames;
 }
 
@@ -395,6 +396,7 @@ StreamOutcome render_hmm_stream(std::u32string_view text, const Options& opt, co
 
     const float ms_per_frame =
         fperiod > 0 ? 1000.0f * static_cast<float>(fperiod) / static_cast<float>(voice_rate) : 5.0f;
+    const float half_pause_ms = 0.5f * clause_pause_ms(opt.mora_ms);
     std::size_t emitted = 0;
     const auto failed = [&] { return emitted > 0 ? StreamOutcome::Aborted : StreamOutcome::NoOutput; };
 
@@ -411,9 +413,9 @@ StreamOutcome render_hmm_stream(std::u32string_view text, const Options& opt, co
         const bool first = (k == 0);
         const bool last = (k + 1 == chunks.size());
         const std::size_t lead_cap =
-            first ? SIZE_MAX : boundary_keep_frames(chunks[k - 1].pause_after, ms_per_frame, speed);
+            first ? SIZE_MAX : boundary_keep_frames(chunks[k - 1].pause_after, ms_per_frame, half_pause_ms);
         const std::size_t trail_cap =
-            last ? SIZE_MAX : boundary_keep_frames(chunks[k].pause_after, ms_per_frame, speed);
+            last ? SIZE_MAX : boundary_keep_frames(chunks[k].pause_after, ms_per_frame, half_pause_ms);
         if (!synth_chunk(chunks[k].text, opt, decim, voice_rate, fperiod, speed, multi, lead_cap, trail_cap, pcm,
                          spans)) {
             return failed();

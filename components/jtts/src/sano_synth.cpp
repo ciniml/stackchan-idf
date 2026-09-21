@@ -243,7 +243,7 @@ ClauseResult synth_clause_locked(const std::u32string& clause, std::vector<std::
 
 }  // namespace
 
-StreamOutcome render_sano_stream(std::u32string_view text, const Options& opt, const SanoChunkFn& emit) {
+StreamOutcome render_sano_stream(std::u32string_view text, const Options& opt, const ClauseChunkFn& emit) {
     // 1 句ごとにロックする: emit (再生キューの空き待ちなどで長く止まりうる) の間は
     // 重みの差し替え (set_sano_weights) やロード状態の問い合わせを塞がない。
     const auto synth_one = [&](const std::u32string& clause, std::vector<std::int16_t>& pcm, std::uint32_t& rate,
@@ -255,7 +255,7 @@ StreamOutcome render_sano_stream(std::u32string_view text, const Options& opt, c
         std::lock_guard<std::mutex> lock(g_mutex);
         if (!g_loaded) return StreamOutcome::NoOutput;
     }
-    return stream_sano_clauses(text, opt, synth_one, emit);
+    return stream_clauses(text, opt, synth_one, emit, /*trim_edges=*/true);
 }
 
 bool render_sano(std::u32string_view text, std::vector<std::int16_t>& out, const Options& opt,
@@ -294,7 +294,7 @@ namespace stackchan::jtts {
 bool set_sano_weights(std::span<const std::uint8_t>) { return false; }
 bool sano_weights_loaded() { return false; }
 namespace internal {
-StreamOutcome render_sano_stream(std::u32string_view, const Options&, const SanoChunkFn&) {
+StreamOutcome render_sano_stream(std::u32string_view, const Options&, const ClauseChunkFn&) {
     return StreamOutcome::NoOutput;
 }
 bool render_sano(std::u32string_view, std::vector<std::int16_t>&, const Options&, std::uint32_t&,

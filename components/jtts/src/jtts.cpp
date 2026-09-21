@@ -78,13 +78,6 @@ void apply_formant_scale(std::vector<internal::Segment>& segs, float scale) {
     }
 }
 
-// セグメント列 (時間軸は PCM と一致) を口形イベント列にまとめる。
-void collect_visemes(std::span<const internal::Segment> segs, std::vector<VisemeEvent>& out) {
-    internal::VisemeBuilder b(out);
-    for (const auto& s : segs) b.add(s.vowel, s.duration_ms);
-    b.finish();
-}
-
 // sanoTTS: Auto では最優先、Sano 指定では必須。出力は 22.05 kHz 固定なので、呼び出し側が
 // レートを受け取れる (synthesize_ex / synthesize_stream) か、要求レートが一致するとき
 // だけ使う。
@@ -97,51 +90,83 @@ bool wants_hmm(const Options& opt) {
     return opt.engine == Engine::Auto || opt.engine == Engine::Hmm || opt.engine == Engine::Sano;
 }
 
-// HMM 以外のエンジン (単位連結 → フォルマント) で発話全体を 1 本の PCM にする。
-// 全体を 1 つの std::vector に作るので、空きメモリに収まらない長さは合成前に断る
-// (std::vector の確保失敗は例外無効ビルドでは abort = 再起動になる)。
-tl::expected<void, Error> render_whole(std::u32string_view kana, const Options& opt,
-                                       std::vector<std::int16_t>& out, std::vector<VisemeEvent>* visemes) {
-    const auto est_samples = static_cast<std::size_t>(
-        internal::estimate_utterance_ms(kana, opt.mora_ms) * static_cast<float>(opt.sample_rate_hz) / 1000.0f);
-    if (!internal::pcm_fits_in_memory(est_samples)) {
-        return tl::make_unexpected(Error::OutOfMemory);
-    }
-
+// 1 句を単位連結 → フォルマントで合成する (句ごとの合成の 1 句分)。口形はフォルマントの
+// セグメントから作る (単位連結は口形を出せない = 空)。
+internal::ClauseResult render_clause_local(const std::u32string& clause, const Options& opt,
+                                           std::vector<std::int16_t>& pcm, std::uint32_t& rate_hz,
+                                           std::vector<internal::VisemeSpan>& spans) {
     std::vector<Mora> moras;
-    if (!internal::parse_kana(kana, moras)) {
-        return tl::make_unexpected(Error::InvalidKana);
-    }
+    if (!internal::parse_kana(clause, moras)) return internal::ClauseResult::Skip;  // 読める内容が無い
     internal::apply_devoicing(moras);
+    rate_hz = opt.sample_rate_hz;
 
     // 単位連結エンジン: DB があり、必要な単位が全部揃っていれば
-    // render_units が out を埋めて true。欠け/未ロード/サンプルレート不一致は
+    // render_units が pcm を埋めて true。欠け/未ロード/サンプルレート不一致は
     // フォルマントへ。
     if (opt.engine != Engine::Formant) {
         auto db = g_voice_db.load();
         if (db && db->sample_rate() == opt.sample_rate_hz &&
-            internal::render_units(moras, *db, out, opt)) {
-            return {};
+            internal::render_units(moras, *db, pcm, opt)) {
+            return internal::ClauseResult::Ok;
         }
     }
 
     std::vector<internal::Segment> segs;
     internal::build_segments(moras, segs, opt);
-    if (segs.empty()) {
-        return tl::make_unexpected(Error::InvalidKana);
-    }
+    if (segs.empty()) return internal::ClauseResult::Skip;
     apply_formant_scale(segs, opt.formant_scale);
     internal::apply_prosody(segs, opt);
 
     std::size_t estimated_samples = 0;
     for (const auto& s : segs) {
         estimated_samples += static_cast<std::size_t>(s.duration_ms * 0.001f * opt.sample_rate_hz) + 16;
+        spans.push_back({s.vowel, s.duration_ms});
     }
-    out.reserve(estimated_samples);
+    pcm.reserve(estimated_samples);
 
-    if (visemes) collect_visemes(segs, *visemes);
+    internal::render_segments(segs, pcm, opt);
+    return internal::ClauseResult::Ok;
+}
 
-    internal::render_segments(segs, out, opt);
+// 単位連結 → フォルマントを句ごとに合成して emit する。sanoTTS と同じ制御 (stream_clauses:
+// 句読点 (、。) ごとに 1 句ずつ、句間に HMM の pau と同じ長さの無音) を使う。この 2 つは句読点
+// を読み飛ばすので、従来は句の間に間が全く入らなかった。句が 1 つだけなら従来と同じ出力。
+internal::StreamOutcome render_local_stream(std::u32string_view kana, const Options& opt,
+                                            const internal::ClauseChunkFn& emit) {
+    return internal::stream_clauses(
+        kana, opt,
+        [&](const std::u32string& clause, std::vector<std::int16_t>& pcm, std::uint32_t& rate,
+            std::vector<internal::VisemeSpan>& spans) { return render_clause_local(clause, opt, pcm, rate, spans); },
+        emit, /*trim_edges=*/false);
+}
+
+// 一括版: 全チャンクを 1 本の PCM に連結する。全体を 1 つの std::vector に作るので、空きメモリに
+// 収まらない長さは合成前に断る (std::vector の確保失敗は例外無効ビルドでは abort = 再起動になる)。
+tl::expected<void, Error> render_local(std::u32string_view kana, const Options& opt,
+                                       std::vector<std::int16_t>& out, std::vector<VisemeEvent>* visemes) {
+    const auto est_samples = static_cast<std::size_t>(
+        internal::estimate_utterance_ms(kana, opt.mora_ms) * static_cast<float>(opt.sample_rate_hz) / 1000.0f);
+    if (!internal::pcm_fits_in_memory(est_samples)) {
+        return tl::make_unexpected(Error::OutOfMemory);
+    }
+    out.reserve(est_samples);
+    std::vector<VisemeEvent> scratch;
+    internal::VisemeBuilder builder(visemes ? *visemes : scratch);
+    const auto outcome = render_local_stream(
+        kana, opt,
+        [&](std::vector<std::int16_t>&& pcm, std::uint32_t, std::vector<internal::VisemeSpan>&& spans,
+            const std::u32string&) {
+            out.insert(out.end(), pcm.begin(), pcm.end());
+            for (const auto& sp : spans) builder.add(sp.vowel, sp.duration_ms);
+            return true;
+        });
+    if (outcome != internal::StreamOutcome::Ok || out.empty()) {
+        out.clear();
+        if (visemes) visemes->clear();
+        return tl::make_unexpected(Error::InvalidKana);
+    }
+    builder.finish();
+    if (out.capacity() - out.size() > 32 * 1024) out.shrink_to_fit();
     return {};
 }
 
@@ -199,7 +224,7 @@ tl::expected<std::uint32_t, Error> synthesize_impl(std::u32string_view kana, std
         if (visemes) visemes->clear();
     }
 
-    if (auto r = render_whole(kana, opt, out, visemes); !r) return tl::make_unexpected(r.error());
+    if (auto r = render_local(kana, opt, out, visemes); !r) return tl::make_unexpected(r.error());
     return opt.sample_rate_hz;
 }
 
@@ -299,14 +324,25 @@ tl::expected<void, Error> synthesize_stream(std::u32string_view kana, const Chun
         }
     }
 
-    // HMM 以外 / HMM を使えなかった: 発話全体が 1 チャンク。
-    SynthChunk chunk;
-    chunk.text = std::u32string(kana);
-    chunk.sample_rate = opt.sample_rate_hz;
-    if (auto r = render_whole(kana, opt, chunk.pcm, &chunk.visemes); !r) return r;
-    if (chunk.pcm.empty()) return tl::make_unexpected(Error::InvalidKana);
-    if (!sink(std::move(chunk))) return tl::make_unexpected(Error::Cancelled);
-    return {};
+    // HMM 以外 / HMM を使えなかった (単位連結 → フォルマント): 句ごとに 1 チャンク。
+    const auto outcome = render_local_stream(
+        kana, opt,
+        [&](std::vector<std::int16_t>&& pcm, std::uint32_t rate_hz, std::vector<internal::VisemeSpan>&& spans,
+            const std::u32string& text) {
+            SynthChunk chunk;
+            chunk.text = text;
+            chunk.pcm = std::move(pcm);
+            chunk.sample_rate = rate_hz;
+            internal::spans_to_events(spans, chunk.visemes);
+            return sink(std::move(chunk));
+        });
+    switch (outcome) {
+        case internal::StreamOutcome::Ok: return {};
+        case internal::StreamOutcome::Cancelled: return tl::make_unexpected(Error::Cancelled);
+        case internal::StreamOutcome::Aborted: return tl::make_unexpected(Error::OutOfMemory);
+        case internal::StreamOutcome::NoOutput: return tl::make_unexpected(Error::InvalidKana);
+    }
+    return tl::make_unexpected(Error::InvalidKana);
 }
 
 }  // namespace stackchan::jtts

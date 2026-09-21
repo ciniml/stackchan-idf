@@ -319,7 +319,7 @@ void test_stream(const std::u32string& longtext, const Options& opt, const std::
         opt);
     CHECK(r.has_value() && n >= 6);
 
-    // 1 モーラも収まらない予算: 何も渡す前なので他エンジン (フォルマント) の 1 チャンクにフォールバック。
+    // 1 モーラも収まらない予算: 何も渡す前なので他エンジン (フォルマント) にフォールバック (句ごとのチャンク)。
     internal::set_hmm_memory_budget_for_test(64 * 1024);
     got.clear();
     r = synthesize_stream(
@@ -329,7 +329,7 @@ void test_stream(const std::u32string& longtext, const Options& opt, const std::
             return true;
         },
         opt);
-    CHECK(r.has_value() && got.size() == 1 && !got[0].pcm.empty());
+    CHECK(r.has_value() && got.size() == 12 && !got[0].pcm.empty());
     internal::set_hmm_memory_budget_for_test(0);
 }
 
@@ -455,30 +455,23 @@ void test_pcm_limit()
     r = synthesize(longtext, pcm, opt);
     CHECK(!r.has_value() && r.error() == Error::OutOfMemory);
 
-    // ストリーミングでも、HMM 以外は全体 1 チャンクなので同じく断る (何も渡さない)。
+    // ストリーミングは句 (、。) ごとに 1 チャンク (この長文は 3 句 × 4 文 = 12) ずつ渡すので、
+    // 長文でも 1 句が収まれば通る (一括版は全体を 1 本にするので断られる)。
     std::size_t chunks = 0;
+    std::size_t max_chunk_bytes = 0;
     auto rs = synthesize_stream(
-        longtext,
-        [&](SynthChunk&&) {
-            ++chunks;
-            return true;
-        },
-        opt);
-    CHECK(!rs.has_value() && rs.error() == Error::OutOfMemory && chunks == 0);
-
-    // 上限なし (ホスト既定) なら長文も合成できる。
-    internal::set_pcm_memory_limit_for_test(0);
-    // フォルマントのストリーミングは全体が 1 チャンクで、口形付き。
-    chunks = 0;
-    rs = synthesize_stream(
         longtext,
         [&](SynthChunk&& c) {
             ++chunks;
+            max_chunk_bytes = std::max(max_chunk_bytes, c.pcm.size() * sizeof(std::int16_t));
             CHECK(!c.pcm.empty() && !c.visemes.empty() && c.visemes.front().start_ms == 0);
             return true;
         },
         opt);
-    CHECK(rs.has_value() && chunks == 1);
+    CHECK(rs.has_value() && chunks == 12 && max_chunk_bytes < 400 * 1024);
+
+    // 上限なし (ホスト既定) なら長文も一括で合成できる。
+    internal::set_pcm_memory_limit_for_test(0);
     CHECK(synthesize(longtext, pcm, ev, opt).has_value());
     CHECK(pcm.size() > 16000 * 10);  // 10 秒以上 (500 KB 超: 上の 400 KB 制限では収まらない長さ)
 }

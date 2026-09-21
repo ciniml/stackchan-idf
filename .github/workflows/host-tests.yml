@@ -130,7 +130,7 @@ jobs:
           ./build/jtts_test_sano_ir
           # sanoTTS clause-by-clause synthesis (clause split / edge-silence trim /
           # inter-clause pause). The 1-clause synth is stubbed, so no weights needed.
-          ./build/jtts_test_sano_clause
+          ./build/jtts_test_clause_stream
           # Vowel lip-sync events, long-text chunking, streaming synthesis and
           # subtitle mapping. Without arguments only the formant / pure-logic
           # cases run; with .htsvoice files the HMM cases run too (16 kHz voice

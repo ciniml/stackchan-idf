@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
 // SPDX-License-Identifier: BSL-1.0
 //
-// sanoTTS の句ごとの合成 (split_clauses / trim_silence / stream_sano_clauses) の検証。
+// 句ごとの合成 (split_clauses / trim_silence / stream_clauses = sanoTTS・フォルマント・単位連結で共通) の検証。
 // 重み (非 MIT の blob) が無くても動くよう、1 句の合成は「前後に無音のある合成音」の
 // スタブに差し替える。
 #include <algorithm>
@@ -159,7 +159,7 @@ void test_stream()
     // 各句は「前 300 ms / 音 200 ms / 後ろ 400 ms」を返すスタブ。
     int calls = 0;
     // 口形は「前 300 ms 閉口 / 音 200 ms は あ / 後ろ 400 ms 閉口」。
-    const SanoClauseSynth synth = [&](const std::u32string&, std::vector<std::int16_t>& pcm, std::uint32_t& rate,
+    const ClauseSynth synth = [&](const std::u32string&, std::vector<std::int16_t>& pcm, std::uint32_t& rate,
                                       std::vector<VisemeSpan>& spans) {
         ++calls;
         pcm = tone(300, 200, 400);
@@ -168,13 +168,13 @@ void test_stream()
         return ClauseResult::Ok;
     };
     std::vector<Got> got;
-    const SanoChunkFn collect = [&](std::vector<std::int16_t>&& pcm, std::uint32_t rate,
+    const ClauseChunkFn collect = [&](std::vector<std::int16_t>&& pcm, std::uint32_t rate,
                                     std::vector<VisemeSpan>&& spans, const std::u32string& text) {
         got.push_back({std::move(pcm), rate, std::move(spans), text});
         return true;
     };
 
-    CHECK(stream_sano_clauses(U"あいう、えお。かき", opt, synth, collect) == StreamOutcome::Ok);
+    CHECK(stream_clauses(U"あいう、えお。かき", opt, synth, collect, true) == StreamOutcome::Ok);
     CHECK(calls == 3 && got.size() == 3);
     std::u32string joined;
     for (const auto& g : got) joined += g.text;
@@ -198,56 +198,66 @@ void test_stream()
     Options slow = opt;
     slow.mora_ms = 220.0f;
     got.clear();
-    CHECK(stream_sano_clauses(U"あ、い", slow, synth, collect) == StreamOutcome::Ok);
+    CHECK(stream_clauses(U"あ、い", slow, synth, collect, true) == StreamOutcome::Ok);
     CHECK(std::abs(static_cast<double>(trail_silence(got[0].pcm)) - static_cast<double>(samples(840 + 10))) <= 4);
     Options fast = opt;
     fast.mora_ms = 55.0f;
     got.clear();
-    CHECK(stream_sano_clauses(U"あ、い", fast, synth, collect) == StreamOutcome::Ok);
+    CHECK(stream_clauses(U"あ、い", fast, synth, collect, true) == StreamOutcome::Ok);
     CHECK(std::abs(static_cast<double>(trail_silence(got[0].pcm)) - static_cast<double>(samples(210 + 10))) <= 4);
 
     // 句が 1 つだけ (句読点なし) なら何も切り詰めず、無音も足さない = 従来どおりの 1 チャンク。
     got.clear();
-    CHECK(stream_sano_clauses(U"こんにちは", opt, synth, collect) == StreamOutcome::Ok);
+    CHECK(stream_clauses(U"こんにちは", opt, synth, collect, true) == StreamOutcome::Ok);
     CHECK(got.size() == 1 && got[0].pcm == tone(300, 200, 400));
+
+    // trim_edges=false (フォルマント / 単位連結): 各句の前後の無音はそのまま、句の後ろに間だけ足す。
+    got.clear();
+    CHECK(stream_clauses(U"あ、い、う", opt, synth, collect, /*trim_edges=*/false) == StreamOutcome::Ok);
+    CHECK(got.size() == 3);
+    CHECK(lead_silence(got[0].pcm) == samples(300) && lead_silence(got[1].pcm) == samples(300));
+    CHECK(std::abs(static_cast<double>(trail_silence(got[0].pcm)) - static_cast<double>(samples(400 + 420))) <= 4);
+    CHECK(trail_silence(got[2].pcm) == samples(400));  // 最後の句には足さない
+    CHECK(std::abs(total_ms(got[0].spans) - (300.0 + 200.0 + 400.0 + 420.0)) < 1e-3);  // 口形は PCM と同じ長さ
+    CHECK(got[0].spans.back().vowel == Vowel::None);
 
     // 中断: emit が false を返したらそこで止まる。
     got.clear();
     calls = 0;
     int n = 0;
-    const SanoChunkFn stop_after_first = [&](std::vector<std::int16_t>&&, std::uint32_t,
+    const ClauseChunkFn stop_after_first = [&](std::vector<std::int16_t>&&, std::uint32_t,
                                              std::vector<VisemeSpan>&&, const std::u32string&) { return ++n < 1; };
-    CHECK(stream_sano_clauses(U"あ、い、う", opt, synth, stop_after_first) == StreamOutcome::Cancelled);
+    CHECK(stream_clauses(U"あ、い、う", opt, synth, stop_after_first, true) == StreamOutcome::Cancelled);
     CHECK(calls == 1);
 
     // 最初の句の失敗 = 何も出さず NoOutput (呼び出し側が他エンジンへ)。途中の失敗 = Aborted。
-    const SanoClauseSynth fail_first = [&](const std::u32string&, std::vector<std::int16_t>&, std::uint32_t&,
+    const ClauseSynth fail_first = [&](const std::u32string&, std::vector<std::int16_t>&, std::uint32_t&,
                                            std::vector<VisemeSpan>&) { return ClauseResult::Fail; };
     got.clear();
-    CHECK(stream_sano_clauses(U"あ、い", opt, fail_first, collect) == StreamOutcome::NoOutput && got.empty());
+    CHECK(stream_clauses(U"あ、い", opt, fail_first, collect, true) == StreamOutcome::NoOutput && got.empty());
     int k = 0;
-    const SanoClauseSynth fail_second = [&](const std::u32string& c, std::vector<std::int16_t>& pcm,
+    const ClauseSynth fail_second = [&](const std::u32string& c, std::vector<std::int16_t>& pcm,
                                             std::uint32_t& rate, std::vector<VisemeSpan>& sp) {
         return ++k == 2 ? ClauseResult::Fail : synth(c, pcm, rate, sp);
     };
     got.clear();
-    CHECK(stream_sano_clauses(U"あ、い、う", opt, fail_second, collect) == StreamOutcome::Aborted && got.size() == 1);
+    CHECK(stream_clauses(U"あ、い、う", opt, fail_second, collect, true) == StreamOutcome::Aborted && got.size() == 1);
 
     // Skip (読める内容が無い句) は飛ばして続ける。全部 Skip なら NoOutput。
     k = 0;
-    const SanoClauseSynth skip_second = [&](const std::u32string& c, std::vector<std::int16_t>& pcm,
+    const ClauseSynth skip_second = [&](const std::u32string& c, std::vector<std::int16_t>& pcm,
                                             std::uint32_t& rate, std::vector<VisemeSpan>& sp) {
         return ++k == 2 ? ClauseResult::Skip : synth(c, pcm, rate, sp);
     };
     got.clear();
-    CHECK(stream_sano_clauses(U"あ、い、う", opt, skip_second, collect) == StreamOutcome::Ok && got.size() == 2);
-    const SanoClauseSynth skip_all = [&](const std::u32string&, std::vector<std::int16_t>&, std::uint32_t&,
+    CHECK(stream_clauses(U"あ、い、う", opt, skip_second, collect, true) == StreamOutcome::Ok && got.size() == 2);
+    const ClauseSynth skip_all = [&](const std::u32string&, std::vector<std::int16_t>&, std::uint32_t&,
                                          std::vector<VisemeSpan>&) { return ClauseResult::Skip; };
     got.clear();
-    CHECK(stream_sano_clauses(U"あ、い", opt, skip_all, collect) == StreamOutcome::NoOutput && got.empty());
+    CHECK(stream_clauses(U"あ、い", opt, skip_all, collect, true) == StreamOutcome::NoOutput && got.empty());
 
     // 読める内容が無い入力は NoOutput。
-    CHECK(stream_sano_clauses(U"、。", opt, synth, collect) == StreamOutcome::NoOutput);
+    CHECK(stream_clauses(U"、。", opt, synth, collect, true) == StreamOutcome::NoOutput);
 
     // 重みが無い環境 (このテスト) では、本物の render_sano_stream は NoOutput でフォールバックさせる。
     got.clear();
@@ -401,6 +411,80 @@ void test_vocab_matches_upstream_table()
     for (const auto id : kSaanG2pNAllophone) CHECK(id >= 20 && id <= 23);
 }
 
+// フォルマント合成 (実物): 句読点で句に分かれ、句の間に HMM の pau と同じ長さの無音が入る。
+void test_formant_clauses()
+{
+    Options opt;
+    opt.engine = Engine::Formant;
+    opt.mora_ms = 110.0f;  // 句間の無音は 420 ms
+    const auto rate = opt.sample_rate_hz;
+
+    // 句が 1 つ: 従来どおり 1 チャンク・間なし。一括版と同じ PCM。
+    std::vector<SynthChunk> one;
+    auto r = synthesize_stream(
+        U"こんにちは", [&](SynthChunk&& c) { one.push_back(std::move(c)); return true; }, opt);
+    CHECK(r.has_value() && one.size() == 1 && !one[0].pcm.empty() && !one[0].visemes.empty());
+    CHECK(one[0].text == U"こんにちは" && one[0].sample_rate == rate);
+    std::vector<std::int16_t> whole;
+    std::vector<VisemeEvent> whole_ev;
+    CHECK(synthesize(U"こんにちは", whole, whole_ev, opt).has_value());
+    CHECK(whole == one[0].pcm);
+
+    // 句が 3 つ: 3 チャンク。間は最後を除く各チャンクの末尾に入る。
+    const std::u32string text = U"あいうえお、かきくけこ。さしすせそ";
+    std::vector<SynthChunk> ch;
+    r = synthesize_stream(text, [&](SynthChunk&& c) { ch.push_back(std::move(c)); return true; }, opt);
+    CHECK(r.has_value() && ch.size() == 3);
+    std::u32string joined;
+    for (const auto& c : ch) joined += c.text;
+    CHECK(joined == text);
+    const double pause = clause_pause_ms(opt.mora_ms);
+    for (std::size_t i = 0; i < ch.size(); ++i) {
+        const double tail_ms = 1000.0 * static_cast<double>(trail_silence(ch[i].pcm)) / rate;
+        if (i + 1 < ch.size()) {
+            CHECK(tail_ms >= pause - 1 && tail_ms < pause + 60);
+        } else {
+            CHECK(tail_ms < 60);  // 最後の句の後ろには足さない
+        }
+        // 口形の時間軸は PCM と一致し、間の部分は閉口。
+        CHECK(!ch[i].visemes.empty());
+    }
+    CHECK(!ch[0].visemes.empty() && ch[0].visemes.back().vowel == Vowel::None);
+
+    // 一括版 = チャンクの連結 (口形は各チャンクの先頭に時間をずらして並ぶ)。
+    std::vector<std::int16_t> cat;
+    for (const auto& c : ch) cat.insert(cat.end(), c.pcm.begin(), c.pcm.end());
+    std::vector<VisemeEvent> ev;
+    CHECK(synthesize(text, whole, ev, opt).has_value());
+    CHECK(whole == cat);
+    CHECK(!ev.empty() && ev.front().start_ms == 0);
+    // 口形の時間軸は句間の無音を含めた PCM 全体と一致する (末尾は発話の終わりに置く閉口イベント)。
+    const double total = 1000.0 * static_cast<double>(whole.size()) / rate;
+    CHECK(ev.back().vowel == Vowel::None && std::abs(static_cast<double>(ev.back().start_ms) - total) < 2.0);
+
+    // 話速が遅いと間も伸びる (HMM の pau と同じ写像)。
+    Options slow = opt;
+    slow.mora_ms = 220.0f;
+    std::vector<SynthChunk> sc;
+    CHECK(synthesize_stream(U"あ、い", [&](SynthChunk&& c) { sc.push_back(std::move(c)); return true; }, slow)
+              .has_value());
+    CHECK(sc.size() == 2);
+    CHECK(1000.0 * static_cast<double>(trail_silence(sc[0].pcm)) / rate >= clause_pause_ms(220.0f) - 1);
+
+    // 読めない句 (かな以外だけ) は飛ばし、句読点だけの入力は InvalidKana。
+    std::vector<SynthChunk> sk;
+    CHECK(synthesize_stream(U"あ、xyz、い", [&](SynthChunk&& c) { sk.push_back(std::move(c)); return true; }, opt)
+              .has_value());
+    CHECK(sk.size() == 2);
+    auto bad = synthesize_stream(U"、。", [&](SynthChunk&&) { return true; }, opt);
+    CHECK(!bad.has_value() && bad.error() == Error::InvalidKana);
+
+    // 中断。
+    std::size_t n = 0;
+    auto cancelled = synthesize_stream(text, [&](SynthChunk&&) { return ++n < 2; }, opt);
+    CHECK(!cancelled.has_value() && cancelled.error() == Error::Cancelled && n == 2);
+}
+
 }  // namespace
 
 int main()
@@ -411,6 +495,7 @@ int main()
     test_ids_to_spans();
     test_vocab_matches_upstream_table();
     test_stream();
-    if (g_failures == 0) std::puts("test_sano_clause: all passed");
+    test_formant_clauses();
+    if (g_failures == 0) std::puts("test_clause_stream: all passed");
     return g_failures == 0 ? 0 : 1;
 }

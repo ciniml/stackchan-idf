@@ -33,7 +33,8 @@ add_library(jtts STATIC
     ${JTTS_ROOT}/src/hts_label.cpp
     ${JTTS_ROOT}/src/hmm_synth.cpp
     ${JTTS_ROOT}/src/sano_ir.cpp
-    ${JTTS_ROOT}/src/sano_clause.cpp
+    ${JTTS_ROOT}/src/clause_stream.cpp
+    ${JTTS_ROOT}/src/sano_visemes.cpp
     ${JTTS_ROOT}/src/sano_synth.cpp
     ${JTTS_ROOT}/src/hmm_chunk.cpp
     ${JTTS_ROOT}/src/subtitle.cpp
@@ -112,8 +113,8 @@ target_link_libraries(jtts_test_hmm_chunk PRIVATE jtts)
 target_include_directories(jtts_test_hmm_chunk PRIVATE ${JTTS_ROOT}/src)
 target_compile_options(jtts_test_hmm_chunk PRIVATE -Wall -Wextra)
 
-# sanoTTS の句ごとの合成 (句の分割 / 前後の無音の切り詰め / 句間の無音)。重み不要。
-add_executable(jtts_test_sano_clause test_sano_clause.cpp)
-target_link_libraries(jtts_test_sano_clause PRIVATE jtts saanotts)
-target_include_directories(jtts_test_sano_clause PRIVATE ${JTTS_ROOT}/src)
-target_compile_options(jtts_test_sano_clause PRIVATE -Wall -Wextra)
+# 句ごとの合成 (句の分割 / 前後の無音の切り詰め / 句間の無音 / フォルマント / sanoTTS の口形)。重み不要。
+add_executable(jtts_test_clause_stream test_clause_stream.cpp)
+target_link_libraries(jtts_test_clause_stream PRIVATE jtts saanotts)
+target_include_directories(jtts_test_clause_stream PRIVATE ${JTTS_ROOT}/src)
+target_compile_options(jtts_test_clause_stream PRIVATE -Wall -Wextra)
