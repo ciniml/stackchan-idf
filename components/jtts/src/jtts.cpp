@@ -162,13 +162,14 @@ tl::expected<std::uint32_t, Error> synthesize_impl(std::u32string_view kana, std
         return tl::make_unexpected(Error::OutOfMemory);
     }
 
-    // sanoTTS エンジン: 重みがロード済みなら最優先 (口形は出せない)。
+    // sanoTTS エンジン: 重みがロード済みなら最優先。口形は音素の継続長から作る。
     if (wants_sano(opt) && (allow_native_rate || opt.sample_rate_hz == 22050u)) {
         std::uint32_t rate = 0;
-        if (internal::render_sano(kana, out, opt, rate)) {
+        if (internal::render_sano(kana, out, opt, rate, visemes)) {
             return rate;
         }
         out.clear();
+        if (visemes) visemes->clear();
     }
 
     // HMM エンジン: ボイスがロード済みなら次に優先 (品質最良)。
@@ -188,7 +189,7 @@ tl::expected<std::uint32_t, Error> synthesize_impl(std::u32string_view kana, std
                 return true;
             },
             /*stream=*/false);
-        if (outcome == internal::HmmOutcome::Ok) {
+        if (outcome == internal::StreamOutcome::Ok) {
             builder.finish();
             if (out.capacity() - out.size() > 32 * 1024) out.shrink_to_fit();
             return opt.sample_rate_hz;
@@ -254,15 +255,26 @@ tl::expected<std::uint32_t, Error> synthesize_ex(std::u32string_view kana,
 tl::expected<void, Error> synthesize_stream(std::u32string_view kana, const ChunkSink& sink, const Options& opt_in) {
     const Options opt = resolve_defaults(opt_in);
 
-    // sanoTTS: 全体が 1 チャンク (22.05 kHz)。重み未ロードなら false で次へ。
+    // sanoTTS: 句 (、。) ごとに合成し、句間に HMM と同じ長さの無音を入れて 1 句ずつ渡す
+    // (22.05 kHz)。重み未ロード / 最初の句の失敗なら何も渡さず次のエンジンへ。
     if (wants_sano(opt)) {
-        SynthChunk chunk;
-        std::uint32_t rate = 0;
-        if (internal::render_sano(kana, chunk.pcm, opt, rate) && !chunk.pcm.empty()) {
-            chunk.text = std::u32string(kana);
-            chunk.sample_rate = rate;
-            if (!sink(std::move(chunk))) return tl::make_unexpected(Error::Cancelled);
-            return {};
+        const auto outcome = internal::render_sano_stream(
+            kana, opt,
+            [&](std::vector<std::int16_t>&& pcm, std::uint32_t rate_hz, std::vector<internal::VisemeSpan>&& spans,
+                const std::u32string& text) {
+                SynthChunk chunk;
+                chunk.text = text;
+                chunk.pcm = std::move(pcm);
+                chunk.sample_rate = rate_hz;
+                internal::spans_to_events(spans, chunk.visemes);
+                return sink(std::move(chunk));
+            });
+        switch (outcome) {
+            case internal::StreamOutcome::Ok: return {};
+            case internal::StreamOutcome::Cancelled: return tl::make_unexpected(Error::Cancelled);
+            // 途中まで渡してしまった分は取り消せないので、他エンジンでやり直さない。
+            case internal::StreamOutcome::Aborted: return tl::make_unexpected(Error::OutOfMemory);
+            case internal::StreamOutcome::NoOutput: break;  // 何も渡していない → 他エンジンへ
         }
     }
 
@@ -279,11 +291,11 @@ tl::expected<void, Error> synthesize_stream(std::u32string_view kana, const Chun
             },
             /*stream=*/true);
         switch (outcome) {
-            case internal::HmmOutcome::Ok: return {};
-            case internal::HmmOutcome::Cancelled: return tl::make_unexpected(Error::Cancelled);
+            case internal::StreamOutcome::Ok: return {};
+            case internal::StreamOutcome::Cancelled: return tl::make_unexpected(Error::Cancelled);
             // 途中まで渡してしまった分は取り消せないので、他エンジンでやり直さない。
-            case internal::HmmOutcome::Aborted: return tl::make_unexpected(Error::OutOfMemory);
-            case internal::HmmOutcome::NoOutput: break;  // 何も渡していない → 他エンジンへ
+            case internal::StreamOutcome::Aborted: return tl::make_unexpected(Error::OutOfMemory);
+            case internal::StreamOutcome::NoOutput: break;  // 何も渡していない → 他エンジンへ
         }
     }
 

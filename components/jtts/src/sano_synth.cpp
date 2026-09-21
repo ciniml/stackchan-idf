@@ -149,13 +149,15 @@ void set_sano_arena(void* buf, std::size_t size) {
 
 namespace internal {
 
-bool render_sano(std::u32string_view text, std::vector<std::int16_t>& out, const Options& opt,
-                 std::uint32_t& out_rate_hz) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if (!g_loaded) return false;
+namespace {
+
+// 1 句を合成して out に *追記*せず、pcm に作る。g_mutex は呼び出し側 (1 句ごと) が取る。
+ClauseResult synth_clause_locked(const std::u32string& clause, std::vector<std::int16_t>& out, const Options& opt,
+                                 std::uint32_t& out_rate_hz, std::vector<VisemeSpan>& spans) {
+    if (!g_loaded) return ClauseResult::Fail;
 
     std::string ir;
-    if (!build_sano_ir(text, ir)) return false;
+    if (!build_sano_ir(clause, ir)) return ClauseResult::Skip;  // 読める内容が無い
 
     const std::int32_t cap = saan_g2p_capacity(ir.size());
     std::vector<std::int32_t> ids(static_cast<std::size_t>(cap));
@@ -165,9 +167,9 @@ bool render_sano(std::u32string_view text, std::vector<std::int16_t>& out, const
     if (gs != SAAN_G2P_OK) {
         SANO_LOGW("g2p: %s at byte %d (ir='%s')", saan_g2p_strerror(gs), static_cast<int>(info.err_byte),
                   ir.c_str());
-        return false;
+        return ClauseResult::Fail;
     }
-    if (!ensure_arena()) return false;
+    if (!ensure_arena()) return ClauseResult::Fail;
     // saan_stream_arena_needed() は上限式で実使用 (arena.peak) より大きく出るので、
     // 事前判定には使わず init の SAAN_ERR_ARENA に任せる (上流の雛形と同じ)。
 
@@ -185,9 +187,15 @@ bool render_sano(std::u32string_view text, std::vector<std::int16_t>& out, const
     if (s != SAAN_OK) {
         SANO_LOGW("stream_init: %s (%d ids, arena %u B, needed<=%u B)", saan_strerror(s), static_cast<int>(n_ids),
                   static_cast<unsigned>(g_arena_size), static_cast<unsigned>(saan_stream_arena_needed(n_ids)));
-        return false;
+        return ClauseResult::Fail;
     }
 
+    // init が音素ごとの継続長 d_hat [フレーム] を確定させている (Σ d_hat = n_frames)。
+    // arena 上にあるので、pull を始める前に口形の区間へ写し取る。
+    const std::int32_t n_frames = st.n_frames;
+    std::vector<std::int32_t> durations(st.d_hat, st.d_hat + n_ids);
+
+    out.clear();
     std::vector<float> chunk(static_cast<std::size_t>(SAAN_CHUNK) * SAAN_HOP);
     const float gain = opt.gain * 32767.0f;
     for (;;) {
@@ -196,7 +204,7 @@ bool render_sano(std::u32string_view text, std::vector<std::int16_t>& out, const
         if (s != SAAN_OK) {
             SANO_LOGW("stream_pull: %s", saan_strerror(s));
             out.clear();
-            return false;
+            return ClauseResult::Fail;
         }
         if (n_out == 0) break;
 #if defined(ESP_PLATFORM)
@@ -219,6 +227,60 @@ bool render_sano(std::u32string_view text, std::vector<std::int16_t>& out, const
               static_cast<unsigned>(out.size()), audio_ms, static_cast<long long>(ms),
               audio_ms > 0 ? static_cast<float>(ms) / audio_ms : 0.0f, static_cast<unsigned>(arena.peak));
     out_rate_hz = SAAN_SR;
+
+    // 口形: 音素 ID + 継続長 → 母音の区間。1 フレームの長さは実際の出力長から求めて、
+    // 区間の合計を音声の長さにぴったり合わせる (出力が n_frames × hop とずれても時刻が狂わない)。
+    if (n_frames > 0 && !out.empty()) {
+        if (out.size() != static_cast<std::size_t>(n_frames) * SAAN_HOP) {
+            SANO_LOGW("samples %u != n_frames %d x hop %d (visemes rescaled)", static_cast<unsigned>(out.size()),
+                      static_cast<int>(n_frames), static_cast<int>(SAAN_HOP));
+        }
+        const float ms_per_frame = audio_ms / static_cast<float>(n_frames);
+        sano_ids_to_spans(ids.data(), durations.data(), n_ids, ms_per_frame, spans);
+    }
+    return ClauseResult::Ok;
+}
+
+}  // namespace
+
+StreamOutcome render_sano_stream(std::u32string_view text, const Options& opt, const SanoChunkFn& emit) {
+    // 1 句ごとにロックする: emit (再生キューの空き待ちなどで長く止まりうる) の間は
+    // 重みの差し替え (set_sano_weights) やロード状態の問い合わせを塞がない。
+    const auto synth_one = [&](const std::u32string& clause, std::vector<std::int16_t>& pcm, std::uint32_t& rate,
+                               std::vector<VisemeSpan>& spans) {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        return synth_clause_locked(clause, pcm, opt, rate, spans);
+    };
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if (!g_loaded) return StreamOutcome::NoOutput;
+    }
+    return stream_sano_clauses(text, opt, synth_one, emit);
+}
+
+bool render_sano(std::u32string_view text, std::vector<std::int16_t>& out, const Options& opt,
+                 std::uint32_t& out_rate_hz, std::vector<VisemeEvent>* visemes) {
+    out.clear();
+    if (visemes) visemes->clear();
+    std::uint32_t rate = 0;
+    std::vector<VisemeEvent> scratch;
+    VisemeBuilder builder(visemes ? *visemes : scratch);
+    const StreamOutcome r = render_sano_stream(
+        text, opt,
+        [&](std::vector<std::int16_t>&& pcm, std::uint32_t rate_hz, std::vector<VisemeSpan>&& spans,
+            const std::u32string&) {
+            out.insert(out.end(), pcm.begin(), pcm.end());
+            rate = rate_hz;
+            for (const auto& sp : spans) builder.add(sp.vowel, sp.duration_ms);
+            return true;
+        });
+    if (r != StreamOutcome::Ok || out.empty()) {
+        out.clear();
+        if (visemes) visemes->clear();
+        return false;
+    }
+    builder.finish();
+    out_rate_hz = rate;
     return true;
 }
 
@@ -232,7 +294,11 @@ namespace stackchan::jtts {
 bool set_sano_weights(std::span<const std::uint8_t>) { return false; }
 bool sano_weights_loaded() { return false; }
 namespace internal {
-bool render_sano(std::u32string_view, std::vector<std::int16_t>&, const Options&, std::uint32_t&) {
+StreamOutcome render_sano_stream(std::u32string_view, const Options&, const SanoChunkFn&) {
+    return StreamOutcome::NoOutput;
+}
+bool render_sano(std::u32string_view, std::vector<std::int16_t>&, const Options&, std::uint32_t&,
+                 std::vector<VisemeEvent>*) {
     return false;
 }
 }  // namespace internal

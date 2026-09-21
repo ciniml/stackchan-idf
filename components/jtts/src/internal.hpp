@@ -147,10 +147,11 @@ void spans_to_events(std::span<const VisemeSpan> spans, std::vector<VisemeEvent>
 using ChunkFn =
     std::function<bool(std::vector<std::int16_t>&&, std::vector<VisemeSpan>&&, const std::u32string& text)>;
 
-enum class HmmOutcome {
+// チャンク単位のストリーミング合成 (HMM / sanoTTS) の結果。
+enum class StreamOutcome {
     Ok,        // 全チャンクを emit した
     NoOutput,  // 何も emit せずに諦めた (ボイス未ロード / メモリ不足など): 呼び出し側がフォールバック
-    Aborted,   // 1 つ以上 emit した後にメモリ不足で諦めた
+    Aborted,   // 1 つ以上 emit した後に失敗した (メモリ不足など)
     Cancelled, // emit が false を返した
 };
 
@@ -159,7 +160,7 @@ enum class HmmOutcome {
 //   stream = false: 一括 (synthesize 用)。チャンクは予算いっぱいまで詰める。
 //   stream = true : 低遅延 (synthesize_stream 用)。最初のチャンクを小さく、以降を
 //                   徐々に大きくして、再生しながら次を合成しても途切れにくくする。
-HmmOutcome render_hmm_stream(std::u32string_view text, const Options& opt, const ChunkFn& emit, bool stream);
+StreamOutcome render_hmm_stream(std::u32string_view text, const Options& opt, const ChunkFn& emit, bool stream);
 
 // HMM 合成 1 回分のテキスト チャンク (hmm_chunk.cpp)。
 struct HmmChunk {
@@ -205,10 +206,78 @@ void set_hmm_memory_budget_for_test(std::size_t bytes);
 // 有効なモーラが 1 つも無ければ false。
 bool build_sano_ir(std::u32string_view text, std::string& ir_utf8);
 
-// sanoTTS エンジン本体 (sano_synth.cpp)。重み未ロード・IR 変換失敗・G2P 失敗・
-// arena 不足時は out を触らず false。成功時 out は 22.05 kHz mono int16 で、
-// *out_rate_hz に SAAN_SR を書く。
+// ---- sanoTTS -------------------------------------------------------------
+//
+// sanoTTS は発話全体を 1 回で合成すると、「、」「。」が同じ短いポーズ (長さは
+// ニューラル モデル任せ) になって句の区切りが弱くなり、長い文は arena 上限
+// (350 ids) で失敗する。そこで HMM と同じく句読点 (、。，,．.) ごとに 1 句ずつ合成し、
+// 句と句の間に HMM の pau と同じ長さの無音を明示的に挟む。
+
+// 句 (先頭から、直後の句読点までを 1 つ。続く句読点はまとめる) に分ける。区切りは
+// HMM と同じ (、。，,．.)。モーラを持たない断片は前の句に含める。HmmChunk::pause_after
+// は句読点で終わるか。全体にモーラが無ければ false。
+bool split_clauses(std::u32string_view text, std::vector<HmmChunk>& out);
+
+// 1 句の合成結果 (テスト用のシームでもある)。
+enum class ClauseResult {
+    Ok,    // pcm / rate_hz / spans を返した
+    Skip,  // 読める内容が無い (この句は飛ばす)
+    Fail,  // 合成失敗 (重み未ロード / G2P / arena 不足など)
+};
+// 1 句を合成する。spans は pcm 全体を覆う口形の区間 (母音 / 閉口 + 継続時間)。作れなければ空。
+using SanoClauseSynth = std::function<ClauseResult(const std::u32string& clause, std::vector<std::int16_t>& pcm,
+                                                   std::uint32_t& rate_hz, std::vector<VisemeSpan>& spans)>;
+
+// sanoTTS の 1 チャンク (句の音声 + 句間の無音) の受け取り側。spans は pcm 全体を覆う
+// 口形の区間 (句間の無音は閉口)。false で中断。
+using SanoChunkFn = std::function<bool(std::vector<std::int16_t>&& pcm, std::uint32_t rate_hz,
+                                       std::vector<VisemeSpan>&& spans, const std::u32string& text)>;
+
+// 句ごとに synth_one で合成し、句と句の間の境界を整えて emit する:
+//   - 内側の境界では、各句の前後の無音 (モデルが付ける) を切り詰め、句の後ろに
+//     句間の無音 (等速 420 ms × mora_ms / 110 = HMM の pau と同じ長さ) を足す。
+//     口形の区間も同じだけ切り詰め / 閉口を足す (音と口形の時刻が揃ったまま)。
+//   - 発話の先頭 / 末尾は切り詰めない (従来どおり)。
+// 最初の句が Fail なら何も出さず NoOutput (呼び出し側が他エンジンへフォールバック)、
+// 途中の Fail は Aborted、Skip は飛ばす。
+StreamOutcome stream_sano_clauses(std::u32string_view text, const Options& opt, const SanoClauseSynth& synth_one,
+                                  const SanoChunkFn& emit);
+
+// trim_silence が削った量 [サンプル]。
+struct SilenceTrim {
+    std::size_t front = 0;
+    std::size_t back = 0;
+};
+
+// pcm の前 (lead) / 後ろ (trail) の無音を切り詰める。無音 = 絶対値がピークの約 1 % (最低 48)
+// 未満。音の手前 / 奥に keep_ms の余白は残す (立ち上がり / 減衰を削らないため)。
+// 全体が無音なら何もしない。テスト用に公開。
+SilenceTrim trim_silence(std::vector<std::int16_t>& pcm, std::uint32_t rate_hz, bool lead, bool trail,
+                         std::uint32_t keep_ms = 10);
+
+// 口形の区間列から、先頭の drop_front_ms を捨て、その後 keep_ms だけ残す (残りは捨てる)。
+void crop_spans(std::vector<VisemeSpan>& spans, float drop_front_ms, float keep_ms);
+
+// sanoTTS の音素 ID 列 (saan_g2p の出力: ^ PAD 音素 PAD 音素 ... $) と、音素ごとの継続長
+// d_hat [フレーム] から、口形の区間列を作る (HMM と同じ規則):
+//   母音 あ/い/う/え/お        … その母音の形
+//   無声化母音・ん・っ・ポーズ   … 閉口   (ポーズ = PAD が 2 つ以上続いたときの 2 つ目以降)
+//   両唇音 m b p (拗音含む)     … 閉口
+//   その他の子音               … 直後の母音の形を先取り
+//   PAD / 記号 [ ] # ?         … 直前の音素の形を保つ (音素の間の余白)。先頭の ^ と末尾の $ は閉口。
+// ms_per_frame は 1 フレームの長さ [ms]。区間の合計 = n × ms_per_frame。
+void sano_ids_to_spans(const std::int32_t* ids, const std::int32_t* d_hat, std::int32_t n, float ms_per_frame,
+                       std::vector<VisemeSpan>& out);
+
+// sanoTTS エンジン本体 (sano_synth.cpp)。句ごとに合成して emit する (上記)。重み未ロード
+// なら NoOutput。出力は 22.05 kHz mono int16。
+StreamOutcome render_sano_stream(std::u32string_view text, const Options& opt, const SanoChunkFn& emit);
+
+// render_sano_stream の全チャンクを 1 本に連結する (synthesize / synthesize_ex 用)。
+// 重み未ロード・IR 変換失敗・G2P 失敗・arena 不足時は out を空にして false。
+// 成功時 out は 22.05 kHz mono int16 で、*out_rate_hz に SAAN_SR を書く。
+// visemes が非 null なら、口形イベントを追記する (out と時間軸が揃う)。
 bool render_sano(std::u32string_view text, std::vector<std::int16_t>& out, const Options& opt,
-                 std::uint32_t& out_rate_hz);
+                 std::uint32_t& out_rate_hz, std::vector<VisemeEvent>* visemes = nullptr);
 
 }  // namespace stackchan::jtts::internal

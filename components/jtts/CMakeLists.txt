@@ -13,6 +13,7 @@ idf_component_register(
         "src/hts_label.cpp"
         "src/hmm_synth.cpp"
         "src/sano_ir.cpp"
+        "src/sano_clause.cpp"
         "src/sano_synth.cpp"
         "src/hmm_chunk.cpp"
         "src/subtitle.cpp"

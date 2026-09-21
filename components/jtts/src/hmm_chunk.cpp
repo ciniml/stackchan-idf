@@ -182,4 +182,37 @@ bool split_hmm_text(std::u32string_view text, std::size_t max_moras, std::vector
     return !out.empty();
 }
 
+bool split_clauses(std::u32string_view text, std::vector<HmmChunk>& out) {
+    out.clear();
+    std::u32string cur;
+    auto flush = [&](bool pause) {
+        if (cur.empty()) return;
+        const std::size_t moras = count_moras(cur);
+        if (moras == 0) {
+            // 読める内容が無い断片 (記号だけなど) は前の句に含める。先頭なら次の句の前に残す。
+            if (!out.empty()) {
+                out.back().text += cur;
+                out.back().pause_after = out.back().pause_after || pause;
+                cur.clear();
+            }
+            return;
+        }
+        HmmChunk c;
+        c.text = std::move(cur);
+        c.moras = moras;
+        c.pause_after = pause;
+        out.push_back(std::move(c));
+        cur.clear();
+    };
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        cur.push_back(text[i]);
+        if (!is_pause_char(text[i])) continue;
+        // 句読点が続く場合 (、、 や 。。。) は同じ句にまとめる。
+        while (i + 1 < text.size() && is_pause_char(text[i + 1])) cur.push_back(text[++i]);
+        flush(true);
+    }
+    flush(false);
+    return !out.empty();
+}
+
 }  // namespace stackchan::jtts::internal

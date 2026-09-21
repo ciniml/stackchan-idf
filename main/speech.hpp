@@ -118,7 +118,7 @@ private:
 
     // Pre-computed envelope (peak amplitude per kEnvelopeStepMs window),
     // normalised to 0..1, indexed by elapsed window count. Only filled for
-    // chunks the engine gave no vowel timeline for (unit-concatenation / sanoTTS).
+    // chunks the engine gave no vowel timeline for (unit-concatenation).
     std::vector<float> envelope_;
     // Vowel timeline of the current utterance in ms since start_ms_ (jtts
     // formant / HMM engines). Chunk timelines are appended at the chunk's

@@ -604,7 +604,7 @@ Speech::Mouth Speech::current_mouth() const
         return {from.open + (to.open - from.open) * t, from.form + (to.form - from.form) * t};
     }
 
-    // No vowel timeline (unit-concatenation / sanoTTS): mouth follows the loudness.
+    // No vowel timeline (unit-concatenation): mouth follows the loudness.
     const std::size_t idx = elapsed / kEnvelopeStepMs;
     if (idx >= envelope_.size()) {
         return {};

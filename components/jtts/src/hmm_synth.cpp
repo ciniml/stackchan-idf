@@ -346,9 +346,9 @@ bool synth_chunk(const std::u32string& text, const Options& opt, std::size_t dec
 
 void set_hmm_memory_budget_for_test(std::size_t bytes) { g_budget_override = bytes; }
 
-HmmOutcome render_hmm_stream(std::u32string_view text, const Options& opt, const ChunkFn& emit, bool stream) {
+StreamOutcome render_hmm_stream(std::u32string_view text, const Options& opt, const ChunkFn& emit, bool stream) {
     std::lock_guard<std::mutex> lock(g_engine_mutex);
-    if (!g_loaded) return HmmOutcome::NoOutput;
+    if (!g_loaded) return StreamOutcome::NoOutput;
 
     // ボイスはネイティブ レート (48 kHz) のまま合成し、出力レート (16 kHz) へは
     // FIR 1/3 デシメーションで落とす。ボコーダを 16 kHz で直接回す (α 再設定)
@@ -361,7 +361,7 @@ HmmOutcome render_hmm_stream(std::u32string_view text, const Options& opt, const
     } else if (voice_rate == 3 * opt.sample_rate_hz) {
         decim = 3;
     } else {
-        return HmmOutcome::NoOutput;  // 対応外レート → フォールバック
+        return StreamOutcome::NoOutput;  // 対応外レート → フォールバック
     }
     const std::size_t fperiod = HTS_Engine_get_fperiod(&g_engine);
 
@@ -380,11 +380,11 @@ HmmOutcome render_hmm_stream(std::u32string_view text, const Options& opt, const
         ESP_LOGW("jtts-hmm", "no memory for HMM synthesis (budget allows %u moras) → fallback",
                  static_cast<unsigned>(max_moras));
 #endif
-        return HmmOutcome::NoOutput;
+        return StreamOutcome::NoOutput;
     }
     const bool multi = chunks.size() > 1;
     // 切り詰めは fperiod 単位 (デシメーション後も整数サンプル) で行う。
-    if (multi && (fperiod == 0 || fperiod % decim != 0)) return HmmOutcome::NoOutput;
+    if (multi && (fperiod == 0 || fperiod % decim != 0)) return StreamOutcome::NoOutput;
 #if defined(ESP_PLATFORM)
     if (multi) {
         ESP_LOGI("jtts-hmm", "long text: %u chunks (max %u moras each, PSRAM free %u KB)",
@@ -396,7 +396,7 @@ HmmOutcome render_hmm_stream(std::u32string_view text, const Options& opt, const
     const float ms_per_frame =
         fperiod > 0 ? 1000.0f * static_cast<float>(fperiod) / static_cast<float>(voice_rate) : 5.0f;
     std::size_t emitted = 0;
-    const auto failed = [&] { return emitted > 0 ? HmmOutcome::Aborted : HmmOutcome::NoOutput; };
+    const auto failed = [&] { return emitted > 0 ? StreamOutcome::Aborted : StreamOutcome::NoOutput; };
 
     std::vector<std::int16_t> pcm;
     std::vector<VisemeSpan> spans;
@@ -419,11 +419,11 @@ HmmOutcome render_hmm_stream(std::u32string_view text, const Options& opt, const
             return failed();
         }
         ++emitted;
-        if (!emit(std::move(pcm), std::move(spans), chunks[k].text)) return HmmOutcome::Cancelled;
+        if (!emit(std::move(pcm), std::move(spans), chunks[k].text)) return StreamOutcome::Cancelled;
         pcm = {};
         spans = {};
     }
-    return HmmOutcome::Ok;
+    return StreamOutcome::Ok;
 }
 
 }  // namespace internal
@@ -437,8 +437,8 @@ bool set_hmm_voice(std::span<const std::uint8_t>) { return false; }
 bool hmm_voice_loaded() { return false; }
 
 namespace internal {
-HmmOutcome render_hmm_stream(std::u32string_view, const Options&, const ChunkFn&, bool) {
-    return HmmOutcome::NoOutput;
+StreamOutcome render_hmm_stream(std::u32string_view, const Options&, const ChunkFn&, bool) {
+    return StreamOutcome::NoOutput;
 }
 void set_hmm_memory_budget_for_test(std::size_t) {}
 }  // namespace internal
