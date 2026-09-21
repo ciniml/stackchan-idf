@@ -809,6 +809,11 @@
         (漢字は発声時に無視されます)。<code>|</code> を省くと表示と読みが同じになります。
         例: <code>こんにちは | こんにちわ</code></p>
       <textarea id="jtts-phrases" rows="6" placeholder="こんにちは | こんにちわ&#10;スタックチャンです | すたっくちゃんです&#10;やっほー"></textarea>
+      <label for="jtts-phrase-order">発話の順序</label>
+      <select id="jtts-phrase-order">
+        <option value="random">ランダム (毎回どれかを選ぶ)</option>
+        <option value="sequential">連続 (上の行から順に、最後まで行ったら先頭へ)</option>
+      </select>
     </div>
 
     <div id="audio-section">
@@ -1779,6 +1784,8 @@ function readJttsForm() {
   const phrases = StackchanSettings.jttsPhrasesFromText(
       document.getElementById('jtts-phrases').value);
   if (phrases.length > 0) obj.phrases = phrases;
+  const order = document.getElementById('jtts-phrase-order').value;
+  if (order === 'sequential') obj.phrase_order = order;
   return obj;
 }
 
@@ -1791,6 +1798,7 @@ function writeJttsForm(json) {
     document.getElementById(id).value = '';
   }
   document.getElementById('jtts-phrases').value = '';
+  document.getElementById('jtts-phrase-order').value = 'random';
   if (!json) return;
   let obj;
   try { obj = JSON.parse(json); }
@@ -1812,6 +1820,9 @@ function writeJttsForm(json) {
   if (Array.isArray(obj.phrases)) {
     document.getElementById('jtts-phrases').value =
         StackchanSettings.jttsPhrasesToText(obj.phrases);
+  }
+  if (obj.phrase_order === 'sequential') {
+    document.getElementById('jtts-phrase-order').value = 'sequential';
   }
 }
 

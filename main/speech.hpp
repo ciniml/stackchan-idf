@@ -40,8 +40,14 @@ public:
     // ignored entirely. Call once at startup, before the first babble.
     void configure(const std::string& json);
 
+    // Which phrase babble() picks next. Random (default) uses the caller's
+    // seed; Sequential walks the phrase list top to bottom and wraps around.
+    enum class PhraseOrder : std::uint8_t { Random, Sequential };
+
     // Start a fresh utterance (non-blocking — M5.Speaker queues it).
-    // `seed` selects which phrase to speak (seed % phrase count). Returns the
+    // Random order: `seed` selects the phrase (seed % phrase count).
+    // Sequential order: `seed` is ignored, the next line in the list is used
+    // (restarting from the first line after configure()). Returns the
     // *display* text (発話内容) of the chosen phrase so the caller can show a
     // matching balloon — synthesis uses that phrase's separate *reading*
     // (発声内容, kana). Returns an empty string only when there are no phrases.
@@ -85,6 +91,8 @@ private:
     // preset, ~8 short Japanese phrases).
     jtts::Options opts_;
     std::vector<Phrase> phrases_;
+    PhraseOrder phrase_order_{PhraseOrder::Random};
+    std::size_t next_phrase_{0}; // Sequential: index of the phrase babble() speaks next
     bool initialised_{false};
 
     std::atomic<std::uint32_t> start_ms_{0};

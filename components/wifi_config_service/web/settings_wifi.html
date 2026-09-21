@@ -716,6 +716,11 @@
         無視されます)。<code>|</code> を省くと表示と読みが同じになります。
         例: <code>こんにちは | こんにちわ</code></p>
       <textarea id="jtts-phrases" rows="6" placeholder="こんにちは | こんにちわ&#10;おはよー&#10;..."></textarea>
+      <label for="jtts-phrase-order">発話の順序</label>
+      <select id="jtts-phrase-order">
+        <option value="random">ランダム (毎回どれかを選ぶ)</option>
+        <option value="sequential">連続 (上の行から順に、最後まで行ったら先頭へ)</option>
+      </select>
     </div>
     <div id="lt-section">
       <h2 class="section-title">LT タイムキーパー</h2>
@@ -1142,6 +1147,7 @@ function readJttsForm() {
   // `表示 | 読み` pair support shared with the BLE page (settings_common.js).
   const phrases = StackchanSettings.jttsPhrasesFromText($('jtts-phrases').value);
   if (phrases.length) obj.phrases = phrases;
+  if ($('jtts-phrase-order').value === 'sequential') obj.phrase_order = 'sequential';
   return Object.keys(obj).length ? JSON.stringify(obj) : '';
 }
 
@@ -1160,6 +1166,7 @@ function applyJttsToForm(json) {
   if (Array.isArray(obj.phrases)) {
     $('jtts-phrases').value = StackchanSettings.jttsPhrasesToText(obj.phrases);
   }
+  $('jtts-phrase-order').value = obj.phrase_order === 'sequential' ? 'sequential' : 'random';
 }
 
 // --- Servo limits + range-setting calibration ---

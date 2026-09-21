@@ -177,6 +177,8 @@ void Speech::configure(const std::string& json)
     for (const auto& p : kDefaultPhrases) {
         phrases_.push_back({std::string(p.display), std::u32string(p.reading)});
     }
+    phrase_order_ = PhraseOrder::Random;
+    next_phrase_ = 0;
     initialised_ = true;
 
     if (json.empty()) {
@@ -189,6 +191,14 @@ void Speech::configure(const std::string& json)
     }
 
     apply_options_json(opts_, root);
+
+    // phrase_order: "random" (default) or "sequential" (top to bottom, looping).
+    // Unknown / missing values keep the default.
+    const cJSON* order = cJSON_GetObjectItemCaseSensitive(root, "phrase_order");
+    if (cJSON_IsString(order) && order->valuestring != nullptr &&
+        std::strcmp(order->valuestring, "sequential") == 0) {
+        phrase_order_ = PhraseOrder::Sequential;
+    }
 
     // phrases: array whose elements are either
     //   - a string  "こんにちわ"                       (display == reading), or
@@ -220,9 +230,10 @@ void Speech::configure(const std::string& json)
         if (!parsed.empty()) phrases_ = std::move(parsed);
     }
     cJSON_Delete(root);
-    ESP_LOGI(kTag, "jtts config: voice=%s f0=%.0f mora=%.0fms phrases=%zu",
+    ESP_LOGI(kTag, "jtts config: voice=%s f0=%.0f mora=%.0fms phrases=%zu order=%s",
              opts_.voice == jtts::Voice::Female ? "female" : "male",
-             opts_.f0_hz, opts_.mora_ms, phrases_.size());
+             opts_.f0_hz, opts_.mora_ms, phrases_.size(),
+             phrase_order_ == PhraseOrder::Sequential ? "sequential" : "random");
 }
 
 std::string Speech::babble(std::uint32_t seed)
@@ -233,7 +244,14 @@ std::string Speech::babble(std::uint32_t seed)
     if (phrases_.empty()) {
         return {};
     }
-    const Phrase& phrase = phrases_[seed % phrases_.size()];
+    std::size_t index;
+    if (phrase_order_ == PhraseOrder::Sequential) {
+        index = next_phrase_ % phrases_.size();
+        next_phrase_ = index + 1; // stays < size + 1, so it never overflows
+    } else {
+        index = seed % phrases_.size();
+    }
+    const Phrase& phrase = phrases_[index];
     // Couldn't pronounce → still return the display text so the caller shows
     // the matching balloon (no audio / mouth movement in that case).
     (void)say(phrase.reading);
