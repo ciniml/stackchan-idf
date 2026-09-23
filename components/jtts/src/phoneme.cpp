@@ -20,7 +20,8 @@ FormantFrame silent_frame(float f0) {
 // prenasal_zero_hz > 0 のとき、後続モーラが「ん」なので母音末尾 ~30 ms で
 // nasal を 0→0.5 に立ち上げる (先行母音の鼻音化。ん への移行でスペクトルが
 // 急変するのを防ぎ、自然な渡りになる)。値は後続の鼻音ゼロ周波数。
-void add_cv_segments(Consonant c, Vowel v, bool palatalized, bool devoiced, float mora_ms,
+// 戻り値は out 内で母音本体 (push_vowel_tail が積む区間) が始まる添字。
+std::size_t add_cv_segments(Consonant c, Vowel v, bool palatalized, bool devoiced, float mora_ms,
                      float f0, float prenasal_zero_hz, std::vector<Segment>& out) {
     FormantFrame vowel = vowel_frame(v, palatalized);
     vowel.f0_hz = f0;
@@ -37,7 +38,13 @@ void add_cv_segments(Consonant c, Vowel v, bool palatalized, bool devoiced, floa
 
     // 母音末尾セグメントを積む。prenasal (次モーラが「ん」) なら末尾 ~30 ms
     // で nasal を 0→0.5 に上げて先行母音を鼻音化する。
+    std::size_t tail_begin = out.size();
+    bool tail_marked = false;
     auto push_vowel_tail = [&](float consumed) {
+        if (!tail_marked) {
+            tail_begin = out.size();
+            tail_marked = true;
+        }
         float v_ms = std::max(20.0f, mora_ms - consumed);
         if (prenasal_zero_hz > 0.0f) {
             FormantFrame nasalized = vowel;
@@ -56,7 +63,7 @@ void add_cv_segments(Consonant c, Vowel v, bool palatalized, bool devoiced, floa
 
     if (c == Consonant::None) {
         push_vowel_tail(0.0f);
-        return;
+        return tail_begin;
     }
 
     FormantFrame burst = consonant_burst(c, v);
@@ -140,6 +147,7 @@ void add_cv_segments(Consonant c, Vowel v, bool palatalized, bool devoiced, floa
     } else {
         out.push_back({vowel, vowel, mora_ms});
     }
+    return tail_begin;
 }
 
 }  // namespace
@@ -179,8 +187,17 @@ void build_segments(std::span<const Mora> moras, std::vector<Segment>& out, cons
                 if (i + 1 < moras.size() && moras[i + 1].kind == MoraKind::MoraicN) {
                     prenasal_zero_hz = moraic_n_frame(i + 1).nasal_zero_hz;
                 }
-                add_cv_segments(m.c, m.v, m.palatalized, m.devoiced, mora_ms, f0,
-                                prenasal_zero_hz, out);
+                const std::size_t first = out.size();
+                const std::size_t tail = add_cv_segments(m.c, m.v, m.palatalized, m.devoiced, mora_ms, f0,
+                                                         prenasal_zero_hz, out);
+                // 口形: 無声化母音は閉口のまま。子音区間は後続母音の形を先取りするが、
+                // 両唇音 (m b p) の閉鎖だけは唇を閉じる。
+                if (!m.devoiced) {
+                    const bool bilabial = m.c == Consonant::M || m.c == Consonant::B || m.c == Consonant::P;
+                    for (std::size_t k = first; k < out.size(); ++k) {
+                        out[k].vowel = (bilabial && k < tail) ? Vowel::None : m.v;
+                    }
+                }
                 break;
             }
             case MoraKind::MoraicN: {
@@ -196,7 +213,9 @@ void build_segments(std::span<const Mora> moras, std::vector<Segment>& out, cons
             case MoraKind::Chouon: {
                 if (!out.empty()) {
                     FormantFrame ref = out.back().end;
-                    out.push_back({ref, ref, mora_ms});
+                    Segment held{ref, ref, mora_ms};
+                    held.vowel = out.back().vowel;  // 長音は直前の口形を保つ
+                    out.push_back(held);
                 }
                 break;
             }

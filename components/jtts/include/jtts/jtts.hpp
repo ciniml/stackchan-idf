@@ -3,11 +3,15 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
 #include <tl/expected.hpp>
+
+#include "jtts/phoneme.hpp"
 
 namespace stackchan::jtts {
 
@@ -90,6 +94,7 @@ struct Options {
 enum class Error {
     InvalidKana,
     OutOfMemory,
+    Cancelled,  // synthesize_stream のシンクが false を返して中断した
 };
 
 const char* to_string(Error e);
@@ -106,6 +111,57 @@ tl::expected<void, Error> synthesize(std::u32string_view kana,
 tl::expected<std::uint32_t, Error> synthesize_ex(std::u32string_view kana,
                                                  std::vector<std::int16_t>& out,
                                                  const Options& opt = {});
+
+// リップシンク用の口形イベント。`start_ms` (発話先頭からの経過時間) から次の
+// イベントまで、口は `vowel` の形を取る。Vowel::None は閉口。
+struct VisemeEvent {
+    std::uint32_t start_ms = 0;
+    Vowel vowel = Vowel::None;
+};
+
+// synthesize に加えて、PCM と時間軸が揃った口形イベント列を `visemes` に返す
+// (時刻昇順、隣り合うイベントの vowel は異なる。最後は閉口で終わる)。
+// 口形を出せるのはフォルマント / HMM / sanoTTS (音素ごとの継続長から作る)。単位連結
+// エンジンで合成された場合と失敗時は空になるので、呼び出し側は音量エンベロープなどに
+// フォールバックすること。
+tl::expected<void, Error> synthesize(std::u32string_view kana,
+                                     std::vector<std::int16_t>& out,
+                                     std::vector<VisemeEvent>& visemes,
+                                     const Options& opt = {});
+
+// ストリーミング合成の 1 チャンク分。
+struct SynthChunk {
+    // このチャンクが読む部分 (synthesize_stream に渡した読みの一部。HMM で強制分割した
+    // ときはアクセント記号が落ちる)。発話全体が 1 チャンクなら読み全体。
+    // 吹き出しをチャンクに同期させるとき (jtts/subtitle.hpp) に使う。
+    std::u32string text;
+    std::vector<std::int16_t> pcm;
+    // pcm のサンプルレート [Hz]。HMM / フォルマント / 単位連結は opt.sample_rate_hz、
+    // sanoTTS は 22.05 kHz 固定 (synthesize_ex と同じ)。再生側がこのレートで鳴らすこと。
+    std::uint32_t sample_rate = 0;
+    // このチャンク先頭からの口形イベント (synthesize と同じ規約)。空ならこの
+    // エンジンは口形を出せない (音量エンベロープなどにフォールバックすること)。
+    std::vector<VisemeEvent> visemes;
+};
+
+// チャンクの受け取り側。false を返すと合成を中断する (Error::Cancelled)。
+using ChunkSink = std::function<bool(SynthChunk&&)>;
+
+// synthesize と同じ合成を、チャンクごとに sink へ渡しながら行う。長い発話は
+// HMM エンジンが句読点などで分割して順に合成するので、最初のチャンクが出来た
+// 時点で再生を始め、再生中に次を合成できる (全体の合成完了を待たなくてよい)。
+//   - チャンクの PCM は連続再生すればそのまま 1 本の発話になる (境界の無音は調整済み)。
+//   - 最初のチャンクを小さく、以降を徐々に大きくして、再生が途切れにくくする。
+//   - 単位連結 / フォルマントも sanoTTS と同じく句読点 (、。) ごとに 1 句ずつ合成して渡す。
+//     句読点が無い短文は 1 チャンク。
+//     句と句の間には HMM の pau と同じ長さの無音を明示的に挟む (句の後ろに足すので、
+//     チャンクは「句 + 間」。話速に比例)。sanoTTS は synthesize_ex と同様に 22.05 kHz で
+//     出力する (SynthChunk::sample_rate)。
+//   - HMM で 1 つ以上渡した後にメモリ不足になったら Error::OutOfMemory (途中まで
+//     渡した分は取り消せない)。何も渡す前なら他エンジンへフォールバックする。
+// sink はこの関数を呼んだスレッドで、合成の合間に呼ばれる。
+tl::expected<void, Error> synthesize_stream(std::u32string_view kana, const ChunkSink& sink,
+                                            const Options& opt = {});
 
 // 単位連結エンジン用の音声 DB (.jvox、codec=0 の生形式) を登録する。
 // blob の寿命は呼び出し側が保証する (PSRAM バッファ / flash mmap)。

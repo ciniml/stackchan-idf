@@ -13,7 +13,11 @@ idf_component_register(
         "src/hts_label.cpp"
         "src/hmm_synth.cpp"
         "src/sano_ir.cpp"
+        "src/clause_stream.cpp"
+        "src/sano_visemes.cpp"
         "src/sano_synth.cpp"
+        "src/hmm_chunk.cpp"
+        "src/subtitle.cpp"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "src"
     REQUIRES tl_expected

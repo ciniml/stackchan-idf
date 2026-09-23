@@ -76,6 +76,11 @@ public:
     // --- Avatar face (render_task reads every frame) -----------------------
     struct Face {
         std::atomic<float> mouth_open{0.0f};
+        // Mouth shape, 0 = wide .. 1 = narrow (avatar DSL `mouth_form`). Only
+        // the jtts vowel lip-sync (demo_loop) sets it; every other mouth_open
+        // producer (mic, conversation, audio stream) leaves it at -1 = "not
+        // set", which makes the face follow mouth_open like a level meter.
+        std::atomic<float> mouth_form{-1.0f};
         std::atomic<int> expression{static_cast<int>(stackchan::avatar::Expression::Neutral)};
         // External gaze target (Avatar::set_gaze inputs). Updated by the
         // touch-driven gaze-follow path in demo_loop; read by render_task
@@ -322,10 +327,11 @@ public:
     // --- Balloon (mutex + completion callback; render_task consumes) -------
 
     // Show `text` in the balloon.
-    //  - hold_ms: minimum on-screen time (0 = use avatar defaults — short
-    //    text holds a few seconds, long text plays one marquee pass).
+    //  - hold_ms: on-screen time (0 = use avatar defaults — fitting text holds
+    //    a few seconds, overflowing text scrolls once; with a value the scroll
+    //    is timed to reach the end of the text within it).
     //  - on_complete: invoked once when the balloon finishes (after hold or
-    //    after a marquee pass). Fired from the render task; the
+    //    after the scroll). Fired from the render task; the
     //    implementation must be cheap and thread-safe.
     void set_balloon_text(std::string_view text,
                           std::uint32_t hold_ms = 0,
@@ -350,16 +356,22 @@ public:
         balloon_visible_.store(false, std::memory_order_release);
     }
 
-    // Called by the render task when the avatar finishes displaying the
-    // current balloon. Hides the balloon and invokes the completion callback
-    // (if any) outside the lock.
-    void notify_balloon_complete()
+    // Called by the render task when the avatar finishes displaying a balloon.
+    // `version` is the balloon_version() of the balloon that finished (the one
+    // snapshot_balloon() returned when the render task applied it). If the
+    // balloon has been replaced or cleared since — e.g. the next chunk's
+    // subtitle was set while the previous one was timing out — the completion is
+    // stale and is ignored, so it can never hide the newer balloon. Otherwise
+    // hides the balloon and invokes the completion callback (if any) outside the
+    // lock.
+    void notify_balloon_complete(std::uint32_t version)
     {
         BalloonCompletionCallback cb;
         {
             std::lock_guard lock{balloon_mutex_};
-            if (!balloon_visible_.load(std::memory_order_relaxed)) {
-                return; // already cleared
+            if (!balloon_visible_.load(std::memory_order_relaxed) ||
+                balloon_version_.load(std::memory_order_relaxed) != version) {
+                return; // already cleared, or replaced by a newer balloon
             }
             balloon_text_.clear();
             balloon_hold_ms_ = 0;
@@ -384,12 +396,15 @@ public:
         return balloon_visible_.load(std::memory_order_acquire);
     }
 
-    // Copies the current text + hold time into the supplied outputs.
-    void snapshot_balloon(std::string& text_out, std::uint32_t& hold_ms_out) const
+    // Copies the current text + hold time + version into the supplied outputs
+    // (one consistent snapshot: all three are read under the lock). Pass the
+    // version back to notify_balloon_complete() when this balloon finishes.
+    void snapshot_balloon(std::string& text_out, std::uint32_t& hold_ms_out, std::uint32_t& version_out) const
     {
         std::lock_guard lock{balloon_mutex_};
         text_out = balloon_text_;
         hold_ms_out = balloon_hold_ms_;
+        version_out = balloon_version_.load(std::memory_order_relaxed);
     }
 
     // --- Versioned slots (VersionedValue facade — see the template above) --

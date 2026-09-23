@@ -60,6 +60,15 @@ jobs:
           cmake --build build-san
           ctest --test-dir build-san --output-on-failure
 
+      # --- avatar: balloon scroll layout (pure functions, header only) ------
+      - name: avatar host tests
+        working-directory: components/avatar/test/host
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+
       # --- flash_layout: ADR-001 exttab / bootctl format --------------------
       # format.c is the exact source the custom bootloader compiles, so the
       # validation / A-B selection / boot-decision logic is proven here.
@@ -119,3 +128,14 @@ jobs:
           cmake --build build
           ./build/jtts_test_vowels
           ./build/jtts_test_sano_ir
+          # sanoTTS clause-by-clause synthesis (clause split / edge-silence trim /
+          # inter-clause pause). The 1-clause synth is stubbed, so no weights needed.
+          ./build/jtts_test_clause_stream
+          # Vowel lip-sync events, long-text chunking, streaming synthesis and
+          # subtitle mapping. Without arguments only the formant / pure-logic
+          # cases run; with .htsvoice files the HMM cases run too (16 kHz voice
+          # = native rate, fast).
+          ./build/jtts_test_visemes
+          ./build/jtts_test_hmm_chunk
+          ./build/jtts_test_visemes ../../../../assets/voices/mei16.htsvoice
+          ./build/jtts_test_hmm_chunk ../../../../assets/voices/mei16.htsvoice

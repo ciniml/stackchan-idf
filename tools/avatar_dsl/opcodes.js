@@ -72,6 +72,7 @@ export const Var = Object.freeze({
   cheek_radius: 0x1C,
   cheek_off_x: 0x1D,
   cheek_off_y: 0x1E,
+  mouth_form: 0x1F,
   // Accessory slots (FaceTuning::accessories bitmask). accessory_N is 0/1.
   accessories: 0x20,
   accessory_0: 0x21,

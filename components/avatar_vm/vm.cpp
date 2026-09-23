@@ -74,6 +74,7 @@ inline float read_var(Var v, const avatar::Canvas& canvas, const avatar::DrawCon
     case Var::GazeH: return ctx.gaze_horizontal + ctx.gaze_saccade_h;
     case Var::GazeV: return ctx.gaze_vertical + ctx.gaze_saccade_v;
     case Var::MouthOpen: return ctx.mouth_open_ratio;
+    case Var::MouthForm: return ctx.mouth_form_ratio >= 0.0f ? ctx.mouth_form_ratio : ctx.mouth_open_ratio;
     case Var::Expr: return expression_to_f(ctx.expression);
     case Var::Primary: return static_cast<float>(ctx.palette.primary);
     case Var::Background: return static_cast<float>(ctx.palette.background);

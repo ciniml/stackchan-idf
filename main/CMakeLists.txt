@@ -45,6 +45,7 @@ set(_main_srcs
     "dance_storage.cpp"
     "dance_poc.cpp"
     "captive_portal.cpp"
+    "chunk_player.cpp"
     "demo_loop.cpp"
     "device_ui.cpp"
     "diag.cpp"
