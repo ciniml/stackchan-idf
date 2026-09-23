@@ -38,7 +38,7 @@ void ChunkPlayer::begin()
         std::lock_guard<std::mutex> lock(mtx_);
         was_playing = end_ms_ != 0 && after(end_ms_, now_ms());
         if (was_playing || M5.Speaker.isPlaying(ch) != 0) {
-            M5.Speaker.stop();
+            M5.Speaker.stop(ch);
             was_playing = true;
         }
         end_ms_ = 0;
@@ -105,8 +105,9 @@ void ChunkPlayer::stop(const std::function<void()>& before)
 {
     std::lock_guard<std::mutex> lock(mtx_);
     if (before) before();
-    if (M5.Speaker.isPlaying()) {
-        M5.Speaker.stop();
+    const auto ch = static_cast<std::uint8_t>(channel_);
+    if (M5.Speaker.isPlaying(ch) != 0) {
+        M5.Speaker.stop(ch);
     }
     end_ms_ = 0;
 }

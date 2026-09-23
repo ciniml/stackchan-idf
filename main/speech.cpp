@@ -350,19 +350,6 @@ void Speech::run_utterance(const SynthJob& job)
         const auto dur_ms = static_cast<std::uint32_t>(static_cast<std::uint64_t>(samples) * 1000u / rate);
 
         if (first) {
-            // Diagnostic: dump the live Speaker config pins right before playRaw so
-            // we can confirm the Module Audio overrides (mck=G7 / bck=G0 / ws=G6 /
-            // data_out=G13) are still in effect at JTTS playback time. If a stray
-            // task has re-configured the speaker to internal AW88298 pins
-            // (mck=NC / bck=34 / ws=33 / data_out=13) the line-out goes silent
-            // even though the channel mixer says "playing". Remove once JTTS-on-
-            // Module-Audio is stable.
-            auto live = M5.Speaker.config();
-            ESP_LOGI("speech",
-                     "play: mck=%d bck=%d ws=%d dout=%d sr=%u first chunk samples=%u @%u Hz",
-                     live.pin_mck, live.pin_bck, live.pin_ws, live.pin_data_out,
-                     static_cast<unsigned>(live.sample_rate),
-                     static_cast<unsigned>(samples), static_cast<unsigned>(rate));
             // A previous utterance may still be sounding: cut it now that the new
             // one has audio, and free its buffers.
             player_.begin();
