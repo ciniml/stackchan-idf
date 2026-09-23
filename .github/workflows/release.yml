@@ -299,13 +299,10 @@ jobs:
 
             PSRAM モードは bootloader レベルで確定するため、ボードごとに別 firmware です。
 
-            ## パーティション構成 (ADR-001)
-            このリリースから flash の構成が変わりました (Recovery アプリ + 拡張パーティションテーブル)。
-            旧構成 (2 面 OTA) の機体には **USB での初回書き込みが必要** で、BLE / Wi-Fi の OTA では
-            移行できません。書き込むと保存済みの顔データ・HMM ボイス・sanoTTS の重みは消えます
-            (Wi-Fi などの設定は残ります。結合イメージ `firmware-<ver>-<board>.bin` を 0x0 に書く場合は
-            設定も消えます)。以後の更新は Recovery 経由で行われます (設定ページからの release 取得、
-            BLE / HTTP アップロード)。ZIP の `flash_manifest.json` に各イメージの書き込み位置があります。
+            > **v0.12 以前から更新する場合**: v0.13.0 で flash の構成が変わったため、BLE / Wi-Fi の
+            > OTA では移行できません。一度 USB (Web Flasher または下記 esptool) で書き込んでください
+            > (保存済みの顔データ・HMM ボイス・sanoTTS の重みは消えます。Wi-Fi などの設定は
+            > 残ります)。詳細は [v0.13.0 のリリースノート](https://github.com/${{ github.repository }}/releases/tag/v0.13.0)。
 
             ## Features
             - **OpenAI Realtime API / Google Gemini Live API** どちらかでリアルタイム音声会話
@@ -336,7 +333,7 @@ jobs:
                esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 460800 write_flash @flash_args
                ```
 
-            ### OTA(既に ADR-001 構成で動いている場合)
+            ### OTA (v0.13.0 以降が動いている場合)
             1. <https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/settings.html>
             2. BLE 接続後「ファームウェア更新 (OTA)」でリリースを選ぶと、機体が Recovery で
                再起動して Wi-Fi で取得します (約 30 秒)。Wi-Fi が無い場合は同梱の
