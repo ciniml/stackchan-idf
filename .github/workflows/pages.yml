@@ -31,6 +31,9 @@ on:
       - 'assets/voices/**'
       - 'assets/voices.json'
       - '.github/workflows/pages.yml'
+      # Release mirroring / versions.json generator.
+      - 'script/stage_pages_firmware.py'
+      - 'script/release_channels.py'
   release:
     types: [published]
   workflow_dispatch:
@@ -112,79 +115,24 @@ jobs:
       - name: Stage release firmware ZIPs into _site/firmware/<tag>/
         env:
           GH_TOKEN: ${{ github.token }}
+        # Mirrors every published release's firmware-*.zip (plus the
+        # extracted per-board stackchan_idf.bin for release-fetch OTA) and
+        # writes two manifests:
+        #   _site/versions.json      stable releases only — what already
+        #                            deployed firmware reads via
+        #                            /api/release/versions (its settings page
+        #                            pre-selects the first entry as "latest",
+        #                            so pre-releases must never appear here)
+        #   _site/versions-all.json  every channel (alpha / beta / rc /
+        #                            stable) with a `channel` field; the Web
+        #                            Flasher and the settings pages filter it
+        #                            by the channel the user picked.
+        # Retention (script docstring has the details): stable >= v0.7.0;
+        # pre-releases only while no stable of the same or newer X.Y.Z
+        # exists. Keeps the site artifact under the 1 GB Pages limit.
         run: |
           set -euo pipefail
-          mkdir -p _site/firmware
-          # Retention floor: only mirror releases >= this tag onto Pages.
-          # The site artifact bundles every mirrored release's ZIPs plus the
-          # extracted per-board stackchan_idf.bin (~25 MB per release) and
-          # was closing in on the 1 GB Pages limit (805 MB at v0.8.4).
-          # Older releases stay fully downloadable from the GitHub Releases
-          # page — raising this floor only prunes the Pages mirror (and the
-          # versions.json entries the Web Flasher / release-fetch OTA offer).
-          RETAIN_FLOOR="v0.7.0"
-          tags_json=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
-                        --json tagName,isDraft,isPrerelease)
-          mapfile -t tags < <(echo "$tags_json" | jq -r '.[] | select(.isDraft|not) | .tagName')
-
-          # Per-tag JSON object. For each tag we stage every firmware-*.zip
-          # asset and classify it by board suffix in the filename:
-          #   firmware-vX.Y.Z-cores3.zip    → boards.cores3
-          #   firmware-vX.Y.Z-atoms3r.zip   → boards.atoms3r
-          #   firmware-vX.Y.Z-atoms3.zip    → boards.atoms3
-          #   firmware-vX.Y.Z-stopwatch.zip → boards.stopwatch
-          #   firmware-vX.Y.Z.zip           → boards.cores3 (legacy single-zip releases)
-          : > /tmp/per_tag.ndjson
-          for tag in "${tags[@]}"; do
-            # Version-sort against the retention floor: skip anything older.
-            # `sort -V | head -1` yields the smaller of the two; if that's
-            # $tag (and it isn't the floor itself), it's below the floor.
-            if [ "$tag" != "$RETAIN_FLOOR" ] && \
-               [ "$(printf '%s\n' "$tag" "$RETAIN_FLOOR" | sort -V | head -1)" = "$tag" ]; then
-              echo "[skip] $tag: below retention floor $RETAIN_FLOOR"
-              continue
-            fi
-            assets=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
-                     --jq '.assets[] | select(.name|test("^firmware-.*\\.zip$")) | .name')
-            if [ -z "$assets" ]; then
-              echo "[skip] $tag: no firmware ZIP asset"
-              continue
-            fi
-            dest="_site/firmware/$tag"
-            mkdir -p "$dest"
-            boards_json='{}'
-            while IFS= read -r asset; do
-              [ -z "$asset" ] && continue
-              gh release download "$tag" --repo "$GITHUB_REPOSITORY" -p "$asset" -D "$dest" --clobber
-              # Extract board suffix; legacy un-suffixed zips map to cores3.
-              base="${asset%.zip}"
-              suffix="${base##*-}"
-              case "$suffix" in
-                cores3|atoms3r|atoms3|stopwatch) board="$suffix" ;;
-                *)                              board="cores3" ;; # legacy fallback
-              esac
-              boards_json=$(echo "$boards_json" | jq --arg b "$board" --arg z "$asset" '.[$b] = $z')
-              # Also extract the OTA payload (stackchan_idf.bin — app
-              # partition image only, NOT the firmware-<tag>-<board>.bin
-              # combined image which includes bootloader/partition table)
-              # and stage it at a stable URL for the on-device
-              # /api/ota/release endpoint:
-              #   firmware/<tag>/<board>/stackchan_idf.bin
-              # Skip silently if the ZIP doesn't contain one (older
-              # releases pre-OTA-release support).
-              if unzip -p "$dest/$asset" stackchan_idf.bin > /tmp/sc.bin 2>/dev/null \
-                 && [ -s /tmp/sc.bin ]; then
-                mkdir -p "$dest/$board"
-                mv /tmp/sc.bin "$dest/$board/stackchan_idf.bin"
-                echo "[ok] $tag/$board/stackchan_idf.bin ($(stat -c%s "$dest/$board/stackchan_idf.bin") bytes)"
-              fi
-              echo "[ok] $tag/$board -> $dest/$asset"
-            done <<< "$assets"
-            echo "{\"tag\":\"$tag\",\"boards\":$boards_json}" >> /tmp/per_tag.ndjson
-          done
-
-          # versions.json: ordered list of {tag, boards: {cores3?, atoms3r?, atoms3?, stopwatch?}}.
-          jq -s '.' < /tmp/per_tag.ndjson > _site/versions.json
+          python3 script/stage_pages_firmware.py --repo "$GITHUB_REPOSITORY" --site _site
           echo "--- versions.json ---"
           cat _site/versions.json
           echo "--- _site/firmware ---"

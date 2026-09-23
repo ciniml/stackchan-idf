@@ -53,6 +53,10 @@ const char* board_slug(std::uint8_t board_kind);
 // non-200, oversized body). Blocks the caller for up to ~15 s; spawns a
 // worker task internally so the handler stack (6 KiB) doesn't have to
 // hold the mbedTLS handshake state.
-bool fetch_versions_json(std::string& out);
+//   all = false: versions.json      (stable releases only)
+//   all = true : versions-all.json  (every channel: alpha / beta / rc /
+//                stable, each entry carrying a "channel" field; the
+//                settings page filters by the channel the user picked)
+bool fetch_versions_json(std::string& out, bool all = false);
 
 } // namespace stackchan::wifi_config::release_ota

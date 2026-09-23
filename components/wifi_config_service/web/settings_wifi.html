@@ -1012,6 +1012,8 @@
         ダウンの場合はエラーになるので、上の「ローカル ファイル」を使ってください。
       </p>
       <div class="ota-row">
+        <select id="ota-release-channel" title="正式版以外 (alpha / beta / rc) も一覧に出す"
+                style="flex:0 0 6rem; padding:0.4rem; font-size:0.9rem"></select>
         <select id="ota-release-select"
                 style="flex:1; padding:0.4rem; font-family:monospace; font-size:0.9rem">
           <option value="">— tag 一覧を読込中 —</option>
@@ -1655,6 +1657,7 @@ async function refresh() {
     const staDown = !s.wifi_connected;
     $('btn-ota-release').disabled = staDown;
     $('ota-release-select').disabled = staDown;
+    $('ota-release-channel').disabled = staDown;
     const relNote = document.getElementById('ota-release-ap-note');
     if (relNote) relNote.hidden = !staDown;
     // Kick off a versions.json fetch in the background. The endpoint
@@ -1835,32 +1838,61 @@ async function startOta() {
 // device-side proxy fetches versions.json from GitHub Pages via its own
 // STA link (works in AP mode too since the browser doesn't touch github
 // directly). Only runs on demand — silent if STA is down.
+//
+// Channels: the device proxies versions-all.json (`?all=1`), which lists
+// every channel with a `channel` field. The チャンネル dropdown filters it
+// (default 正式 = stable, remembered in localStorage). A device already on
+// a pre-release widens the default to its own channel so it can find the
+// next build of that channel.
 let releaseVersionsLoaded = false;
+let releaseVersionsAll = [];
+let releaseChannelTouched = false;
+StackchanSettings.populateChannelSelect($('ota-release-channel'), StackchanSettings.loadChannelPref());
+$('ota-release-channel').addEventListener('change', () => {
+  releaseChannelTouched = true;
+  StackchanSettings.saveChannelPref($('ota-release-channel').value);
+  renderReleaseVersions();
+});
+function renderReleaseVersions() {
+  const sel = $('ota-release-select');
+  const runningFw = $('dis-fw').textContent;
+  const arr = StackchanSettings.filterReleases(releaseVersionsAll, $('ota-release-channel').value);
+  sel.innerHTML = '';
+  if (arr.length === 0) {
+    sel.innerHTML = '<option value="">— このチャンネルにリリースはありません —</option>';
+    return;
+  }
+  arr.forEach((v, idx) => {
+    const opt = document.createElement('option');
+    opt.value = v.tag;
+    // Suffix the currently-running tag so the user can spot it.
+    const label = StackchanSettings.releaseLabel(v);
+    opt.textContent = (v.tag === runningFw) ? `${label}  (現在)` : label;
+    // Default to the newest tag that isn't the one we're already on.
+    if (idx === 0 && v.tag !== runningFw) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  // Push the selected tag into the text input so 適用 works with one click.
+  if (sel.value) $('ota-release-tag').value = sel.value;
+}
 async function loadReleaseVersions() {
   if (releaseVersionsLoaded) return;
   const sel = $('ota-release-select');
   if (!sel) return;
   try {
-    const r = await fetch('/api/release/versions', { cache: 'no-store' });
+    const r = await fetch('/api/release/versions?all=1', { cache: 'no-store' });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const arr = await r.json();
     if (!Array.isArray(arr) || arr.length === 0) throw new Error('empty');
-    // Replace placeholder options.
-    sel.innerHTML = '';
-    const runningFw = $('dis-fw').textContent;
-    arr.forEach((v, idx) => {
-      const opt = document.createElement('option');
-      opt.value = v.tag;
-      // Suffix the currently-running tag so the user can spot it.
-      opt.textContent = (v.tag === runningFw) ? `${v.tag}  (現在)` : v.tag;
-      // Default to the newest tag that isn't the one we're already on.
-      if (idx === 0 && v.tag !== runningFw) opt.selected = true;
-      sel.appendChild(opt);
-    });
-    // Push the selected tag into the text input so 適用 works with one click.
-    if (sel.value) $('ota-release-tag').value = sel.value;
+    releaseVersionsAll = arr;
+    if (!releaseChannelTouched) {
+      const chSel = $('ota-release-channel');
+      chSel.value = StackchanSettings.widerChannel(
+        chSel.value, StackchanSettings.channelForFirmware($('dis-fw').textContent));
+    }
+    renderReleaseVersions();
     releaseVersionsLoaded = true;
-    log(`release tag ${arr.length} 件取得`, 'ok');
+    log(`release tag ${arr.length} 件取得 (表示 ${$('ota-release-select').options.length} 件)`, 'ok');
   } catch (e) {
     sel.innerHTML = '<option value="">— tag 取得失敗 (STA down?) —</option>';
     // Non-fatal — user can still manually type a tag.

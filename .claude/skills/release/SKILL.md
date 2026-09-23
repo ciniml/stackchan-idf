@@ -21,12 +21,26 @@ The repo is `ciniml/stackchan-idf` (use `--repo` consistently when invoking `gh`
    ```
    Abort if there are unintended changes. The M5Unified submodule will always look dirty locally — that's the `tools/apply-m5-patches.sh` patch, ignore it.
 
-2. **Confirm version number with the user.**
-   Look at the latest tag and propose the next bump (patch/minor):
+2. **Confirm version number AND channel with the user.**
+   Tags follow SemVer pre-release grammar (`script/release_channels.py` is the
+   source of truth; `vX.Y.Z-alpha1` without the dot is rejected by CI):
+
+   | tag | channel | boards built | GitHub Release |
+   |---|---|---|---|
+   | `vX.Y.Z-alpha.N` | alpha | cores3 + atoms3r only | pre-release (never "Latest") |
+   | `vX.Y.Z-beta.N` | beta | all 4 | pre-release |
+   | `vX.Y.Z-rc.N` | rc | all 4 | pre-release |
+   | `vX.Y.Z` | stable | all 4 | Latest |
+
+   Look at the latest tags and propose the next one:
    ```bash
-   git tag --list 'v*' | sort -V | tail -3
+   git tag --list 'v*' | sort -V | tail -5            # NB: sort -V puts vX.Y.Z BEFORE vX.Y.Z-alpha.N
+   git tag --list 'vX.Y.Z-alpha.*'                    # next alpha number for an in-flight version
+   python3 script/release_channels.py --tag vX.Y.Z-alpha.N validate && echo ok
    ```
-   Do not pick the version yourself unless the user has already said it.
+   Do not pick the version or channel yourself unless the user has already said it.
+   Publishing the stable `vX.Y.Z` makes Pages drop every `vX.Y.Z-*` pre-release
+   from its mirror (still on GitHub Releases) — that is by design.
 
 3. **(Optional) syntax-check any HTML changes**
    If `tools/settings.html` or `docs/*.html` was touched in this release:
@@ -53,9 +67,13 @@ The repo is `ciniml/stackchan-idf` (use `--repo` consistently when invoking `gh`
    gh run view <release-run-id> --repo ciniml/stackchan-idf --log | grep "App.*version"
    ```
    Must show `App "stackchan_idf" version: vX.Y.Z` (no `-dirty`). If `-dirty` appears, `version.txt` pin step is broken — investigate.
+   The `plan` job log shows `channel: … boards: […]`; for an alpha only 2 build shards run.
 
 7. **Confirm the Release exists**
-   `gh release view vX.Y.Z --repo ciniml/stackchan-idf` should show the ZIP attached.
+   `gh release view vX.Y.Z --repo ciniml/stackchan-idf` should show the ZIP(s) attached
+   (2 for alpha, 4 otherwise) and, for a pre-release tag, `isPrerelease: true`
+   (`--json isPrerelease`). `gh release view --repo ciniml/stackchan-idf` (no tag)
+   must still resolve to the newest **stable** tag.
 
 8. **Manually trigger pages.yml**
    GitHub's loop-prevention means the release-published event from `GITHUB_TOKEN`-created releases does not chain-trigger downstream workflows. Manual dispatch is required for every release.
@@ -92,15 +110,22 @@ The repo is `ciniml/stackchan-idf` (use `--repo` consistently when invoking `gh`
    gh run list --repo ciniml/stackchan-idf --workflow pages.yml --limit 1
    gh run watch <pages-run-id> --repo ciniml/stackchan-idf --exit-status
    ```
-   In the log, look for `[ok] vX.Y.Z -> _site/firmware/vX.Y.Z/firmware-vX.Y.Z.zip`.
+   In the log, look for `[ok] vX.Y.Z/<board> -> _site/firmware/vX.Y.Z/firmware-vX.Y.Z-<board>.zip`
+   (printed by `script/stage_pages_firmware.py`; `[skip] … superseded by a stable release`
+   lines for old pre-releases are expected).
 
 10. **Live smoke-test**
     ```bash
-    curl -sL https://ciniml.github.io/stackchan-idf/versions.json
+    curl -sL https://ciniml.github.io/stackchan-idf/versions-all.json | head -20   # every channel
+    curl -sL https://ciniml.github.io/stackchan-idf/versions.json | head -5        # stable only
     ```
-    Expect the new tag at the top of the JSON array. The 301 redirect to `www.fugafuga.org/stackchan-idf/` is expected (custom domain CNAME); follow with `curl -L`. The ZIP itself:
+    A stable tag must be at the top of **both**; a pre-release tag at the top of
+    `versions-all.json` only (with `"channel": "alpha"` etc.) and **absent** from
+    `versions.json` (deployed devices pre-select the first entry there). The 301
+    redirect to `www.fugafuga.org/stackchan-idf/` is expected (custom domain CNAME);
+    follow with `curl -L`. The ZIP itself:
     ```bash
-    curl -sL https://ciniml.github.io/stackchan-idf/firmware/vX.Y.Z/firmware-vX.Y.Z.zip -o /dev/null -w "size: %{size_download}\n"
+    curl -sL https://ciniml.github.io/stackchan-idf/firmware/vX.Y.Z/firmware-vX.Y.Z-cores3.zip -o /dev/null -w "size: %{size_download}\n"
     ```
     Should be ~2.5 MB.
 
@@ -108,15 +133,22 @@ The repo is `ciniml/stackchan-idf` (use `--repo` consistently when invoking `gh`
     Summarise:
     - Tag pushed, release run id, pages run id
     - Version stamp from log (must be clean)
-    - Live versions.json contents
+    - Live versions.json / versions-all.json contents (channel)
     - ZIP size
+    - For a pre-release: how to see it — Web Flasher / settings page チャンネル
+      dropdown, or `https://ciniml.github.io/stackchan-idf/?channel=alpha`
 
 ## Known gotchas (already fixed in code, don't regress)
 
 - **403 on softprops/action-gh-release** — release.yml has `permissions: contents: write` at workflow level.
 - **404 on actions/configure-pages first run** — pages.yml has `enablement: true`.
 - **`-dirty` version suffix** — `tools/apply-m5-patches.sh` dirties the M5Unified submodule worktree which propagates to the parent's `git describe --dirty`. release.yml writes `version.txt` after the patch step; ESP-IDF prefers that over `git describe`.
-- **ESP-IDF v6 dropped built-in `json` (cJSON)** — release.yml pinned to `release-v5.4`.
+- **ESP-IDF v6 dropped built-in `json` (cJSON)** — release.yml pinned to `v5.5.5`.
+- **Pre-release tags must never land in `versions.json`** — deployed firmware's
+  settings_wifi.html pre-selects its first entry as "latest". `stage_pages_firmware.py`
+  writes stable-only there and everything to `versions-all.json`; keep it that way.
+- **`sort -V` misorders pre-releases** (`v0.15.0` sorts before `v0.15.0-alpha.1`) —
+  never use it for channel logic; `release_channels.py` has the proper key.
 - **Web Bluetooth 512-byte attribute-value cap** — Chrome rejects `writeValueWithResponse` payloads > 512 B. AES-GCM wraps each chunk in 12 B nonce + 16 B tag, so plaintext is bounded by 484 B. `OTA_CHUNK_SIZE` in tools/settings.html is 480.
 - **pages.yml path filter** — must include `tools/settings.html` in addition to `docs/**`, otherwise edits to the canonical settings page don't auto-deploy.
 

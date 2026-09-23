@@ -303,6 +303,7 @@ constexpr int kVersionsTimeoutMs = 15000;
 struct VersionsFetch {
     std::string       body;
     bool              ok;
+    bool              all;  // versions-all.json (every channel) instead of versions.json
     SemaphoreHandle_t done;
 };
 
@@ -312,7 +313,8 @@ void versions_fetch_task(void* arg)
     v->ok = false;
 
     esp_http_client_config_t cfg{};
-    cfg.url = "https://ciniml.github.io/stackchan-idf/versions.json";
+    cfg.url = v->all ? "https://ciniml.github.io/stackchan-idf/versions-all.json"
+                     : "https://ciniml.github.io/stackchan-idf/versions.json";
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
     cfg.timeout_ms = kVersionsTimeoutMs;
     cfg.keep_alive_enable = false;
@@ -369,10 +371,11 @@ void versions_fetch_task(void* arg)
 
 } // namespace
 
-bool fetch_versions_json(std::string& out)
+bool fetch_versions_json(std::string& out, bool all)
 {
     VersionsFetch v;
     v.ok = false;
+    v.all = all;
     v.done = xSemaphoreCreateBinary();
     if (v.done == nullptr) return false;
 

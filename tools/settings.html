@@ -1107,6 +1107,8 @@
         選んで「書き込み」を押すと、暗号化された BLE 経由で新ファームを別パーティションに書き込み、
         再起動します。成功後はブラウザ側で BLE が切断されるので、手動で再接続してください。
       </p>
+      <label for="ota-channel">チャンネル</label>
+      <select id="ota-channel" style="margin-bottom:0.5rem" title="正式版以外 (alpha / beta / rc) も一覧に出す"></select>
       <label for="ota-release">リリース</label>
       <select id="ota-release" style="margin-bottom:0.5rem"><option value="">(自前ファイルを使う)</option></select>
       <div class="ota-row">
@@ -1951,6 +1953,7 @@ function applyCapabilityGating() {
   if (fwEl && hdrFw && fwEl.textContent && fwEl.textContent !== '—') {
     hdrFw.textContent = fwEl.textContent;
     if (headerInfo) headerInfo.hidden = false;
+    applyFirmwareChannel(fwEl.textContent);
   }
 }
 
@@ -2005,23 +2008,55 @@ async function extractZip(buffer) {
 // Load release list (same versions.json the Web Flasher uses). Populates the
 // OTA release dropdown — independent of BLE state, so a user can pick a
 // release before the device is even connected.
-let otaReleases = [];
+// The manifest (versions-all.json) carries every channel; the チャンネル
+// dropdown (default: 正式 = stable, remembered in localStorage) decides which
+// tags are offered. Once the device reports its firmware tag, a device
+// running an alpha build widens the default to alpha so it can find the
+// next alpha (see applyFirmwareChannel).
+let otaReleases = [];       // entries visible under the chosen channel
+let otaAllReleases = [];    // full manifest
+let otaChannelTouched = false;  // user picked a channel explicitly this session
+StackchanSettings.populateChannelSelect(document.getElementById('ota-channel'),
+                                        StackchanSettings.loadChannelPref());
+function renderOtaReleases() {
+  const sel = document.getElementById('ota-release');
+  const channel = document.getElementById('ota-channel').value;
+  otaReleases = StackchanSettings.filterReleases(otaAllReleases, channel);
+  const keep = sel.value;
+  sel.innerHTML = '<option value="">(自前ファイルを使う)</option>';
+  for (const rel of otaReleases) {
+    const o = document.createElement('option');
+    o.value = rel.tag;
+    o.textContent = StackchanSettings.releaseLabel(rel);
+    sel.appendChild(o);
+  }
+  if (keep && otaReleases.some(r => r.tag === keep)) sel.value = keep;
+}
 async function loadOtaReleases() {
   const sel = document.getElementById('ota-release');
   if (!sel) return;
   try {
-    const r = await fetch('./versions.json', { cache: 'no-cache' });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    otaReleases = await r.json();
-    sel.innerHTML = '<option value="">(自前ファイルを使う)</option>';
-    for (const rel of otaReleases) {
-      const o = document.createElement('option');
-      o.value = rel.tag;
-      o.textContent = rel.tag;
-      sel.appendChild(o);
-    }
+    otaAllReleases = await StackchanSettings.fetchReleaseManifest('./');
+    renderOtaReleases();
   } catch (e) {
     sel.innerHTML = '<option value="">(リリース一覧取得失敗)</option>';
+  }
+}
+document.getElementById('ota-channel').addEventListener('change', () => {
+  otaChannelTouched = true;
+  StackchanSettings.saveChannelPref(document.getElementById('ota-channel').value);
+  renderOtaReleases();
+});
+// Called when the DIS firmware revision arrives: a device on a pre-release
+// channel should see that channel by default (unless the user already
+// chose one). Never narrows a wider choice.
+function applyFirmwareChannel(fwTag) {
+  if (otaChannelTouched) return;
+  const chSel = document.getElementById('ota-channel');
+  const wider = StackchanSettings.widerChannel(chSel.value, StackchanSettings.channelForFirmware(fwTag));
+  if (wider !== chSel.value) {
+    chSel.value = wider;
+    renderOtaReleases();
   }
 }
 

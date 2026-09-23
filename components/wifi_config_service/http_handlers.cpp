@@ -1088,11 +1088,23 @@ esp_err_t handle_ota_data_post(httpd_req_t* req)
 //
 // Requires STA to be up. When STA is down this returns 502 Bad Gateway;
 // the UI should fall back to a manual tag input.
+//
+// `?all=1` proxies versions-all.json (every release channel, with a
+// "channel" field per entry) instead of the stable-only versions.json.
 esp_err_t handle_release_versions_get(httpd_req_t* req)
 {
     if (!require_auth(req)) return ESP_OK;
+    bool all = false;
+    {
+        char query[32] = {};
+        char val[4] = {};
+        if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+            httpd_query_key_value(query, "all", val, sizeof(val)) == ESP_OK) {
+            all = (val[0] == '1');
+        }
+    }
     std::string body;
-    if (!release_ota::fetch_versions_json(body)) {
+    if (!release_ota::fetch_versions_json(body, all)) {
         return send_error(req, "502 Bad Gateway",
                           "versions.json fetch failed (STA down?)");
     }

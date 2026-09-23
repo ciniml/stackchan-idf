@@ -609,8 +609,111 @@
     }).join('\n');
   }
 
+  // --- Release channels --------------------------------------------------
+  // Mirror of script/release_channels.py (CI side). Tags follow SemVer
+  // pre-release grammar: vX.Y.Z[-(alpha|beta|rc).N]. CHANNELS is ordered
+  // from least to most stable; picking channel C shows C and everything
+  // after it. Add a stage in BOTH files.
+  const CHANNELS = ['alpha', 'beta', 'rc', 'stable'];
+  const CHANNEL_LABELS = { alpha: 'アルファ', beta: 'ベータ', rc: 'RC', stable: '正式' };
+  const CHANNEL_PREF_KEY = 'stackchan.releaseChannel';
+  const TAG_RE = /^v(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?$/;
+
+  // Returns {channel, core:[X,Y,Z], number} or null for a malformed tag.
+  function parseTag(tag) {
+    const m = TAG_RE.exec(tag || '');
+    if (!m) return null;
+    return { channel: m[4] || 'stable', core: [+m[1], +m[2], +m[3]], number: m[5] ? +m[5] : 0 };
+  }
+
+  // Channel of a release entry: the manifest's `channel` field when
+  // present (versions-all.json), otherwise derived from the tag; legacy
+  // entries without either are stable.
+  function channelOf(rel) {
+    if (rel && rel.channel && CHANNELS.includes(rel.channel)) return rel.channel;
+    const t = parseTag(rel && rel.tag);
+    return t ? t.channel : 'stable';
+  }
+
+  function visibleChannels(selected) {
+    const i = CHANNELS.indexOf(selected);
+    return CHANNELS.slice(i < 0 ? CHANNELS.length - 1 : i);
+  }
+
+  // Entries visible when the user picked `channel`, in the manifest's
+  // (newest-first) order.
+  function filterReleases(list, channel) {
+    const vis = visibleChannels(channel);
+    return (list || []).filter(r => vis.includes(channelOf(r)));
+  }
+
+  // Dropdown label: pre-releases carry a bracketed channel badge.
+  function releaseLabel(rel) {
+    const ch = channelOf(rel);
+    return ch === 'stable' ? rel.tag : `${rel.tag}  [${ch}]`;
+  }
+
+  function loadChannelPref() {
+    try {
+      const v = localStorage.getItem(CHANNEL_PREF_KEY);
+      return CHANNELS.includes(v) ? v : 'stable';
+    } catch (e) { return 'stable'; }
+  }
+  function saveChannelPref(channel) {
+    try { localStorage.setItem(CHANNEL_PREF_KEY, channel); } catch (e) { /* private mode */ }
+  }
+
+  // Fills a <select> with the channels (most stable first) and selects
+  // `current`.
+  function populateChannelSelect(sel, current) {
+    sel.innerHTML = '';
+    for (const ch of [...CHANNELS].reverse()) {
+      const o = document.createElement('option');
+      o.value = ch;
+      o.textContent = CHANNEL_LABELS[ch];
+      sel.appendChild(o);
+    }
+    sel.value = CHANNELS.includes(current) ? current : 'stable';
+  }
+
+  // The channel a running firmware belongs to, so a device on an alpha
+  // build defaults to seeing the next alpha. Stable / unknown → 'stable'.
+  function channelForFirmware(fwTag) {
+    const t = parseTag(fwTag);
+    return t ? t.channel : 'stable';
+  }
+
+  // Least stable of two channels (used to widen a default).
+  function widerChannel(a, b) {
+    const ia = CHANNELS.indexOf(a), ib = CHANNELS.indexOf(b);
+    if (ia < 0) return b;
+    if (ib < 0) return a;
+    return ia < ib ? a : b;
+  }
+
+  // Fetches the release manifest from the Pages site (same origin as the
+  // hosted pages). Prefers versions-all.json (every channel, has
+  // `channel`); falls back to versions.json (stable only) for a mirror
+  // that predates the channel split.
+  async function fetchReleaseManifest(base) {
+    const b = base === undefined ? './' : base;
+    for (const name of ['versions-all.json', 'versions.json']) {
+      try {
+        const r = await fetch(b + name, { cache: 'no-cache' });
+        if (!r.ok) continue;
+        const arr = await r.json();
+        if (Array.isArray(arr)) return arr;
+      } catch (e) { /* try next */ }
+    }
+    throw new Error('release manifest unavailable');
+  }
+
   window.StackchanSettings = { BOARDS, boardLabel, boardSlug, log, setupTabs, init,
                                setupDslEditor, SERVO_DEFAULTS, setupServoCalibration,
                                setupSecretFields, buildLtConfigJson, seedLtConfigForm,
-                               jttsPhrasesFromText, jttsPhrasesToText };
+                               jttsPhrasesFromText, jttsPhrasesToText,
+                               CHANNELS, CHANNEL_LABELS, parseTag, channelOf, visibleChannels,
+                               filterReleases, releaseLabel, loadChannelPref, saveChannelPref,
+                               populateChannelSelect, channelForFirmware, widerChannel,
+                               fetchReleaseManifest };
 })();

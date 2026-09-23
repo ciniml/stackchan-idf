@@ -67,6 +67,7 @@
 <fieldset>
   <legend>2. リリース選択 / Select release</legend>
   <div class="row">
+    <label>Channel: <select id="selChannel" title="正式版以外 (alpha / beta / rc) を表示する"></select></label>
     <label>Version: <select id="selVersion"><option>loading…</option></select></label>
     <button id="btnReload" title="Reload release list">↻</button>
   </div>
@@ -124,6 +125,8 @@
   Source: <a href="https://github.com/ciniml/stackchan-idf" target="_blank" rel="noopener">ciniml/stackchan-idf</a>.
 </p>
 
+<!-- Release-channel helpers shared with settings.html (deployed as a sibling by pages.yml). -->
+<script src="./settings_common.js"></script>
 <script type="module">
 import { ESPLoader, Transport } from './esptool.js';
 
@@ -251,29 +254,46 @@ async function extractZip(buffer) {
   return entries;
 }
 
-// --- Release list (from same-origin versions.json staged by CI) ---
+// --- Release list (from same-origin versions-all.json staged by CI) ---
+// Every channel is in the manifest; the Channel dropdown decides which
+// entries the Version dropdown shows (stable only by default). The choice
+// persists in localStorage and can be preset with ?channel=alpha so a
+// tester can be sent a link.
+const RC = StackchanSettings;
+let allReleases = [];
+{
+  const q = new URLSearchParams(location.search).get('channel');
+  RC.populateChannelSelect($('selChannel'), RC.CHANNELS.includes(q) ? q : RC.loadChannelPref());
+}
+
+function renderReleases() {
+  const sel = $('selVersion');
+  const channel = $('selChannel').value;
+  releases = RC.filterReleases(allReleases, channel);
+  if (!releases.length) {
+    sel.innerHTML = '<option value="">(no releases)</option>';
+    assetInfoEl.textContent = '';
+    return;
+  }
+  sel.innerHTML = '';
+  for (const rel of releases) {
+    const o = document.createElement('option');
+    o.value = rel.tag;
+    o.textContent = RC.releaseLabel(rel);
+    sel.appendChild(o);
+  }
+  sel.dispatchEvent(new Event('change'));
+}
+
 async function loadReleases() {
   const sel = $('selVersion');
   sel.innerHTML = '<option>loading…</option>';
   assetInfoEl.textContent = '';
   try {
-    const r = await fetch('./versions.json', { cache: 'no-cache' });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    releases = await r.json();
-    if (!releases.length) {
-      sel.innerHTML = '<option value="">(no releases)</option>';
-      return;
-    }
-    sel.innerHTML = '';
-    for (const rel of releases) {
-      const o = document.createElement('option');
-      o.value = rel.tag;
-      o.textContent = rel.tag;
-      sel.appendChild(o);
-    }
-    sel.dispatchEvent(new Event('change'));
+    allReleases = await RC.fetchReleaseManifest('./');
+    renderReleases();
   } catch (e) {
-    log('Failed to fetch versions.json: ' + e.message, 'warn');
+    log('Failed to fetch release list: ' + e.message, 'warn');
     sel.innerHTML = '<option value="">(error)</option>';
   }
 }
@@ -321,6 +341,10 @@ function showAssetSummary() {
 $('selVersion').addEventListener('change', showAssetSummary);
 $('selBoard').addEventListener('change', showAssetSummary);
 $('btnReload').addEventListener('click', loadReleases);
+$('selChannel').addEventListener('change', () => {
+  RC.saveChannelPref($('selChannel').value);
+  renderReleases();
+});
 
 // --- Connect / Disconnect ---
 $('btnConnect').addEventListener('click', async () => {

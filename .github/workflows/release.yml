@@ -5,12 +5,19 @@ name: Build and Release Firmware
 # dispatch is supported too for smoke-testing the CI without cutting a tag.
 #
 # Layout (2026-06 onwards):
-#   1. `build` job runs 4× in parallel (matrix on board), each shard does
-#      its own checkout + env init + ccache-warmed build + zip + artifact
-#      upload. Per-shard ccache cache survives across runs and pulls main
-#      branch hits even on a fresh tag, keeping compile time ~30 s after
-#      the first warm-up.
-#   2. `release` job (needs: build) downloads the 4 artifacts and attaches
+#   0. `plan` job derives the version / release channel / board list from
+#      the tag (script/release_channels.py). Channels (2026-09):
+#        vX.Y.Z-alpha.N → alpha  (cores3 + atoms3r only, GitHub pre-release)
+#        vX.Y.Z-beta.N  → beta   (all boards, pre-release)
+#        vX.Y.Z-rc.N    → rc     (all boards, pre-release)
+#        vX.Y.Z         → stable (all boards, becomes "Latest")
+#      A tag that doesn't match this grammar fails the run before building.
+#   1. `build` job runs once per board in parallel (matrix from `plan`),
+#      each shard does its own checkout + env init + ccache-warmed build +
+#      zip + artifact upload. Per-shard ccache cache survives across runs
+#      and pulls main branch hits even on a fresh tag, keeping compile time
+#      ~30 s after the first warm-up.
+#   2. `release` job (needs: build) downloads the artifacts and attaches
 #      them to a single GitHub Release in one go. Only runs on tag pushes.
 #
 # Previously the build was one sequential job to avoid paying the Docker
@@ -35,17 +42,52 @@ permissions:
   contents: write
 
 jobs:
+  plan:
+    name: Plan (version / channel / boards)
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      channel: ${{ steps.plan.outputs.channel }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
+      boards: ${{ steps.plan.outputs.boards }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: script
+      - id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+            # Refuse typos like v0.15.0-alpha1 before spending 4 build VMs.
+            python3 script/release_channels.py --tag "$VERSION" validate
+          else
+            VERSION="dev-${GITHUB_SHA::8}"
+          fi
+          CHANNEL=$(python3 script/release_channels.py --tag "$VERSION" channel)
+          PRERELEASE=$(python3 script/release_channels.py --tag "$VERSION" prerelease)
+          BOARDS=$(python3 script/release_channels.py --tag "$VERSION" boards)
+          {
+            echo "version=$VERSION"
+            echo "channel=$CHANNEL"
+            echo "prerelease=$PRERELEASE"
+            echo "boards=$BOARDS"
+          } >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION  channel: $CHANNEL  prerelease: $PRERELEASE  boards: $BOARDS"
+
   build:
     name: Build ${{ matrix.board }}
+    needs: plan
     runs-on: ubuntu-latest
     strategy:
       # Don't kill sibling shards on one board's failure — we still want
       # to know which other boards built OK so we can rerun only the bad
-      # one. The aggregating release job below depends on all four
+      # one. The aggregating release job below depends on all of the
       # artifacts though, so a partial success still won't publish.
       fail-fast: false
       matrix:
-        board: [cores3, atoms3r, atoms3, stopwatch]
+        board: ${{ fromJSON(needs.plan.outputs.boards) }}
     container:
       # Pinned to v5.5 to match local development. v6.0 dropped the built-in
       # `json` (cJSON) component in favour of an IDF component-manager
@@ -112,16 +154,11 @@ jobs:
         id: version
         shell: bash
         run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            VERSION=${GITHUB_REF#refs/tags/}
-          else
-            VERSION="dev-${GITHUB_SHA::8}"
-          fi
+          # Resolved once in the `plan` job so every shard and the release
+          # job agree on the string (it's also stamped into esp_app_desc).
+          VERSION="${{ needs.plan.outputs.version }}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Version: $VERSION"
-          BUILD_DATE=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          echo "build_date=$BUILD_DATE" >> "$GITHUB_OUTPUT"
-          echo "Build date: $BUILD_DATE"
+          echo "Version: $VERSION (channel ${{ needs.plan.outputs.channel }})"
 
       - name: Pin PROJECT_VER for the build
         # `tools/apply-m5-patches.sh` modifies the M5Unified submodule's
@@ -186,9 +223,9 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [plan, build]
     # Only attach to a Release on actual tag pushes — manual dispatch runs
-    # just build the artifacts and stop. The 4 matrix shards all upload
+    # just build the artifacts and stop. The matrix shards all upload
     # their own artifact; this job aggregates them.
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
@@ -197,10 +234,39 @@ jobs:
         id: version
         shell: bash
         run: |
-          VERSION=${GITHUB_REF#refs/tags/}
+          VERSION="${{ needs.plan.outputs.version }}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           BUILD_DATE=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
           echo "build_date=$BUILD_DATE" >> "$GITHUB_OUTPUT"
+          # Channel banner at the top of the release notes. Pre-releases are
+          # only offered by the Web Flasher / settings pages when the reader
+          # opts into that channel, so say so here too.
+          case "${{ needs.plan.outputs.channel }}" in
+            stable) BANNER="" ;;
+            *) BANNER="> **⚠ ${{ needs.plan.outputs.channel }} 版 (pre-release)** — 検証用のビルドです。対応ボードは下記のとおりで、正式版は [Latest](https://github.com/${GITHUB_REPOSITORY}/releases/latest) を参照してください。Web Flasher / 設定ページでは「チャンネル」で **${{ needs.plan.outputs.channel }}** を選ぶと表示されます。" ;;
+          esac
+          {
+            echo "banner<<EOF"
+            echo "$BANNER"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          # Board list for the notes (alpha ships a subset).
+          BOARDS_MD=$(echo '${{ needs.plan.outputs.boards }}' | python3 -c '
+          import json, sys
+          labels = {
+            "cores3":    "**CoreS3 + M5/Takao ベース** (`firmware-{v}-cores3.zip`、16 MB flash / Quad PSRAM)",
+            "atoms3r":   "**AtomS3R + Atomic ECHO BASE** \"アトムニャン\" (`firmware-{v}-atoms3r.zip`、8 MB flash / Octal PSRAM)",
+            "atoms3":    "**AtomS3 + Atomic ECHO BASE** slim プロファイル (`firmware-{v}-atoms3.zip`、8 MB flash / PSRAM なし)",
+            "stopwatch": "**M5 StopWatch (C152)** 円形 AMOLED 466×466 + ES8311 + BMI270 + RX8130CE + 振動モータ (`firmware-{v}-stopwatch.zip`、16 MB flash / Octal PSRAM)",
+          }
+          v = sys.argv[1]
+          print("\n".join("- " + labels[b].format(v=v) for b in json.load(sys.stdin)))
+          ' "$VERSION")
+          {
+            echo "boards_md<<EOF"
+            echo "$BOARDS_MD"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Download all firmware artifacts
         uses: actions/download-artifact@v4
@@ -211,23 +277,25 @@ jobs:
           merge-multiple: true
 
       - name: Create / update Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          files: |
-            firmware-${{ steps.version.outputs.version }}-cores3.zip
-            firmware-${{ steps.version.outputs.version }}-atoms3r.zip
-            firmware-${{ steps.version.outputs.version }}-atoms3.zip
-            firmware-${{ steps.version.outputs.version }}-stopwatch.zip
+          # Whatever boards this channel built (alpha = 2, others = 4).
+          files: firmware-${{ steps.version.outputs.version }}-*.zip
+          fail_on_unmatched_files: true
+          # Pre-release tags never become "Latest": the Releases page, the
+          # /releases/latest redirect and the pre-release badge all follow
+          # the channel derived from the tag.
+          prerelease: ${{ needs.plan.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.plan.outputs.prerelease != 'true' }}
           body: |
             # Stack-chan Firmware ${{ steps.version.outputs.version }}
 
+            ${{ steps.version.outputs.banner }}
+
             Stack-chan firmware (M5Stack CoreS3 / AtomS3R / AtomS3 / StopWatch 四方対応)。
 
-            ## 対応ボード
-            - **CoreS3 + M5/Takao ベース** (`firmware-${{ steps.version.outputs.version }}-cores3.zip`、16 MB flash / Quad PSRAM)
-            - **AtomS3R + Atomic ECHO BASE** "アトムニャン" (`firmware-${{ steps.version.outputs.version }}-atoms3r.zip`、8 MB flash / Octal PSRAM)
-            - **AtomS3 + Atomic ECHO BASE** slim プロファイル (`firmware-${{ steps.version.outputs.version }}-atoms3.zip`、8 MB flash / PSRAM なし)
-            - **M5 StopWatch (C152)** 円形 AMOLED 466×466 + ES8311 + BMI270 + RX8130CE + 振動モータ (`firmware-${{ steps.version.outputs.version }}-stopwatch.zip`、16 MB flash / Octal PSRAM)
+            ## 対応ボード (このリリースに含まれる firmware)
+            ${{ steps.version.outputs.boards_md }}
 
             PSRAM モードは bootloader レベルで確定するため、ボードごとに別 firmware です。
 

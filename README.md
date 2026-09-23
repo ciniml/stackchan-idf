@@ -78,6 +78,11 @@ Pages サイトに反映されます。
   - **Wi-Fi ローカル ファイル**: settings_wifi.html で `.bin` をアップロード
   - **Wi-Fi デバイス側 fetch** (v0.7.4+): `POST /api/ota/release {tag}` で device
     自身が GitHub Pages から自分のボード用バイナリをダウンロード → 適用 (STA 必要)
+  - **リリース チャンネル** (v0.15+): tag は `vX.Y.Z` (正式) / `vX.Y.Z-rc.N` /
+    `vX.Y.Z-beta.N` / `vX.Y.Z-alpha.N` (alpha は CoreS3 / AtomS3R のみ)。Web Flasher と
+    設定ページの「チャンネル」で表示範囲を選ぶ (既定は正式のみ)。`?channel=alpha` で
+    Web Flasher を開くとアルファが選べる。仕様は
+    [docs/adr-002-release-channels.md](docs/adr-002-release-channels.md)
 
 ## ハードウェア (CoreS3 + Stack-chan ベースの場合)
 
