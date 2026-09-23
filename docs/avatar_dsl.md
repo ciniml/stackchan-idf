@@ -442,6 +442,7 @@ end
 | 0x09 | `expr` | 0x13 | `brow_off_y` | 0x1D | `cheek_off_x` |
 | | | | | 0x1E | `cheek_off_y` |
 | | | | | 0x1F | `mouth_form` |
+| 0x20 | `accessories` | 0x21..0x28 | `accessory_0`..`accessory_7` | | |
 
 > 真実源: [components/avatar_vm/include/avatar_vm/opcodes.hpp](https://github.com/ciniml/stackchan-idf/blob/main/components/avatar_vm/include/avatar_vm/opcodes.hpp)
 > (C++ 側) / [tools/avatar_dsl/opcodes.js](https://github.com/ciniml/stackchan-idf/blob/main/tools/avatar_dsl/opcodes.js) (JS 側 ミラー)

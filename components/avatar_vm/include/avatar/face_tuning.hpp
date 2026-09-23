@@ -32,6 +32,12 @@ struct FaceTuning {
     bool cheeks_visible = false;
     float cheek_radius = 10.0f;
     float cheek_off_x = 0.0f, cheek_off_y = 0.0f;
+    // Accessories: eight generic on/off slots the face bytecode may consult
+    // (DSL: accessory_0 .. accessory_7, plus `accessories` as the raw mask).
+    // What each slot means is up to the preset; the bundled presets draw a
+    // red collar with a bell at the bottom of the screen for slot 0. Off by
+    // default so existing faces are unchanged.
+    std::uint8_t accessories = 0;
     std::uint16_t face_color = 0xFFFFu;      // RGB565 → Palette::primary
     std::uint16_t bg_color = 0x0000u;        // RGB565 → Palette::background
 };

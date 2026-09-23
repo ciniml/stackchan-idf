@@ -49,7 +49,8 @@ struct RunResult {
 };
 
 RunResult run_program(const std::vector<std::uint8_t>& buf,
-                      const stackchan::avatar::DrawContext& ctx = stackchan::avatar::DrawContext{})
+                      const stackchan::avatar::DrawContext& ctx = stackchan::avatar::DrawContext{},
+                      const stackchan::avatar::FaceTuning& tuning = stackchan::avatar::FaceTuning{})
 {
     RunResult rr;
     rr.decoded = decode(std::span<const std::uint8_t>(buf));
@@ -57,7 +58,6 @@ RunResult run_program(const std::vector<std::uint8_t>& buf,
         rr.ran = tl::unexpected(rr.decoded.error());
         return rr;
     }
-    stackchan::avatar::FaceTuning tuning;
     Vm vm;
     rr.ran = vm.run(*rr.decoded, rr.canvas, ctx, tuning);
     return rr;
@@ -216,6 +216,34 @@ int main()
         ctx.mouth_form_ratio = 1.0f;  // explicitly narrow, even though closed
         rr = run_program(buf, ctx);
         CHECK(rr.ran.has_value() && rr.canvas.ops.size() == 1 && rr.canvas.ops[0].a == 1);
+    }
+
+    // --- PushVar Accessories / Accessory_n read FaceTuning::accessories ---
+    {
+        // fillCircle(accessories, accessory_0, accessory_3, 1)
+        BytecodeBuilder b;
+        b.code(PUSH_VAR);
+        b.code(0x20); // Var::Accessories
+        b.code(PUSH_VAR);
+        b.code(0x21); // Var::Accessory0
+        b.code(PUSH_VAR);
+        b.code(0x24); // Var::Accessory3
+        b.code(PUSH_I8);
+        b.code(1);
+        b.code(FILL_CIRCLE);
+        b.code(RET);
+        b.add_fn(0, 0, 0);
+        stackchan::avatar::FaceTuning tuning;
+        tuning.accessories = 0x09; // slots 0 and 3
+        auto rr = run_program(b.build(0), stackchan::avatar::DrawContext{}, tuning);
+        CHECK(rr.ran.has_value());
+        CHECK(rr.canvas.ops.size() == 1 && rr.canvas.ops[0].a == 9 && rr.canvas.ops[0].b == 1 &&
+              rr.canvas.ops[0].c == 1);
+        // default tuning: everything off
+        auto rr0 = run_program(b.build(0));
+        CHECK(rr0.ran.has_value());
+        CHECK(rr0.canvas.ops.size() == 1 && rr0.canvas.ops[0].a == 0 && rr0.canvas.ops[0].b == 0 &&
+              rr0.canvas.ops[0].c == 0);
     }
 
     // --- function call with a parameter ----------------------------------
