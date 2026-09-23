@@ -230,43 +230,36 @@ jobs:
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
-      - name: Extract version
+      - uses: actions/checkout@v4
+        with:
+          # Full history + tags: release_notes.py finds the previous tag for
+          # the "変更点 (vX.Y.Z から)" range and falls back to the commit list
+          # when docs/releases/<tag>.md is absent.
+          fetch-depth: 0
+          sparse-checkout: |
+            script
+            docs/releases
+
+      - name: Extract version / write release notes
         id: version
         shell: bash
         run: |
           VERSION="${{ needs.plan.outputs.version }}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           BUILD_DATE=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          echo "build_date=$BUILD_DATE" >> "$GITHUB_OUTPUT"
-          # Channel banner at the top of the release notes. Pre-releases are
-          # only offered by the Web Flasher / settings pages when the reader
-          # opts into that channel, so say so here too.
-          case "${{ needs.plan.outputs.channel }}" in
-            stable) BANNER="" ;;
-            *) BANNER="> **⚠ ${{ needs.plan.outputs.channel }} 版 (pre-release)** — 検証用のビルドです。対応ボードは下記のとおりで、正式版は [Latest](https://github.com/${GITHUB_REPOSITORY}/releases/latest) を参照してください。Web Flasher / 設定ページでは「チャンネル」で **${{ needs.plan.outputs.channel }}** を選ぶと表示されます。" ;;
-          esac
-          {
-            echo "banner<<EOF"
-            echo "$BANNER"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-          # Board list for the notes (alpha ships a subset).
-          BOARDS_MD=$(echo '${{ needs.plan.outputs.boards }}' | python3 -c '
-          import json, sys
-          labels = {
-            "cores3":    "**CoreS3 + M5/Takao ベース** (`firmware-{v}-cores3.zip`、16 MB flash / Quad PSRAM)",
-            "atoms3r":   "**AtomS3R + Atomic ECHO BASE** \"アトムニャン\" (`firmware-{v}-atoms3r.zip`、8 MB flash / Octal PSRAM)",
-            "atoms3":    "**AtomS3 + Atomic ECHO BASE** slim プロファイル (`firmware-{v}-atoms3.zip`、8 MB flash / PSRAM なし)",
-            "stopwatch": "**M5 StopWatch (C152)** 円形 AMOLED 466×466 + ES8311 + BMI270 + RX8130CE + 振動モータ (`firmware-{v}-stopwatch.zip`、16 MB flash / Octal PSRAM)",
-          }
-          v = sys.argv[1]
-          print("\n".join("- " + labels[b].format(v=v) for b in json.load(sys.stdin)))
-          ' "$VERSION")
-          {
-            echo "boards_md<<EOF"
-            echo "$BOARDS_MD"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          # Body = hand-written docs/releases/<tag>.md (主要変更点) or the
+          # commit list since the previous tag, plus the per-channel banner,
+          # the boards actually built and the standing install notes. No
+          # fixed feature list and no internal jargon — see the script.
+          python3 script/release_notes.py \
+            --tag "$VERSION" \
+            --boards '${{ needs.plan.outputs.boards }}' \
+            --repo "$GITHUB_REPOSITORY" \
+            --commit "$GITHUB_SHA" \
+            --build-date "$BUILD_DATE" \
+            --idf v5.5.5 > release_notes.md
+          echo "=== release_notes.md ==="
+          cat release_notes.md
 
       - name: Download all firmware artifacts
         uses: actions/download-artifact@v4
@@ -287,66 +280,7 @@ jobs:
           # the channel derived from the tag.
           prerelease: ${{ needs.plan.outputs.prerelease == 'true' }}
           make_latest: ${{ needs.plan.outputs.prerelease != 'true' }}
-          body: |
-            # Stack-chan Firmware ${{ steps.version.outputs.version }}
-
-            ${{ steps.version.outputs.banner }}
-
-            Stack-chan firmware (M5Stack CoreS3 / AtomS3R / AtomS3 / StopWatch 四方対応)。
-
-            ## 対応ボード (このリリースに含まれる firmware)
-            ${{ steps.version.outputs.boards_md }}
-
-            PSRAM モードは bootloader レベルで確定するため、ボードごとに別 firmware です。
-
-            > **v0.12 以前から更新する場合**: v0.13.0 で flash の構成が変わったため、BLE / Wi-Fi の
-            > OTA では移行できません。一度 USB (Web Flasher または下記 esptool) で書き込んでください
-            > (保存済みの顔データ・HMM ボイス・sanoTTS の重みは消えます。Wi-Fi などの設定は
-            > 残ります)。詳細は [v0.13.0 のリリースノート](https://github.com/${{ github.repository }}/releases/tag/v0.13.0)。
-
-            ## Features
-            - **OpenAI Realtime API / Google Gemini Live API** どちらかでリアルタイム音声会話
-            - **BLE 経由の設定 / プロビジョニング** (X25519 + AES-256-GCM 暗号化セッション)
-            - **BLE OTA アップデート**(再ビルド不要で次回からはブラウザから直接書き込み)
-            - **jtts 音声合成**: フォルマント / 単位連結 (TD-PSOLA) / **HMM (hts_engine)** の
-              3 エンジン。HMM ボイス (.htsvoice) は設定ページからアップロード、または
-              「サーバーから取得」で配布ボイス (Mei, CC BY 3.0) を直接インストール (16 MB ボード)
-            - **jtts ボイス カスタマイズ**(声・フレーズ・エンジンを設定画面から変更)
-            - **タッチセンサによる barge-in / なでなで応答** (CoreS3 のみ)
-            - 第三者ライセンス / 帰属表示: <https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/licenses.html>
-
-            ## Installation
-
-            ### Web Flasher (Chrome / Edge)
-            <https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/>
-            にアクセスして本リリースを選択し、ボードを選んでから書き込んでください。
-
-            ### コマンドラインから初回書き込み
-            1. ボードに合った ZIP (`-cores3` / `-atoms3r` / `-atoms3` / `-stopwatch`) をダウンロード・展開
-            2. esptool で書き込み (結合イメージ。NVS 設定も初期化される):
-               ```bash
-               esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 460800 write_flash \
-                 0x0 firmware-${{ steps.version.outputs.version }}-<board>.bin
-               ```
-               設定を残したい場合は ZIP を展開して `flash_args` の一覧どおりに個別に書き込む:
-               ```bash
-               esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 460800 write_flash @flash_args
-               ```
-
-            ### OTA (v0.13.0 以降が動いている場合)
-            1. <https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/settings.html>
-            2. BLE 接続後「ファームウェア更新 (OTA)」でリリースを選ぶと、機体が Recovery で
-               再起動して Wi-Fi で取得します (約 30 秒)。Wi-Fi が無い場合は同梱の
-               `stackchan_idf.bin` を選ぶと BLE で転送します (4〜5 分)
-
-            ## Build Information
-            - **ESP-IDF**: v5.5.5
-            - **Target**: ESP32-S3
-            - **Build Date**: ${{ steps.version.outputs.build_date }}
-            - **Commit**: ${{ github.sha }}
-
-            ## Full Changelog
-            https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}
+          body_path: release_notes.md
           draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

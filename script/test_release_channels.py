@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_channels as rc  # noqa: E402
 import stage_pages_firmware as sp  # noqa: E402
+import release_notes as rn  # noqa: E402
 
 
 class ParseTagTest(unittest.TestCase):
@@ -150,6 +151,46 @@ class StageTest(unittest.TestCase):
         self.assertEqual(sp.board_of_asset("firmware-v0.14.3-stopwatch.zip"), "stopwatch")
         self.assertEqual(sp.board_of_asset("firmware-v0.15.0-alpha.1-atoms3r.zip"), "atoms3r")
         self.assertEqual(sp.board_of_asset("firmware-v0.7.0.zip"), "cores3")
+
+
+class ReleaseNotesTest(unittest.TestCase):
+    TAGS = ["v0.14.2", "v0.14.3", "v0.15.0-alpha.1", "v0.15.0-alpha.2", "v0.15.0-rc.1", "v0.15.0", "v0.15.1-beta.1"]
+
+    def test_previous_tag(self):
+        prev = lambda t: rn.previous_tag(rc.parse_tag(t), self.TAGS)
+        self.assertEqual(prev("v0.15.0-alpha.1"), "v0.14.3")      # 最初の pre-release は直前の stable から
+        self.assertEqual(prev("v0.15.0-alpha.2"), "v0.15.0-alpha.1")
+        self.assertEqual(prev("v0.15.0"), "v0.14.3")              # stable は直前の stable から (rc は飛ばす)
+        self.assertEqual(prev("v0.15.1-beta.1"), "v0.15.0")
+        self.assertEqual(prev("v0.14.2"), None)
+
+    def test_auto_changes_filter(self):
+        subjects = ["feat(x): a", "Merge pull request #7", "ci(release): b", "fix(y): c", "docs: d", "chore: e"]
+        kept = [s for s in subjects if not rn._SKIP_SUBJECT.match(s)]
+        self.assertEqual(kept, ["feat(x): a", "fix(y): c"])
+
+    def test_body(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / "docs" / "releases").mkdir(parents=True)
+            (repo / "docs" / "releases" / "v0.15.0-alpha.1.md").write_text("- 手書きの変更点\n")
+            import subprocess
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty",
+                            "-m", "feat: x"], cwd=repo, check=True)
+            subprocess.run(["git", "tag", "v0.14.3"], cwd=repo, check=True)
+            body = rn.build_body("v0.15.0-alpha.1", ["cores3", "atoms3r"], "o/r", "abc", "date", "v5.5.5", repo)
+            self.assertIn("## 変更点 (v0.14.3 から)", body)
+            self.assertIn("- 手書きの変更点", body)
+            self.assertIn("alpha 版 (pre-release)", body)
+            self.assertIn("firmware-v0.15.0-alpha.1-atoms3r.zip", body)
+            self.assertNotIn("stopwatch", body)
+            self.assertNotIn("ADR", body)
+            # 手書きが無ければコミット一覧
+            body2 = rn.build_body("v0.14.3", rc.ALL_BOARDS, "o/r", "abc", "date", "v5.5.5", repo)
+            self.assertIn("- feat: x", body2)
+            self.assertNotIn("pre-release", body2)
+            self.assertIn("stopwatch", body2)
 
 
 if __name__ == "__main__":

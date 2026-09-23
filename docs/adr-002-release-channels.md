@@ -142,7 +142,13 @@ Pages 容量 (1 GB) を守るため:
 - Step 10 のスモーク テストを `versions-all.json` (alpha) / `versions.json` (stable) で分ける
 - 「stable を出したら同 X.Y.Z のプレリリースが Pages から消えるのは正常」と明記
 
-### 3.5 ドキュメント
+### 3.5 リリースノート
+- 本文は `script/release_notes.py` が生成: 中心は `docs/releases/<tag>.md` (手書きの主要変更点、
+  利用者向けの言葉、ADR などの内部用語は書かない)。無ければ直前 tag からのコミット一覧で代用。
+  固定の機能一覧は載せない (README にある)。恒常的な案内 (ボード / 書き込み / OTA / v0.12 以前
+  からの更新) は短く末尾に
+
+### 3.6 ドキュメント
 - `README.md` の OTA 節に「チャンネル」の説明を 3 行
 - 本ファイル (ADR-002) が仕様の正本
 
