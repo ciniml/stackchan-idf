@@ -332,8 +332,8 @@ public:
     struct {
         std::atomic<bool> available{false};
         std::atomic<bool> enabled{true};
-        std::atomic<std::uint16_t> near_threshold{60};
-        std::atomic<std::uint16_t> far_threshold{35};
+        std::atomic<std::uint16_t> near_threshold{335};
+        std::atomic<std::uint16_t> far_threshold{240};
         std::atomic<std::uint16_t> hold_ms{200};
         std::atomic<std::uint8_t> cooldown_s{10};
         std::atomic<std::uint16_t> raw{0};
@@ -342,12 +342,12 @@ public:
         // Sensor front-end (調整モード): written by settings sinks / boot
         // seeding, applied to the chip by demo_loop (the only In_I2C user)
         // whenever sensor_dirty is set. Indices per Ltr553Proximity::PsConfig.
-        std::atomic<std::uint8_t> gain{0};
+        std::atomic<std::uint8_t> gain{2};
         std::atomic<std::uint8_t> led_freq{3};
         std::atomic<std::uint8_t> led_duty{3};
         std::atomic<std::uint8_t> led_current{4};
-        std::atomic<std::uint8_t> pulses{8};
-        std::atomic<std::uint8_t> meas_rate{2};
+        std::atomic<std::uint8_t> pulses{15};
+        std::atomic<std::uint8_t> meas_rate{0};
         std::atomic<std::uint16_t> offset{0};
         std::atomic<bool> sensor_dirty{true};
     } proximity;

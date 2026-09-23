@@ -2412,6 +2412,12 @@ StackchanSettings.proxLivePolling(async () => {
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return await r.json();
 });
+StackchanSettings.proxSetupApply(async (v) => {
+  const r = await fetch('/api/proximity', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                             body: JSON.stringify(v) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  log(`近接の閾値を適用 (near=${v.near} far=${v.far})`, 'ok');
+});
 StackchanSettings.proxSetupTuning(async (v) => {
   const r = await fetch('/api/proximity', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                                              body: JSON.stringify(v) });
@@ -2420,7 +2426,8 @@ StackchanSettings.proxSetupTuning(async (v) => {
 });
 // Seed the tuning form from the device once at load (status has only the thresholds).
 fetch('/api/proximity', { cache: 'no-store' }).then(r => r.ok ? r.json() : null)
-  .then(v => { if (v) StackchanSettings.proxFillTuning(v); }).catch(() => {});
+  .then(v => { if (v) { StackchanSettings.proxFillTuning(v); if (v.available) StackchanSettings.proxLiveStart(); } })
+  .catch(() => {});
 </script>
 </body>
 </html>

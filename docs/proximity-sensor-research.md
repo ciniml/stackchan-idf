@@ -105,7 +105,11 @@ LED 電流 / パルス数 / 測定周期は**固定** (既定 50 mA / 1 pulse / 
 ## 6. 実装メモ (2026-09-24)
 
 - 実機計測 (LED 100 mA / 8 パルス / ゲイン x16): 手なし 19〜28、20 cm 28〜32 (床と区別不能)、10 cm 38〜46、5 cm 75〜90、密着 1500〜2047。
-  50 mA / 1 パルスでは密着でしか反応しなかった (~150)。既定閾値 near=60 / far=35 / hold=200 ms / cooldown=10 s
+  50 mA / 1 パルスでは密着でしか反応しなかった (~150)。
+- **既定値 (2026-09-24、ユーザーが調整モードで決定)**: 前段 ゲイン x64 / 100 mA / 100 % / 60 kHz / 15 パルス / 50 ms、
+  閾値 near=335 / far=240 / hold=200 ms / cooldown=10 s (この前段で手なし ~200)。
+  UI の落とし穴として「far を上げても near が低いままだと near に丸められる」→ 機体側で near = max(near, far+1) に変更、
+  閾値の即時「適用」ボタンを追加、調整モードに「今の値をオフセットにする」(PS_OFFSET でクロストーク相殺) を追加
 - ドライバ `components/board/ltr553_proximity.{hpp,cpp}`: `PsConfig` (ゲイン x16/x32/x64、LED 周波数 / duty / 電流、パルス数、測定周期、PS_OFFSET) を `configure()` で
   standby → 書き込み → active。PART_ID 0x92 / MANUFAC_ID 0x05 で probe
 - 検出 + 反応は `main/demo_loop.cpp` (100 ms サンプル、ヒステリシス + hold、near で Happy + 近接フレーズ (`jtts_cfg.proximity_phrases`、無ければ吹き出し「なに？」)、far で表情復帰、会話中は反応しない、MCP `proximity` イベント)。

@@ -264,27 +264,28 @@ struct DeviceConfig {
     // active either way (it's a deliberate front→mid→back gesture).
     bool barge_in_enabled = false;
     // Proximity reaction (CoreS3 LTR-553 sensor; ignored on boards without
-    // it). PS counts are reflected IR, 0..2047: bring-up on 2026-09-24 with
-    // the fixed 100 mA / 8-pulse emitter gave ~20-28 with nothing in front,
-    // ~40 at 10 cm, ~80 at 5 cm and 1500+ at contact. near/far form a
-    // hysteresis pair (near > far); hold_ms is how long the reading must
-    // stay past a threshold before the state flips; cooldown_s throttles
-    // the reaction (expression + phrase). All apply immediately.
+    // it). PS counts are reflected IR, 0..2047. Defaults were tuned by hand
+    // on 2026-09-24 with the front-end below (x64 gain, 100 mA, 15 pulses,
+    // 50 ms): ~200 with nothing in front, so near/far sit above that.
+    // (For reference, x16 / 8 pulses gave ~25 idle, ~40 at 10 cm, ~80 at
+    // 5 cm, 1500+ at contact.) near/far form a hysteresis pair (near > far);
+    // hold_ms is how long the reading must stay past a threshold before the
+    // state flips; cooldown_s throttles the reaction. All apply immediately.
     bool proximity_enabled = true;
-    std::uint16_t proximity_near = 60;
-    std::uint16_t proximity_far = 35;
+    std::uint16_t proximity_near = 335;
+    std::uint16_t proximity_far = 240;
     std::uint16_t proximity_hold_ms = 200;
     std::uint8_t proximity_cooldown_s = 10;
     // Sensor front-end (調整モード). Indices into the chip's value tables —
     // see board::Ltr553Proximity::PsConfig for the meaning of each value.
-    // Defaults = the bring-up configuration the thresholds above were
-    // measured with (x16 gain, 100 mA, 100 %, 60 kHz, 8 pulses, 100 ms).
-    std::uint8_t proximity_gain = 0;         // 0 x16, 1 x32, 2 x64
+    // Defaults = the configuration the thresholds above were tuned with
+    // (x64 gain, 100 mA, 100 %, 60 kHz, 15 pulses, 50 ms).
+    std::uint8_t proximity_gain = 2;         // 0 x16, 1 x32, 2 x64
     std::uint8_t proximity_led_freq = 3;     // 0..7 = 30..100 kHz
     std::uint8_t proximity_led_duty = 3;     // 0..3 = 25..100 %
     std::uint8_t proximity_led_current = 4;  // 0..4 = 5/10/20/50/100 mA
-    std::uint8_t proximity_pulses = 8;       // 1..15
-    std::uint8_t proximity_meas_rate = 2;    // 0..6 = 50..2000 ms, 7 = 10 ms
+    std::uint8_t proximity_pulses = 15;      // 1..15
+    std::uint8_t proximity_meas_rate = 0;    // 0..6 = 50..2000 ms, 7 = 10 ms
     std::uint16_t proximity_offset = 0;      // 0..1023 subtracted from raw
     // Operator-configurable device name. Becomes the BLE advertising name AND
     // the source for the mDNS hostname (after RFC-1123 sanitization: lowercase

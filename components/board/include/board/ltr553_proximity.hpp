@@ -46,13 +46,14 @@ public:
     // Changing the emitter / gain rescales PS_DATA, so the near / far
     // thresholds have to be re-tuned afterwards — that's what the settings
     // page's 調整モード is for.
+    // Defaults mirror DeviceConfig::proximity_* (x64, 100 mA, 15 pulses, 50 ms).
     struct PsConfig {
-        std::uint8_t gain = 0;
+        std::uint8_t gain = 2;
         std::uint8_t led_freq = 3;
         std::uint8_t led_duty = 3;
         std::uint8_t led_current = 4;
-        std::uint8_t pulses = 8;
-        std::uint8_t meas_rate = 2;
+        std::uint8_t pulses = 15;
+        std::uint8_t meas_rate = 0;
         std::uint16_t offset = 0;
     };
     static constexpr std::uint8_t kGainMax = 2, kLedFreqMax = 7, kLedDutyMax = 3, kLedCurrentMax = 4,

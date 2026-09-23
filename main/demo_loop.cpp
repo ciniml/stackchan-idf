@@ -485,12 +485,15 @@ constexpr const char* kTag = "stackchan";
                 g_state->proximity.saturated.store(r->saturated, std::memory_order_relaxed);
                 auto& px = g_state->proximity;
                 const bool enabled = px.enabled.load(std::memory_order_relaxed);
-                const std::uint16_t near_th = px.near_threshold.load(std::memory_order_relaxed);
-                // far must sit below near; a misconfigured pair degrades to a
-                // single threshold rather than latching near forever.
-                const std::uint16_t far_th = std::min<std::uint16_t>(
-                    px.far_threshold.load(std::memory_order_relaxed),
-                    near_th > 0 ? static_cast<std::uint16_t>(near_th - 1) : 0);
+                // far must sit below near. If the user raised far past near
+                // (e.g. after a gain change lifted the idle reading), lift near
+                // along with it — raising far alone then still ends the near
+                // state, instead of far being silently clamped under near.
+                const std::uint16_t far_th = px.far_threshold.load(std::memory_order_relaxed);
+                const std::uint16_t near_th = std::max<std::uint16_t>(
+                    px.near_threshold.load(std::memory_order_relaxed),
+                    far_th < stackchan::board::Ltr553Proximity::kPsMax ? static_cast<std::uint16_t>(far_th + 1)
+                                                                        : far_th);
                 const std::uint32_t hold_ms = px.hold_ms.load(std::memory_order_relaxed);
 
                 const bool past = prox_near ? (raw < far_th) : (raw >= near_th);

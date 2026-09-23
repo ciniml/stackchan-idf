@@ -1359,6 +1359,12 @@ function proxTuningDecode(b) {
   return { gain: b[0], led_freq: b[1], led_duty: b[2], led_current: b[3], pulses: b[4], meas_rate: b[5],
            offset: b[6] | (b[7] << 8) };
 }
+StackchanSettings.proxSetupApply(async (v) => {
+  if (!chrProximity) throw new Error('未接続か、この firmware は近接センサー非対応です');
+  await writeEncrypted(chrProximity, proxEncode(v));
+  document.getElementById('prox-enabled').dataset.initial = JSON.stringify(v);
+  log(`近接の閾値を適用 (near=${v.near} far=${v.far} hold=${v.hold_ms}ms cooldown=${v.cooldown_s}s) — 即時反映`, 'ok');
+});
 StackchanSettings.proxSetupTuning(async (v) => {
   if (!chrProximityTuning) throw new Error('未接続か、この firmware は調整モード非対応です');
   await writeEncrypted(chrProximityTuning, new Uint8Array([v.gain, v.led_freq, v.led_duty, v.led_current,
@@ -1379,6 +1385,7 @@ function setBleUi(connected) {
   applyBtn.textContent = '保存 & 再起動';
   document.getElementById('btn-disconnect').disabled = !connected;
   document.getElementById('btn-connect').disabled = connected;
+  if (!connected) StackchanSettings.proxLiveStop();
   // Enable the jtts-say test button only while connected AND the chr
   // is present (older firmware won't expose it).
   const sayBtn = document.getElementById('btn-jtts-say');
@@ -1974,6 +1981,7 @@ function applyCapabilityGating() {
   {
     const cap = StackchanSettings.BOARDS[boardKind];
     StackchanSettings.proxSetVisible(!chrProximity ? false : (cap ? !!cap.proximity : true));
+    if (!chrProximity) StackchanSettings.proxLiveStop();
   }
   if (noBattery) {
     setVisible('label.toggle-label[for="bat-gauge-enabled"]', false);
@@ -2214,6 +2222,7 @@ async function performFetchOta(tag) {
   document.getElementById('btn-ota').disabled = true;
   document.getElementById('btn-apply').disabled = true;
   document.getElementById('btn-disconnect').disabled = true;
+  StackchanSettings.proxLiveStop();
   try {
     log(`機体に ${tag} の取得を指示します…`);
     await writeEncrypted(chrOtaCtrl, strToBytes(JSON.stringify({op: 'fetch', tag})));
@@ -2270,6 +2279,7 @@ async function performOta(file) {
   document.getElementById('btn-ota').disabled = true;
   document.getElementById('btn-apply').disabled = true;
   document.getElementById('btn-disconnect').disabled = true;
+  StackchanSettings.proxLiveStop();
   try {
     const total = file.size;
     log(`OTA 開始: ${file.name} (${fmtBytes(total)})`);
@@ -3022,6 +3032,7 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
         if (v) {
           StackchanSettings.proxFillForm(v);
           StackchanSettings.proxShowLive(v);
+          if (v.available) StackchanSettings.proxLiveStart();
           document.getElementById('prox-enabled').dataset.initial = JSON.stringify(StackchanSettings.proxFormValues());
           log(`近接: ${v.available ? (v.enabled ? '有効' : '無効') : 'センサーなし'} (near=${v.near} far=${v.far} hold=${v.hold_ms}ms cooldown=${v.cooldown_s}s)`);
         }
