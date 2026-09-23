@@ -20,6 +20,8 @@ enum class Error {
     ExpanderWrite,
     TouchProbe,
     TouchRead,
+    // LTR-553 proximity sensor (CoreS3 mainboard) ID mismatch / bus error at probe.
+    ProximityProbe,
     // espressif/led_strip RMT driver init / blit failure (NekomimiLedStrip).
     // Distinct from ExpanderWrite so callers can tell which strip backend
     // failed when both PY32 and RMT strips coexist.
@@ -83,6 +85,9 @@ struct BoardProfile {
     // GC0308 DVP camera wired (CoreS3 mainboard on the M5 base). The
     // CONFIG_STACKCHAN_CAMERA_ENABLED compile gate applies on top.
     bool has_camera = false;
+    // LTR-553ALS proximity sensor on the CoreS3 mainboard (M5 / Takao base).
+    // Actual availability is decided by the boot-time probe (Board::proximity_sensor()).
+    bool has_proximity = false;
 };
 
 // The static profile for a detected board. Pure function of the enum — the
@@ -99,6 +104,7 @@ struct ServoBusConfig {
 };
 
 class Si12tTouch;
+class Ltr553Proximity;
 class LedStrip;
 
 class Board {
@@ -128,6 +134,10 @@ public:
     // boot (e.g. older base hardware without the sensor); callers should
     // null-check before using.
     Si12tTouch* touch_sensor() noexcept;
+
+    // CoreS3 mainboard LTR-553 proximity sensor. nullptr when the chip
+    // didn't probe at boot (other boards, or a bus fault).
+    Ltr553Proximity* proximity_sensor() noexcept;
 
     // NeoPixel strip on the M5 base back panel (12 × WS2812 driven by the
     // PY32 over I2C). nullptr on the Takao base, which has no strip. Callers

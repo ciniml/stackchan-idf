@@ -20,11 +20,12 @@
   // board is added. `slug` is the per-board firmware ZIP key in
   // versions.json (release_ota uses the same strings device-side).
   const BOARDS = {
-    0: { label: 'CoreS3 + M5 base',                 slug: 'cores3',    servo: true,  battery: true  },
-    1: { label: 'CoreS3 + Takao base',              slug: 'cores3',    servo: true,  battery: false },
-    2: { label: 'AtomS3R + Atomic ECHO BASE',       slug: 'atoms3r',   servo: false, battery: false },
-    3: { label: 'AtomS3 + Atomic ECHO BASE (slim)', slug: 'atoms3',    servo: false, battery: false },
-    4: { label: 'M5 StopWatch (C152)',              slug: 'stopwatch', servo: false, battery: true  },
+    // proximity: LTR-553 on the CoreS3 mainboard (both CoreS3 bases).
+    0: { label: 'CoreS3 + M5 base',                 slug: 'cores3',    servo: true,  battery: true,  proximity: true  },
+    1: { label: 'CoreS3 + Takao base',              slug: 'cores3',    servo: true,  battery: false, proximity: true  },
+    2: { label: 'AtomS3R + Atomic ECHO BASE',       slug: 'atoms3r',   servo: false, battery: false, proximity: false },
+    3: { label: 'AtomS3 + Atomic ECHO BASE (slim)', slug: 'atoms3',    servo: false, battery: false, proximity: false },
+    4: { label: 'M5 StopWatch (C152)',              slug: 'stopwatch', servo: false, battery: true,  proximity: false },
   };
 
   function boardLabel(kind) {
@@ -609,6 +610,177 @@
     }).join('\n');
   }
 
+  // --- Proximity sensor UI (shared by both settings pages) ----------------
+  // The section's DOM ids are identical on the BLE and Wi-Fi pages; the
+  // transport supplies read/write functions. PS counts: ~20-30 nothing in
+  // front, ~40 at 10 cm, ~80 at 5 cm, 1500+ at contact (fixed emitter).
+  const PROX_METER_MAX = 400;
+  function proxFormValues() {
+    const num = (id, max) => {
+      const n = Number(document.getElementById(id).value);
+      return Number.isFinite(n) ? Math.max(0, Math.min(max, Math.round(n))) : 0;
+    };
+    return {
+      enabled: document.getElementById('prox-enabled').checked,
+      near: num('prox-near', 2047), far: num('prox-far', 2047),
+      hold_ms: num('prox-hold', 5000), cooldown_s: num('prox-cooldown', 120),
+    };
+  }
+  function proxFillForm(v) {
+    if (!v) return;
+    if (typeof v.enabled === 'boolean') document.getElementById('prox-enabled').checked = v.enabled;
+    if (typeof v.near === 'number') document.getElementById('prox-near').value = v.near;
+    if (typeof v.far === 'number') document.getElementById('prox-far').value = v.far;
+    if (typeof v.hold_ms === 'number') document.getElementById('prox-hold').value = v.hold_ms;
+    if (typeof v.cooldown_s === 'number') document.getElementById('prox-cooldown').value = v.cooldown_s;
+  }
+  // Live reading → meter + text. `st` = {raw, near_now, available}.
+  function proxShowLive(st) {
+    const raw = document.getElementById('prox-raw');
+    const meter = document.getElementById('prox-meter');
+    const state = document.getElementById('prox-state');
+    if (!raw || !meter || !state) return;
+    if (!st || !st.available) {
+      raw.textContent = '—'; meter.value = 0; state.textContent = 'センサーなし';
+      return;
+    }
+    raw.textContent = String(st.raw);
+    meter.value = Math.min(PROX_METER_MAX, st.raw);
+    state.textContent = (st.near_now ? '近い' : '遠い') + (st.saturated ? ' (飽和)' : '');
+    state.className = st.near_now ? 'prox-near' : '';
+  }
+  // 「今の値を near にする」: near = current reading, far = 60 % of it (but
+  // never below the idle floor guess of 30).
+  function proxAdoptCurrent() {
+    const raw = Number(document.getElementById('prox-raw').textContent);
+    if (!Number.isFinite(raw) || raw <= 0) return false;
+    const near = Math.max(1, Math.round(raw));
+    document.getElementById('prox-near').value = near;
+    document.getElementById('prox-far').value = Math.max(Math.min(30, near - 1), Math.round(near * 0.6));
+    return true;
+  }
+  // Polling helper: start(fn) calls fn every 700 ms while the checkbox
+  // #prox-live is on; stop() clears it. fn returns a promise of a status.
+  let proxTimer = null;
+  function proxLivePolling(fetchStatus) {
+    const cb = document.getElementById('prox-live');
+    if (!cb) return;
+    const stop = () => { if (proxTimer) { clearInterval(proxTimer); proxTimer = null; } };
+    const start = () => {
+      stop();
+      proxTimer = setInterval(async () => {
+        if (document.hidden) return;
+        try { proxShowLive(await fetchStatus()); } catch (e) { /* transport hiccup */ }
+      }, 700);
+    };
+    cb.addEventListener('change', () => (cb.checked ? start() : stop()));
+    document.addEventListener('visibilitychange', () => { if (document.hidden) { stop(); cb.checked = false; } });
+  }
+  // The markup, identical on both pages (inserted by each page at load).
+  const PROX_SECTION_HTML = `
+      <h2 class="section-title" id="prox-section-title">近接センサー (CoreS3)</h2>
+      <label class="toggle-label" for="prox-enabled">
+        <input type="checkbox" id="prox-enabled">
+        <span>手を近づけると反応する</span>
+      </label>
+      <p class="hint">画面上辺のセンサーに手を近づけると、うれしい顔になって近接フレーズ (音声タブで設定、無ければ吹き出しのみ) を話します。会話中は反応しません。値は反射光量 (0〜2047) で、およそ 5 cm で 80、10 cm で 40、何もないとき 20〜30 が目安です。すべて即時反映。</p>
+      <div class="prox-live-row">
+        <label class="toggle-label" for="prox-live" style="display:inline-flex"><input type="checkbox" id="prox-live"><span>現在値を表示</span></label>
+        <meter id="prox-meter" min="0" max="${PROX_METER_MAX}" value="0"></meter>
+        <span id="prox-raw">—</span> <span id="prox-state"></span>
+        <button type="button" id="prox-adopt" class="secondary">今の値を near にする</button>
+      </div>
+      <div class="prox-grid">
+        <label for="prox-near">near (以上で近い)</label><input type="number" id="prox-near" min="0" max="2047">
+        <label for="prox-far">far (未満で遠い)</label><input type="number" id="prox-far" min="0" max="2047">
+        <label for="prox-hold">判定の連続時間 [ms]</label><input type="number" id="prox-hold" min="0" max="5000">
+        <label for="prox-cooldown">反応の間隔 [s]</label><input type="number" id="prox-cooldown" min="0" max="120">
+      </div>
+      <p class="hint">far は near より小さくしてください (近い→遠いのちらつき防止)。反応が敏感すぎるなら near を上げるか連続時間を伸ばします。</p>
+      <details id="prox-tuning">
+        <summary>センサー調整モード (受光ゲイン / LED / 測定周期 / オフセット)</summary>
+        <p class="hint">LTR-553 の前段を変えると生の値のスケールが変わります。「現在値を表示」を有効にしたまま値を変えて「センサーに適用」を押し、望む距離で十分な差が出る組み合わせを探してから near / far を決め直してください。到達距離を伸ばすなら ゲイン↑・電流↑・パルス数↑ の順に効きます (飽和したら「飽和」と出ます)。オフセットは何もない時の値 (クロストーク) を引き算します。</p>
+        <div class="prox-grid">
+          <label for="prox-gain">受光ゲイン</label>
+          <select id="prox-gain"><option value="0">x16</option><option value="1">x32</option><option value="2">x64</option></select>
+          <label for="prox-led-current">LED 電流</label>
+          <select id="prox-led-current"><option value="0">5 mA</option><option value="1">10 mA</option><option value="2">20 mA</option><option value="3">50 mA</option><option value="4">100 mA</option></select>
+          <label for="prox-led-duty">LED duty</label>
+          <select id="prox-led-duty"><option value="0">25 %</option><option value="1">50 %</option><option value="2">75 %</option><option value="3">100 %</option></select>
+          <label for="prox-led-freq">LED パルス周波数</label>
+          <select id="prox-led-freq"><option value="0">30 kHz</option><option value="1">40 kHz</option><option value="2">50 kHz</option><option value="3">60 kHz</option><option value="4">70 kHz</option><option value="5">80 kHz</option><option value="6">90 kHz</option><option value="7">100 kHz</option></select>
+          <label for="prox-pulses">パルス数 (1〜15)</label><input type="number" id="prox-pulses" min="1" max="15">
+          <label for="prox-meas-rate">測定周期</label>
+          <select id="prox-meas-rate"><option value="7">10 ms</option><option value="0">50 ms</option><option value="1">70 ms</option><option value="2">100 ms</option><option value="3">200 ms</option><option value="4">500 ms</option><option value="5">1000 ms</option><option value="6">2000 ms</option></select>
+          <label for="prox-offset">オフセット (0〜1023)</label><input type="number" id="prox-offset" min="0" max="1023">
+        </div>
+        <div class="prox-live-row">
+          <button type="button" id="prox-tune-apply">センサーに適用</button>
+          <button type="button" id="prox-tune-default" class="secondary">既定値に戻す</button>
+          <span id="prox-tune-msg" class="hint"></span>
+        </div>
+      </details>`;
+  function proxInsertSection(afterEl) {
+    if (!afterEl || document.getElementById('prox-section-title')) return;
+    if (!document.getElementById('prox-style')) {
+      const st = document.createElement('style');
+      st.id = 'prox-style';
+      st.textContent = `
+        .prox-live-row { display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap; margin:0.4rem 0; }
+        .prox-live-row meter { width:10rem; height:1rem; }
+        #prox-raw { font-family:monospace; min-width:3.5em; text-align:right; }
+        #prox-state.prox-near { color:#0a7; font-weight:bold; }
+        .prox-grid { display:grid; grid-template-columns:auto 7rem; gap:0.3rem 0.8rem; align-items:center; max-width:24rem; margin:0.4rem 0; }
+        .prox-grid input { width:100%; box-sizing:border-box; }`;
+      document.head.appendChild(st);
+    }
+    const wrap = document.createElement('div');
+    wrap.id = 'prox-section';
+    wrap.innerHTML = PROX_SECTION_HTML;
+    afterEl.insertAdjacentElement('afterend', wrap);
+    const adopt = document.getElementById('prox-adopt');
+    if (adopt) adopt.addEventListener('click', () => { if (!proxAdoptCurrent()) alert('現在値が無いので「現在値を表示」を先に有効にしてください'); });
+  }
+  const PROX_TUNING_DEFAULT = { gain: 0, led_freq: 3, led_duty: 3, led_current: 4, pulses: 8, meas_rate: 2, offset: 0 };
+  function proxTuningValues() {
+    const num = (id, max, min = 0) => {
+      const n = Number(document.getElementById(id).value);
+      return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.round(n))) : min;
+    };
+    return {
+      gain: num('prox-gain', 2), led_freq: num('prox-led-freq', 7), led_duty: num('prox-led-duty', 3),
+      led_current: num('prox-led-current', 4), pulses: num('prox-pulses', 15, 1),
+      meas_rate: num('prox-meas-rate', 7), offset: num('prox-offset', 1023),
+    };
+  }
+  function proxFillTuning(v) {
+    if (!v) return;
+    for (const [k, id] of [['gain','prox-gain'],['led_freq','prox-led-freq'],['led_duty','prox-led-duty'],
+                           ['led_current','prox-led-current'],['pulses','prox-pulses'],
+                           ['meas_rate','prox-meas-rate'],['offset','prox-offset']]) {
+      if (typeof v[k] === 'number') document.getElementById(id).value = String(v[k]);
+    }
+  }
+  // apply(values) → Promise; the page supplies the transport.
+  function proxSetupTuning(apply) {
+    const msg = document.getElementById('prox-tune-msg');
+    const btn = document.getElementById('prox-tune-apply');
+    const dflt = document.getElementById('prox-tune-default');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      msg.textContent = '適用中…';
+      try { await apply(proxTuningValues()); msg.textContent = '適用しました — near / far を決め直してください'; }
+      catch (e) { msg.textContent = '失敗: ' + e.message; }
+    });
+    dflt.addEventListener('click', () => { proxFillTuning(PROX_TUNING_DEFAULT); msg.textContent = '既定値を入れました (未適用)'; });
+  }
+
+  function proxSetVisible(visible) {
+    const el = document.getElementById('prox-section');
+    if (el) el.style.display = visible ? '' : 'none';
+    if (!visible && proxTimer) { clearInterval(proxTimer); proxTimer = null; }
+  }
+
   // --- Release channels --------------------------------------------------
   // Mirror of script/release_channels.py (CI side). Tags follow SemVer
   // pre-release grammar: vX.Y.Z[-(alpha|beta|rc).N]. CHANNELS is ordered
@@ -715,5 +887,8 @@
                                CHANNELS, CHANNEL_LABELS, parseTag, channelOf, visibleChannels,
                                filterReleases, releaseLabel, loadChannelPref, saveChannelPref,
                                populateChannelSelect, channelForFirmware, widerChannel,
-                               fetchReleaseManifest };
+                               fetchReleaseManifest,
+                               proxFormValues, proxFillForm, proxShowLive, proxLivePolling,
+                               proxInsertSection, proxSetVisible,
+                               proxTuningValues, proxFillTuning, proxSetupTuning };
 })();

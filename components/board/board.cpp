@@ -16,6 +16,7 @@
 #include "board/led_strip.hpp"
 #include "board/nekomimi_led_strip.hpp"
 #include "board/si12t_touch.hpp"
+#include "board/ltr553_proximity.hpp"
 
 namespace stackchan::board {
 
@@ -29,8 +30,10 @@ constexpr std::uint8_t kM5LedCount = 12;
 class Board::Impl {
 public:
     Impl(BoardKind kind, std::optional<Py32Expander>&& expander,
-         std::optional<Si12tTouch>&& touch) noexcept
-        : kind_{kind}, expander_{std::move(expander)}, touch_{std::move(touch)}
+         std::optional<Si12tTouch>&& touch,
+         std::optional<Ltr553Proximity>&& proximity = std::nullopt) noexcept
+        : kind_{kind}, expander_{std::move(expander)}, touch_{std::move(touch)},
+          proximity_{std::move(proximity)}
     {
         // Stack-chan ネコミミ NeoPixel (18 LEDs = 9 per ear) — present on
         // M5/Takao/AtomNyan bases, but the data line varies: CoreS3 uses
@@ -53,12 +56,14 @@ public:
     BoardKind kind() const noexcept { return kind_; }
     std::optional<Py32Expander>& expander() noexcept { return expander_; }
     Si12tTouch* touch() noexcept { return touch_ ? &*touch_ : nullptr; }
+    Ltr553Proximity* proximity() noexcept { return proximity_ ? &*proximity_ : nullptr; }
     LedStrip* led() noexcept { return led_.get(); }
 
 private:
     BoardKind kind_;
     std::optional<Py32Expander> expander_;
     std::optional<Si12tTouch> touch_;
+    std::optional<Ltr553Proximity> proximity_;
     // Polymorphic strip — owned via unique_ptr because Py32LedStrip and
     // NekomimiLedStrip have different sizes / move semantics. nullptr on
     // hardware without any strip (AtomNyan).
@@ -190,8 +195,17 @@ tl::expected<Board, Error> Board::begin()
         ESP_LOGW(kTag, "Si12T touch sensor not found at 0x%02X", Si12tTouch::kAddress);
     }
 
+    // CoreS3 mainboard proximity sensor (LTR-553 at 0x23). Present on every
+    // CoreS3 regardless of base; warn and carry on if it doesn't answer.
+    std::optional<Ltr553Proximity> proximity;
+    if (auto p = Ltr553Proximity::probe(); p) {
+        proximity.emplace(std::move(*p));
+    } else {
+        ESP_LOGW(kTag, "LTR-553 proximity sensor not found at 0x%02X", Ltr553Proximity::kAddress);
+    }
+
     Board board;
-    board.impl_ = std::make_shared<Impl>(kind, std::move(expander), std::move(touch));
+    board.impl_ = std::make_shared<Impl>(kind, std::move(expander), std::move(touch), std::move(proximity));
     // LED strip init. Earlier attempts left the strip dark because the host-
     // side data format was wrong (3-byte GRB per LED). The PY32 firmware
     // actually expects 2-byte RGB565 little-endian per LED — see
@@ -228,9 +242,11 @@ BoardProfile profile_for(BoardKind kind) noexcept
     case BoardKind::M5Base:
         p.has_servo_bus = true;
         p.has_camera = true; // GC0308 on the CoreS3 mainboard
+        p.has_proximity = true; // LTR-553 on the CoreS3 mainboard
         break;
     case BoardKind::TakaoBase:
         p.has_servo_bus = true;
+        p.has_proximity = true;
         // CoreS3 SE (the usual Takao host) has no camera; keep it off until
         // a camera-equipped Takao build shows up.
         break;
@@ -298,6 +314,11 @@ tl::expected<void, Error> Board::set_servo_power(bool on)
 Si12tTouch* Board::touch_sensor() noexcept
 {
     return impl_->touch();
+}
+
+Ltr553Proximity* Board::proximity_sensor() noexcept
+{
+    return impl_->proximity();
 }
 
 LedStrip* Board::led_strip() noexcept

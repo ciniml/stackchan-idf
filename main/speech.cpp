@@ -232,11 +232,13 @@ void Speech::configure(const std::string& json)
     //   - an object  {"text":"こんにちは","reading":"こんにちわ"}
     // `reading` defaults to `text` when omitted, and vice-versa, so a phrase
     // can supply either field alone.
-    const cJSON* phrases = cJSON_GetObjectItemCaseSensitive(root, "phrases");
-    if (cJSON_IsArray(phrases)) {
+    // Same element format for the proximity phrase list (spoken when a hand
+    // comes close to the CoreS3 proximity sensor). Empty = balloon only.
+    const auto parse_phrases = [](const cJSON* arr, std::vector<Phrase>& out) {
+        if (!cJSON_IsArray(arr)) return false;
         std::vector<Phrase> parsed;
         const cJSON* item = nullptr;
-        cJSON_ArrayForEach(item, phrases) {
+        cJSON_ArrayForEach(item, arr) {
             const char* display = nullptr;
             const char* reading = nullptr;
             if (cJSON_IsString(item) && item->valuestring != nullptr) {
@@ -254,13 +256,33 @@ void Speech::configure(const std::string& json)
             if (kana.empty()) continue;          // nothing speakable → drop
             parsed.push_back({std::string(display), std::move(kana)});
         }
-        if (!parsed.empty()) phrases_ = std::move(parsed);
-    }
+        if (parsed.empty()) return false;
+        out = std::move(parsed);
+        return true;
+    };
+    parse_phrases(cJSON_GetObjectItemCaseSensitive(root, "phrases"), phrases_);
+    proximity_phrases_.clear();
+    parse_phrases(cJSON_GetObjectItemCaseSensitive(root, "proximity_phrases"), proximity_phrases_);
     cJSON_Delete(root);
     ESP_LOGI(kTag, "jtts config: voice=%s f0=%.0f mora=%.0fms phrases=%zu order=%s",
              opts_.voice == jtts::Voice::Female ? "female" : "male",
              opts_.f0_hz, opts_.mora_ms, phrases_.size(),
              phrase_order_ == PhraseOrder::Sequential ? "sequential" : "random");
+}
+
+std::string Speech::speak_proximity(std::uint32_t seed)
+{
+    if (!initialised_) {
+        configure("");
+    }
+    if (proximity_phrases_.empty()) {
+        return {};
+    }
+    const Phrase& phrase = proximity_phrases_[seed % proximity_phrases_.size()];
+    if (!say_impl(phrase.reading, &phrase.display) && subtitle_sink_) {
+        subtitle_sink_(phrase.display, 0);
+    }
+    return phrase.display;
 }
 
 std::string Speech::babble(std::uint32_t seed)

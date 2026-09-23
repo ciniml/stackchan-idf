@@ -496,6 +496,11 @@ void set_sanotts_status_getter(SanoTtsStatusGetter getter)
     gatt::set_sanotts_status_getter(getter);
 }
 
+void set_proximity_status_getter(ProximityStatusGetter getter)
+{
+    gatt::set_proximity_status_getter(getter);
+}
+
 void set_sanotts_command_sink(SanoTtsCommandSink sink)
 {
     gatt::set_sanotts_command_sink(sink);

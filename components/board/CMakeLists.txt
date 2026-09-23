@@ -6,6 +6,7 @@ set(_board_srcs
     "led_strip.cpp"
     "nekomimi_led_strip.cpp"
     "si12t_touch.cpp"
+    "ltr553_proximity.cpp"
 )
 
 # esp32-camera is pulled in only when STACKCHAN_CAMERA_ENABLED=y. Listing it

@@ -62,6 +62,12 @@ public:
     // synthesised the whole text is shown once, so the caller need not show it).
     std::string babble(std::uint32_t seed);
 
+    // Speak one of the proximity phrases (jtts config "proximity_phrases",
+    // same format as "phrases"; random pick by seed). Balloon is driven the
+    // same way as babble(). Returns the display text, or an empty string when
+    // no proximity phrase is configured (caller shows its own balloon then).
+    std::string speak_proximity(std::uint32_t seed);
+
     // Speak an arbitrary kana string (発声内容; jtts has no kanji dictionary).
     // Same synthesis + lip-sync path as babble() so the avatar's mouth moves.
     // Non-blocking: synthesis runs in its own task (sanoTTS takes 1-2 s per
@@ -152,6 +158,7 @@ private:
     // preset, ~8 short Japanese phrases).
     jtts::Options opts_;
     std::vector<Phrase> phrases_;
+    std::vector<Phrase> proximity_phrases_;
     PhraseOrder phrase_order_{PhraseOrder::Random};
     std::size_t next_phrase_{0}; // Sequential: index of the phrase babble() speaks next
     bool initialised_{false};

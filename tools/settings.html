@@ -820,6 +820,9 @@
         <option value="random">ランダム (毎回どれかを選ぶ)</option>
         <option value="sequential">連続 (上の行から順に、最後まで行ったら先頭へ)</option>
       </select>
+      <label for="jtts-prox-phrases" style="margin-top:0.75rem">近接時の発話フレーズ (一行 1 つ、CoreS3)</label>
+      <p class="hint" style="margin:0.2rem 0">手を近づけたときに 1 つ選んで話します (形式は上と同じ)。空なら吹き出しだけ出します。</p>
+      <textarea id="jtts-prox-phrases" rows="3" placeholder="なあに？ | なあに&#10;ちかいよ&#10;..."></textarea>
     </div>
 
     <div id="audio-section">
@@ -957,6 +960,7 @@
         <span>頭タッチで会話を中断する (バージイン)</span>
       </label>
       <p class="hint">応答再生中にアバター画面 (頭) をタップで AI 応答を中断します。タッチ センサが敏感で誤動作しやすいので、初期値はオフです。なでなで (前→中→後の連続タッチ) は本トグルとは独立で常に有効です。保存後の再起動で反映されます。</p>
+      <div id="prox-anchor"></div>
     </div>
   </section><!-- /tab-panel "chat" -->
 
@@ -1228,6 +1232,12 @@ const CHR_OPERATION_MODE = 'e3f0a025-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // on, a screen tap mid-reply interrupts the AI; off by default because
 // the capacitive pad fires false positives from incidental contact.
 const CHR_BARGE_IN_ENABLED = 'e3f0a026-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+// Proximity (CoreS3 LTR-553): R = 12 B [en u8, near u16, far u16, hold u16,
+// cooldown u8, raw u16, near_now u8, available u8], W = first 8 B. Immediate.
+const CHR_PROXIMITY = 'e3f0a030-7b1c-4d2a-9e6f-2c5a8d4b1f00';
+// ProximityTuning: R = 11 B [gain, led_freq, led_duty, led_current, pulses,
+// meas_rate, offset u16, raw u16, saturated], W = first 8 B. Immediate.
+const CHR_PROXIMITY_TUNING = 'e3f0a031-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // DeviceName (R/W) — operator-set BLE advertising name + mDNS hostname seed.
 const CHR_DEVICE_NAME = 'e3f0a027-7b1c-4d2a-9e6f-2c5a8d4b1f00';
 // AuthPassword (write-only) — set/clears the BLE+HTTP auth gate. Empty body
@@ -1313,7 +1323,7 @@ const DIS_CHRS = {
 
 // --- State ---
 let bleDevice = null, bleServer = null, svc = null;
-let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJttsIdleEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrStartupArp = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null, chrMicLipGain = null, chrLedMouthSync = null, chrLipSyncMode = null, chrMicLipAgc = null, chrSpeakerVolume = null, chrJttsSay = null, chrSanoTts = null, chrOperationMode = null, chrAudioOutput = null, chrBargeIn = null, chrDeviceName = null, chrAuthPassword = null, chrAvatarBc = null;
+let chrSsid = null, chrPass = null, chrKey = null, chrApply = null, chrStatus = null, chrKx = null, chrEn = null, chrRtpEn = null, chrJttsIdleEn = null, chrJtts = null, chrOtaCtrl = null, chrOtaData = null, chrProvider = null, chrGeminiKey = null, chrXiaozhiUrl = null, chrXiaozhiToken = null, chrFaceConfig = null, chrBattery = null, chrBatGauge = null, chrStartupArp = null, chrServoEnabled = null, chrMcpToken = null, chrLtConfig = null, chrServoLimits = null, chrServoRangeMode = null, chrServoPositions = null, chrBoardKind = null, chrWifiIp = null, chrWifiMac = null, chrAudioCtrl = null, chrAudioData = null, chrAudioCredit = null, chrAudioMetrics = null, chrLedState = null, chrMicLipGain = null, chrLedMouthSync = null, chrLipSyncMode = null, chrMicLipAgc = null, chrSpeakerVolume = null, chrJttsSay = null, chrSanoTts = null, chrOperationMode = null, chrAudioOutput = null, chrBargeIn = null, chrProximity = null, chrProximityTuning = null, chrDeviceName = null, chrAuthPassword = null, chrAvatarBc = null;
 let boardKind = null; // null = unknown (older firmware), else 0/1/2 from BOARD_*
 let batteryPollTimer = null;  // setInterval handle while connected
 let jttsInitialJson = '';  // last read JSON, used to detect Apply-time changes
@@ -1328,6 +1338,33 @@ let authSalt = new Uint8Array(0);
 // Shared implementation (settings_common.js). Classless calls render as
 // "info" on this page — the historical default here.
 StackchanSettings.init({ logDefaultClass: 'info' });
+StackchanSettings.proxInsertSection(document.getElementById('prox-anchor'));
+// chr 0x30 → {enabled, near, far, hold_ms, cooldown_s, raw, near_now, available}
+function proxDecode(b) {
+  if (!b || b.length < 12) return null;
+  const u16 = (i) => b[i] | (b[i + 1] << 8);
+  return { enabled: b[0] !== 0, near: u16(1), far: u16(3), hold_ms: u16(5), cooldown_s: b[7],
+           raw: u16(8), near_now: b[10] !== 0, available: b[11] !== 0 };
+}
+function proxEncode(v) {
+  return new Uint8Array([v.enabled ? 1 : 0, v.near & 0xff, v.near >> 8, v.far & 0xff, v.far >> 8,
+                         v.hold_ms & 0xff, v.hold_ms >> 8, v.cooldown_s & 0xff]);
+}
+StackchanSettings.proxLivePolling(async () => {
+  if (!chrProximity) throw new Error('no chr');
+  return proxDecode(await readEncrypted(chrProximity));
+});
+function proxTuningDecode(b) {
+  if (!b || b.length < 8) return null;
+  return { gain: b[0], led_freq: b[1], led_duty: b[2], led_current: b[3], pulses: b[4], meas_rate: b[5],
+           offset: b[6] | (b[7] << 8) };
+}
+StackchanSettings.proxSetupTuning(async (v) => {
+  if (!chrProximityTuning) throw new Error('未接続か、この firmware は調整モード非対応です');
+  await writeEncrypted(chrProximityTuning, new Uint8Array([v.gain, v.led_freq, v.led_duty, v.led_current,
+                                                           v.pulses, v.meas_rate, v.offset & 0xff, v.offset >> 8]));
+  log(`近接センサー調整を適用 (gain=${['x16','x32','x64'][v.gain]} LED=${[5,10,20,50,100][v.led_current]}mA pulses=${v.pulses} offset=${v.offset})`, 'ok');
+});
 const log = StackchanSettings.log;
 
 // --- UI helpers ---
@@ -1794,6 +1831,9 @@ function readJttsForm() {
   if (phrases.length > 0) obj.phrases = phrases;
   const order = document.getElementById('jtts-phrase-order').value;
   if (order === 'sequential') obj.phrase_order = order;
+  const proxPhrases = StackchanSettings.jttsPhrasesFromText(
+      document.getElementById('jtts-prox-phrases').value);
+  if (proxPhrases.length > 0) obj.proximity_phrases = proxPhrases;
   return obj;
 }
 
@@ -1806,6 +1846,7 @@ function writeJttsForm(json) {
     document.getElementById(id).value = '';
   }
   document.getElementById('jtts-phrases').value = '';
+  document.getElementById('jtts-prox-phrases').value = '';
   document.getElementById('jtts-phrase-order').value = 'random';
   if (!json) return;
   let obj;
@@ -1831,6 +1872,10 @@ function writeJttsForm(json) {
   }
   if (obj.phrase_order === 'sequential') {
     document.getElementById('jtts-phrase-order').value = 'sequential';
+  }
+  if (Array.isArray(obj.proximity_phrases)) {
+    document.getElementById('jtts-prox-phrases').value =
+        StackchanSettings.jttsPhrasesToText(obj.proximity_phrases);
   }
 }
 
@@ -1925,6 +1970,11 @@ function applyCapabilityGating() {
                     (boardKind === BOARD_ATOM_NYAN) ||
                     (boardKind === BOARD_ATOM_S3);
   document.getElementById('dis-battery-row').style.display = noBattery ? 'none' : '';
+  // Proximity sensor: CoreS3 mainboard only (BOARDS.proximity); unknown → show.
+  {
+    const cap = StackchanSettings.BOARDS[boardKind];
+    StackchanSettings.proxSetVisible(!chrProximity ? false : (cap ? !!cap.proximity : true));
+  }
   if (noBattery) {
     setVisible('label.toggle-label[for="bat-gauge-enabled"]', false);
     setVisible('label.toggle-label[for="bat-gauge-enabled"] + p.hint', false);
@@ -2738,6 +2788,8 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
       ['operationMode', CHR_OPERATION_MODE],
       ['audioOutput',   CHR_AUDIO_OUTPUT],
       ['bargeIn',       CHR_BARGE_IN_ENABLED],
+      ['proximity',     CHR_PROXIMITY],
+      ['proximityTuning', CHR_PROXIMITY_TUNING],
       ['deviceName',    CHR_DEVICE_NAME],
       ['authPassword',  CHR_AUTH_PASSWORD],
       ['avatarBc',  CHR_AVATAR_BC],
@@ -2795,6 +2847,8 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
     chrOperationMode = found.operationMode ?? null;
     chrAudioOutput = found.audioOutput ?? null;
     chrBargeIn = found.bargeIn ?? null;
+    chrProximity = found.proximity ?? null;
+    chrProximityTuning = found.proximityTuning ?? null;
     chrDeviceName = found.deviceName ?? null;
     chrAuthPassword = found.authPassword ?? null;
     chrAvatarBc = found.avatarBc ?? null;
@@ -2959,6 +3013,27 @@ document.getElementById('btn-connect').addEventListener('click', async () => {
         log(`バージイン (頭タッチで会話中断): ${enabled ? '有効' : '無効'}`);
       } catch (e) {
         log(`バージイン 状態の取得失敗: ${e.message}`, 'err');
+      }
+    }
+
+    if (chrProximity) {
+      try {
+        const v = proxDecode(await readEncrypted(chrProximity));
+        if (v) {
+          StackchanSettings.proxFillForm(v);
+          StackchanSettings.proxShowLive(v);
+          document.getElementById('prox-enabled').dataset.initial = JSON.stringify(StackchanSettings.proxFormValues());
+          log(`近接: ${v.available ? (v.enabled ? '有効' : '無効') : 'センサーなし'} (near=${v.near} far=${v.far} hold=${v.hold_ms}ms cooldown=${v.cooldown_s}s)`);
+        }
+      } catch (e) {
+        log(`近接 状態の取得失敗: ${e.message}`, 'err');
+      }
+      if (chrProximityTuning) {
+        try {
+          StackchanSettings.proxFillTuning(proxTuningDecode(await readEncrypted(chrProximityTuning)));
+        } catch (e) {
+          log(`近接センサー調整 の取得失敗: ${e.message}`, 'err');
+        }
       }
     }
 
@@ -3188,6 +3263,7 @@ function onDisconnected() {
   delete document.getElementById('operation-mode').dataset.initial;
   delete document.getElementById('audio-output').dataset.initial;
   delete document.getElementById('barge-in-enabled').dataset.initial;
+  delete document.getElementById('prox-enabled').dataset.initial;
   delete document.getElementById('bat-gauge-enabled').dataset.initial;
   delete document.getElementById('startup-arpeggio-enabled').dataset.initial;
   delete document.getElementById('servo-enabled').dataset.initial;
@@ -3347,6 +3423,17 @@ document.getElementById('btn-apply').addEventListener('click', async () => {
     if (chrBargeIn && biInitial !== undefined && biInitial !== biWanted) {
       await writeEncrypted(chrBargeIn, new Uint8Array([biCheckbox.checked ? 1 : 0]));
       log(`バージインを ${biCheckbox.checked ? '有効' : '無効'} に切り替え`, 'ok');
+    }
+
+    // Proximity: immediate on the device (no Apply); push only on change.
+    if (chrProximity) {
+      const pv = StackchanSettings.proxFormValues();
+      const pjson = JSON.stringify(pv);
+      if (document.getElementById('prox-enabled').dataset.initial !== pjson) {
+        await writeEncrypted(chrProximity, proxEncode(pv));
+        document.getElementById('prox-enabled').dataset.initial = pjson;
+        log(`近接の設定を送信 (near=${pv.near} far=${pv.far} hold=${pv.hold_ms}ms cooldown=${pv.cooldown_s}s) — 即時反映`, 'ok');
+      }
     }
 
     // Device name: only push when the input actually differs from the

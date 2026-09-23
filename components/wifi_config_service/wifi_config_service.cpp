@@ -411,6 +411,11 @@ void set_sano_weights_status_getter(SanoWeightsStatusGetter getter)
     http::set_sano_weights_status_getter(std::move(getter));
 }
 
+void set_proximity_status_getter(ProximityStatusGetter getter)
+{
+    http::set_proximity_status_getter(std::move(getter));
+}
+
 void set_camera_capture_sink(CameraCaptureSink sink)
 {
     http::set_camera_capture_sink(std::move(sink));

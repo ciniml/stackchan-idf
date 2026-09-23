@@ -115,6 +115,25 @@ constexpr const char* kTag = "stackchan";
     }
     std::uint32_t next_battery_ms = 0;
 
+    // Proximity (LTR-553 on the CoreS3 mainboard). Sampled at the chip's
+    // 100 ms period; the raw count is published to SharedState so the
+    // settings pages can show it live while thresholds are tuned. near/far
+    // is a hysteresis pair with a hold time on each edge (see
+    // DeviceConfig::proximity_*). Reaction on the near edge = happy face +
+    // a proximity phrase (or a plain balloon), throttled by a cooldown;
+    // the far edge restores the previous expression. No head wobble — that
+    // stays the nadenade signature.
+    stackchan::board::Ltr553Proximity* const g_prox = args.proximity;
+    std::uint32_t next_prox_ms = 0;
+    std::uint32_t prox_edge_since_ms = 0;   // first sample past the opposite threshold (0 = none)
+    std::uint32_t next_prox_react_ms = 0;   // cooldown gate
+    bool prox_near = false;
+    bool prox_expr_saved = false;
+    int prox_prev_expr = 0;
+    if (g_prox != nullptr) {
+        g_state->proximity.available.store(true, std::memory_order_relaxed);
+    }
+
     // Nadenade (head-petting) detection on the top-mounted Si12T sensor.
     //
     // A static "is something touching?" test kept false-firing on 2.4 GHz
@@ -439,6 +458,94 @@ constexpr const char* kTag = "stackchan";
         } else {
             // Conversation is (idly) active and owns the mouth.
             g_state->face.mouth_form.store(-1.0f, std::memory_order_relaxed);
+        }
+
+        // Proximity (LTR-553): re-program the front-end when the settings
+        // changed (調整モード), then sample, hysteresis + hold, react on edges.
+        if (g_prox != nullptr && g_state->proximity.sensor_dirty.exchange(false, std::memory_order_acq_rel)) {
+            auto& px = g_state->proximity;
+            stackchan::board::Ltr553Proximity::PsConfig pc;
+            pc.gain = px.gain.load(std::memory_order_relaxed);
+            pc.led_freq = px.led_freq.load(std::memory_order_relaxed);
+            pc.led_duty = px.led_duty.load(std::memory_order_relaxed);
+            pc.led_current = px.led_current.load(std::memory_order_relaxed);
+            pc.pulses = px.pulses.load(std::memory_order_relaxed);
+            pc.meas_rate = px.meas_rate.load(std::memory_order_relaxed);
+            pc.offset = px.offset.load(std::memory_order_relaxed);
+            (void)g_prox->configure(pc);
+            // A new configuration invalidates the hold timer; the near state
+            // is re-evaluated from fresh samples.
+            prox_edge_since_ms = 0;
+        }
+        if (g_prox != nullptr && now_ms >= next_prox_ms) {
+            next_prox_ms = now_ms + stackchan::board::Ltr553Proximity::kPsPeriodMs;
+            if (const auto r = g_prox->read_ps(); r) {
+                const std::uint16_t raw = r->saturated ? stackchan::board::Ltr553Proximity::kPsMax : r->raw;
+                g_state->proximity.raw.store(raw, std::memory_order_relaxed);
+                g_state->proximity.saturated.store(r->saturated, std::memory_order_relaxed);
+                auto& px = g_state->proximity;
+                const bool enabled = px.enabled.load(std::memory_order_relaxed);
+                const std::uint16_t near_th = px.near_threshold.load(std::memory_order_relaxed);
+                // far must sit below near; a misconfigured pair degrades to a
+                // single threshold rather than latching near forever.
+                const std::uint16_t far_th = std::min<std::uint16_t>(
+                    px.far_threshold.load(std::memory_order_relaxed),
+                    near_th > 0 ? static_cast<std::uint16_t>(near_th - 1) : 0);
+                const std::uint32_t hold_ms = px.hold_ms.load(std::memory_order_relaxed);
+
+                const bool past = prox_near ? (raw < far_th) : (raw >= near_th);
+                if (!enabled) {
+                    prox_edge_since_ms = 0;
+                    if (prox_near) {
+                        prox_near = false;
+                        px.near.store(false, std::memory_order_relaxed);
+                    }
+                } else if (!past) {
+                    prox_edge_since_ms = 0;
+                } else if (prox_edge_since_ms == 0) {
+                    prox_edge_since_ms = now_ms ? now_ms : 1;
+                } else if (now_ms - prox_edge_since_ms >= hold_ms) {
+                    prox_edge_since_ms = 0;
+                    prox_near = !prox_near;
+                    px.near.store(prox_near, std::memory_order_relaxed);
+                    ESP_LOGI(kTag, "proximity: %s (ps=%u near>=%u far<%u)", prox_near ? "near" : "far",
+                             static_cast<unsigned>(raw), static_cast<unsigned>(near_th),
+                             static_cast<unsigned>(far_th));
+                    stackchan::wifi_config::mcp_events::publish_proximity(prox_near, raw);
+
+                    if (prox_near) {
+                        // React only while nobody else owns the avatar (no
+                        // conversation, no Wi-Fi warning) and outside the cooldown.
+                        if (allow_full_demo && !wifi_warning_active && now_ms >= next_prox_react_ms) {
+                            next_prox_react_ms =
+                                now_ms + 1000u * px.cooldown_s.load(std::memory_order_relaxed);
+                            speech.stop();
+                            prox_prev_expr = g_state->face.expression.load(std::memory_order_relaxed);
+                            prox_expr_saved = true;
+                            g_state->face.expression.store(static_cast<int>(avatar::Expression::Happy),
+                                                           std::memory_order_relaxed);
+                            // Phrase → its display text reaches the balloon via the
+                            // subtitle sink; no phrase configured → short balloon only.
+                            if (speech.speak_proximity(esp_random()).empty()) {
+                                balloon_in_flight.store(true, std::memory_order_release);
+                                g_state->set_balloon_text("なに？", /*hold_ms=*/1500, [] {
+                                    balloon_in_flight.store(false, std::memory_order_release);
+                                });
+                            }
+                            // Keep babble / random pose from stepping on the reaction.
+                            next_speech_ms = std::max(next_speech_ms, now_ms + 4000);
+                        }
+                    } else if (prox_expr_saved) {
+                        // Restore only if our happy face is still showing (the
+                        // expression cycle / nadenade may have moved on).
+                        prox_expr_saved = false;
+                        if (g_state->face.expression.load(std::memory_order_relaxed) ==
+                            static_cast<int>(avatar::Expression::Happy)) {
+                            g_state->face.expression.store(prox_prev_expr, std::memory_order_relaxed);
+                        }
+                    }
+                }
+            }
         }
 
         // Nadenade: poll the top sensor and look for a directional stroke

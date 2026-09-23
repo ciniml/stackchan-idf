@@ -7,6 +7,7 @@
 
 #include "board/board.hpp"
 #include "board/si12t_touch.hpp"
+#include "board/ltr553_proximity.hpp"
 #include "servo_limits.hpp"
 #include "shared_state.hpp"
 
@@ -21,6 +22,7 @@ struct DemoLoopArgs {
     SharedState* state = nullptr;             // required
     stackchan::board::Board* board = nullptr; // for vibrate() / kind(); may be null in theory
     stackchan::board::Si12tTouch* touch = nullptr; // head sensor; null when absent
+    stackchan::board::Ltr553Proximity* proximity = nullptr; // CoreS3 LTR-553; null when absent
     std::string jtts_config_json;              // babble voice options
     bool has_battery = false;                  // poll INA226 every 5 s
     bool btn_a_toggles_ui = false;             // StopWatch: BtnA opens/closes device_ui

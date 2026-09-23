@@ -74,6 +74,7 @@ void set_hmm_voice_sink(HmmVoiceSink sink);
 void set_hmm_voice_status_getter(HmmVoiceStatusGetter getter);
 void set_sano_weights_sink(SanoWeightsSink sink);
 void set_sano_weights_status_getter(SanoWeightsStatusGetter getter);
+void set_proximity_status_getter(ProximityStatusGetter getter);
 // sanoTTS 取得ジョブ (wifi_config_service.hpp の同名 API の実体)。
 const char* sano_fetch_start_async(const std::string& release, const std::string& file);
 std::string sano_status_json();

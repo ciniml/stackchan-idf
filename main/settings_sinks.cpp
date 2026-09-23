@@ -346,6 +346,28 @@ void on_config_change(const stackchan::config::registry::SettingDescriptor& d,
     } else if (id == "barge-in") {
         // demo_loop が毎ループ参照する SharedState atomic。
         g_state->barge_in_enabled.store(cfg.barge_in_enabled, std::memory_order_relaxed);
+    } else if (id == "prox-enabled") {
+        g_state->proximity.enabled.store(cfg.proximity_enabled, std::memory_order_relaxed);
+    } else if (id == "prox-near") {
+        g_state->proximity.near_threshold.store(cfg.proximity_near, std::memory_order_relaxed);
+    } else if (id == "prox-far") {
+        g_state->proximity.far_threshold.store(cfg.proximity_far, std::memory_order_relaxed);
+    } else if (id == "prox-hold-ms") {
+        g_state->proximity.hold_ms.store(cfg.proximity_hold_ms, std::memory_order_relaxed);
+    } else if (id == "prox-cooldown-s") {
+        g_state->proximity.cooldown_s.store(cfg.proximity_cooldown_s, std::memory_order_relaxed);
+    } else if (id == "prox-gain" || id == "prox-led-freq" || id == "prox-led-duty" ||
+               id == "prox-led-current" || id == "prox-pulses" || id == "prox-meas-rate" ||
+               id == "prox-offset") {
+        auto& px = g_state->proximity;
+        px.gain.store(cfg.proximity_gain, std::memory_order_relaxed);
+        px.led_freq.store(cfg.proximity_led_freq, std::memory_order_relaxed);
+        px.led_duty.store(cfg.proximity_led_duty, std::memory_order_relaxed);
+        px.led_current.store(cfg.proximity_led_current, std::memory_order_relaxed);
+        px.pulses.store(cfg.proximity_pulses, std::memory_order_relaxed);
+        px.meas_rate.store(cfg.proximity_meas_rate, std::memory_order_relaxed);
+        px.offset.store(cfg.proximity_offset, std::memory_order_relaxed);
+        px.sensor_dirty.store(true, std::memory_order_release);  // demo_loop re-programs the chip
     }
     // startup-arpeggio 等の boot-only は反映先なし (保存のみで OK)。
 }
@@ -480,6 +502,22 @@ void register_avatar_bytecode_sinks()
         });
     // BLE 側は wifi_config_service の共用ジョブ / JSON をそのまま使う。
     stackchan::config::set_sanotts_status_getter(&stackchan::wifi_config::sano_status_json);
+
+    // 近接センサーの現在値 (demo_loop が 100 ms ごとに SharedState へ書く)。
+    stackchan::wifi_config::set_proximity_status_getter([]() -> stackchan::wifi_config::ProximityStatus {
+        if (g_state == nullptr) return {};
+        return {g_state->proximity.available.load(std::memory_order_relaxed),
+                g_state->proximity.near.load(std::memory_order_relaxed),
+                g_state->proximity.saturated.load(std::memory_order_relaxed),
+                g_state->proximity.raw.load(std::memory_order_relaxed)};
+    });
+    stackchan::config::set_proximity_status_getter([]() -> stackchan::config::ProximityStatus {
+        if (g_state == nullptr) return {};
+        return {g_state->proximity.available.load(std::memory_order_relaxed),
+                g_state->proximity.near.load(std::memory_order_relaxed),
+                g_state->proximity.saturated.load(std::memory_order_relaxed),
+                g_state->proximity.raw.load(std::memory_order_relaxed)};
+    });
     stackchan::config::set_sanotts_command_sink(&stackchan::wifi_config::sano_command_json);
 }
 

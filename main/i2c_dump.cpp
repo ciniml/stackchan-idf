@@ -46,6 +46,8 @@ constexpr KnownConst kKnownConsts[] = {
     // PY32 register 0x02 is the FW version. On our base it reads 0x41 (BSP
     // build); a healthy boot from the same PY32 should give the same value.
     { "PY32",    0x6F, 0x02, 0x41, "FW version" },
+    // LTR-553ALS proximity / ALS on the CoreS3 mainboard: PART_ID 0x92.
+    { "LTR553",  0x23, 0x86, 0x92, "part ID" },
 };
 
 // One register read goes through M5Unified, which uses the same internal I2C

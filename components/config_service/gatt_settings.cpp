@@ -343,6 +343,27 @@ static const ble_uuid128_t kJttsSayUuid = BLE_UUID128_INIT(
 static const ble_uuid128_t kSanoTtsUuid = BLE_UUID128_INIT(
     0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
     0x2a, 0x4d, 0x1c, 0x7b, 0x2f, 0xa0, 0xf0, 0xe3);
+// Proximity — encrypted R/W, little-endian binary, immediate apply (no
+// Apply/reboot: the point is to tune thresholds while watching the reading).
+//   READ  (12 B): u8 enabled, u16 near, u16 far, u16 hold_ms, u8 cooldown_s,
+//                 u16 raw, u8 near_now, u8 available
+//   WRITE (8 B) : u8 enabled, u16 near, u16 far, u16 hold_ms, u8 cooldown_s
+// Values are clamped by the settings registry (near/far 0..2047, hold
+// 0..5000, cooldown 0..120). available = 0 means no sensor (non-CoreS3).
+static const ble_uuid128_t kProximityUuid = BLE_UUID128_INIT(
+    0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
+    0x2a, 0x4d, 0x1c, 0x7b, 0x30, 0xa0, 0xf0, 0xe3);
+// ProximityTuning (調整モード) — encrypted R/W, immediate apply; the sensor
+// front-end, as indices into the LTR-553 value tables (see
+// board::Ltr553Proximity::PsConfig):
+//   READ  (11 B): u8 gain, u8 led_freq, u8 led_duty, u8 led_current,
+//                 u8 pulses, u8 meas_rate, u16 offset, u16 raw, u8 saturated
+//   WRITE (8 B) : the first 8 bytes of the READ layout
+// demo_loop re-programs the chip on the next tick; the near/far thresholds
+// (chr 0x30) usually need re-tuning after a change here.
+static const ble_uuid128_t kProximityTuningUuid = BLE_UUID128_INIT(
+    0x00, 0x1f, 0x4b, 0x8d, 0x5a, 0x2c, 0x6f, 0x9e,
+    0x2a, 0x4d, 0x1c, 0x7b, 0x31, 0xa0, 0xf0, 0xe3);
 // DeviceName — encrypted R/W UTF-8 string (up to 24 bytes). Operator-set
 // override for the BLE advertising name AND the mDNS hostname seed (after
 // RFC-1123 sanitization). Empty means "use auto-generated Stackchan-XXXXXX".
@@ -408,6 +429,7 @@ static uint16_t g_jtts_say_handle = 0;
 static JttsSayKanaSink g_jtts_say_sink = nullptr;
 static uint16_t g_sanotts_handle = 0;
 static SanoTtsStatusGetter g_sanotts_status_getter = nullptr;
+static ProximityStatusGetter g_proximity_status_getter = nullptr;
 static SanoTtsCommandSink  g_sanotts_command_sink  = nullptr;
 static MicLipGainGetter g_mic_lip_gain_getter = nullptr;
 static MicLipGainSink g_mic_lip_gain_sink = nullptr;
@@ -417,6 +439,8 @@ static uint16_t g_audio_output_handle = 0;
 static uint16_t g_lip_sync_mode_handle = 0;
 static uint16_t g_mic_lip_agc_handle = 0;
 static uint16_t g_barge_in_enabled_handle = 0;
+static uint16_t g_proximity_handle = 0;
+static uint16_t g_proximity_tuning_handle = 0;
 static uint16_t g_device_name_handle = 0;
 static uint16_t g_auth_password_handle = 0;
 static uint16_t g_avatar_bc_handle = 0;
@@ -730,6 +754,53 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             }
             const std::uint8_t byte = g_active.barge_in_enabled ? 1 : 0;
             const bool ok = append_encrypted(ctxt->om, {&byte, 1});
+            xSemaphoreGive(g_mutex);
+            return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
+        }
+        if (attr_handle == g_proximity_handle) {
+            ProximityStatus st;
+            if (ProximityStatusGetter getter = g_proximity_status_getter; getter != nullptr) st = getter();
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            if (!g_session.is_established()) {
+                xSemaphoreGive(g_mutex);
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            const std::uint8_t buf[12] = {
+                static_cast<std::uint8_t>(g_active.proximity_enabled ? 1 : 0),
+                static_cast<std::uint8_t>(g_active.proximity_near & 0xFF),
+                static_cast<std::uint8_t>(g_active.proximity_near >> 8),
+                static_cast<std::uint8_t>(g_active.proximity_far & 0xFF),
+                static_cast<std::uint8_t>(g_active.proximity_far >> 8),
+                static_cast<std::uint8_t>(g_active.proximity_hold_ms & 0xFF),
+                static_cast<std::uint8_t>(g_active.proximity_hold_ms >> 8),
+                g_active.proximity_cooldown_s,
+                static_cast<std::uint8_t>(st.raw & 0xFF),
+                static_cast<std::uint8_t>(st.raw >> 8),
+                static_cast<std::uint8_t>(st.near ? 1 : 0),
+                static_cast<std::uint8_t>(st.available ? 1 : 0),
+            };
+            const bool ok = append_encrypted(ctxt->om, {buf, sizeof(buf)});
+            xSemaphoreGive(g_mutex);
+            return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
+        }
+        if (attr_handle == g_proximity_tuning_handle) {
+            ProximityStatus st;
+            if (ProximityStatusGetter getter = g_proximity_status_getter; getter != nullptr) st = getter();
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            if (!g_session.is_established()) {
+                xSemaphoreGive(g_mutex);
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            const std::uint8_t buf[11] = {
+                g_active.proximity_gain, g_active.proximity_led_freq, g_active.proximity_led_duty,
+                g_active.proximity_led_current, g_active.proximity_pulses, g_active.proximity_meas_rate,
+                static_cast<std::uint8_t>(g_active.proximity_offset & 0xFF),
+                static_cast<std::uint8_t>(g_active.proximity_offset >> 8),
+                static_cast<std::uint8_t>(st.raw & 0xFF),
+                static_cast<std::uint8_t>(st.raw >> 8),
+                static_cast<std::uint8_t>(st.saturated ? 1 : 0),
+            };
+            const bool ok = append_encrypted(ctxt->om, {buf, sizeof(buf)});
             xSemaphoreGive(g_mutex);
             return ok ? 0 : BLE_ATT_ERR_UNLIKELY;
         }
@@ -1250,6 +1321,51 @@ static int gatt_access_cb(uint16_t /*conn_handle*/, uint16_t attr_handle,
             xSemaphoreTake(g_mutex, portMAX_DELAY);
             g_staging.set_num("barge-in", pt[0] != 0 ? 1 : 0);
             xSemaphoreGive(g_mutex);
+            return 0;
+        }
+        if (attr_handle == g_proximity_handle) {
+            if (pt.size() != 8) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            // Immediate apply over BLE (settings redesign Phase 2 for this
+            // chr): live config + per-key persist + change hook, same as the
+            // HTTP apply_immediate_num path. No staging, no Apply needed.
+            struct Item { const char* id; std::uint32_t value; };
+            const Item items[] = {
+                {"prox-enabled", static_cast<std::uint32_t>(pt[0] != 0 ? 1 : 0)},
+                {"prox-near", static_cast<std::uint32_t>(pt[1] | (pt[2] << 8))},
+                {"prox-far", static_cast<std::uint32_t>(pt[3] | (pt[4] << 8))},
+                {"prox-hold-ms", static_cast<std::uint32_t>(pt[5] | (pt[6] << 8))},
+                {"prox-cooldown-s", static_cast<std::uint32_t>(pt[7])},
+            };
+            for (const auto& it : items) {
+                const auto* d = registry::find(it.id);
+                if (d == nullptr) continue;
+                xSemaphoreTake(g_mutex, portMAX_DELAY);
+                d->num_set(g_active, d->clamp && it.value > d->max_value ? d->max_value : it.value);
+                const DeviceConfig snap = g_active;
+                xSemaphoreGive(g_mutex);
+                (void)store::save_one(*d, snap);
+                notify_config_change(*d, snap);
+            }
+            return 0;
+        }
+        if (attr_handle == g_proximity_tuning_handle) {
+            if (pt.size() != 8) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            struct Item { const char* id; std::uint32_t value; };
+            const Item items[] = {
+                {"prox-gain", pt[0]}, {"prox-led-freq", pt[1]}, {"prox-led-duty", pt[2]},
+                {"prox-led-current", pt[3]}, {"prox-pulses", pt[4]}, {"prox-meas-rate", pt[5]},
+                {"prox-offset", static_cast<std::uint32_t>(pt[6] | (pt[7] << 8))},
+            };
+            for (const auto& it : items) {
+                const auto* d = registry::find(it.id);
+                if (d == nullptr) continue;
+                xSemaphoreTake(g_mutex, portMAX_DELAY);
+                d->num_set(g_active, d->clamp && it.value > d->max_value ? d->max_value : it.value);
+                const DeviceConfig snap = g_active;
+                xSemaphoreGive(g_mutex);
+                (void)store::save_one(*d, snap);
+                notify_config_change(*d, snap);
+            }
             return 0;
         }
         if (attr_handle == g_device_name_handle) {
@@ -1818,6 +1934,18 @@ static ble_gatt_chr_def kChrs[] = {
         .val_handle = &g_barge_in_enabled_handle,
     },
     {
+        .uuid = &kProximityUuid.u,
+        .access_cb = gatt_access_cb,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+        .val_handle = &g_proximity_handle,
+    },
+    {
+        .uuid = &kProximityTuningUuid.u,
+        .access_cb = gatt_access_cb,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+        .val_handle = &g_proximity_tuning_handle,
+    },
+    {
         .uuid = &kDeviceNameUuid.u,
         .access_cb = gatt_access_cb,
         // R = current operator-set name (may be empty); W = stage new name
@@ -2125,6 +2253,11 @@ void set_speaker_volume_sink(SpeakerVolumeSink sink)
 void set_jtts_say_kana_sink(JttsSayKanaSink sink)
 {
     g_jtts_say_sink = sink;
+}
+
+void set_proximity_status_getter(ProximityStatusGetter getter)
+{
+    g_proximity_status_getter = getter;
 }
 
 void set_sanotts_status_getter(SanoTtsStatusGetter getter)

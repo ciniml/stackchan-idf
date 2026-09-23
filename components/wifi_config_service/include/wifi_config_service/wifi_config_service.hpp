@@ -165,6 +165,17 @@ void set_hmm_voice_status_getter(HmmVoiceStatusGetter getter);
 //   POST /api/sanotts/fetch  — {"release":"v1.1.0","file":"saanotts-jp-v4-int8.bin"}
 //                              機体が公式 GitHub Releases から取得して sink へ。
 //   GET  /api/sanotts        — status getter の内容を JSON で返す。
+// 近接センサー (CoreS3 LTR-553) の現在値。GET /api/proximity と /api/status に載せ、
+// 設定ページが閾値調整中にライブ表示する。available = 起動時に probe できた。
+struct ProximityStatus {
+    bool available = false;
+    bool near = false;
+    bool saturated = false;
+    std::uint16_t raw = 0;  // PS count 0..2047
+};
+using ProximityStatusGetter = std::function<ProximityStatus()>;
+void set_proximity_status_getter(ProximityStatusGetter getter);
+
 using SanoWeightsSink = HmmVoiceSink;
 struct SanoWeightsStatus {
     bool supported = false;  // sanoTTS エンジンがこのファームウェアに入っているか

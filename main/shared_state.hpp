@@ -324,6 +324,34 @@ public:
     // interrupt now that voice input is paused for the whole assistant turn.
     std::atomic<bool> barge_in_request{false};
 
+    // --- Proximity (LTR-553 on the CoreS3 mainboard) ------------------------
+    // Tunables mirror DeviceConfig::proximity_* (seeded at boot, updated live
+    // by the settings sinks). demo_loop samples the sensor every 100 ms and
+    // publishes raw / near so the settings pages can show a live reading
+    // while the user picks thresholds. available = sensor probed at boot.
+    struct {
+        std::atomic<bool> available{false};
+        std::atomic<bool> enabled{true};
+        std::atomic<std::uint16_t> near_threshold{60};
+        std::atomic<std::uint16_t> far_threshold{35};
+        std::atomic<std::uint16_t> hold_ms{200};
+        std::atomic<std::uint8_t> cooldown_s{10};
+        std::atomic<std::uint16_t> raw{0};
+        std::atomic<bool> near{false};
+        std::atomic<bool> saturated{false};
+        // Sensor front-end (調整モード): written by settings sinks / boot
+        // seeding, applied to the chip by demo_loop (the only In_I2C user)
+        // whenever sensor_dirty is set. Indices per Ltr553Proximity::PsConfig.
+        std::atomic<std::uint8_t> gain{0};
+        std::atomic<std::uint8_t> led_freq{3};
+        std::atomic<std::uint8_t> led_duty{3};
+        std::atomic<std::uint8_t> led_current{4};
+        std::atomic<std::uint8_t> pulses{8};
+        std::atomic<std::uint8_t> meas_rate{2};
+        std::atomic<std::uint16_t> offset{0};
+        std::atomic<bool> sensor_dirty{true};
+    } proximity;
+
     // --- Balloon (mutex + completion callback; render_task consumes) -------
 
     // Show `text` in the balloon.

@@ -264,6 +264,16 @@ void publish_touch_stroke(std::string_view direction)
     }
 }
 
+void publish_proximity(bool near, std::uint16_t raw)
+{
+    char payload[48];
+    const int n = std::snprintf(payload, sizeof(payload), "\"near\":%s,\"raw\":%u",
+                                near ? "true" : "false", static_cast<unsigned>(raw));
+    if (n > 0) {
+        publish("proximity", std::string_view{payload, static_cast<std::size_t>(n)});
+    }
+}
+
 void publish_say_done()
 {
     publish("say_done", "");

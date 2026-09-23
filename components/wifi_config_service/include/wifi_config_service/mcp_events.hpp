@@ -62,6 +62,9 @@ void publish_boot(std::string_view firmware_version, std::string_view ip,
 // direction: "front_to_back" | "back_to_front" — matches the nadenade
 // detector's two completion variants in app_main.cpp.
 void publish_touch_stroke(std::string_view direction);
+// Proximity sensor state change (CoreS3 LTR-553): near = a hand came within
+// the near threshold / left past the far threshold; raw = PS count (0..2047).
+void publish_proximity(bool near, std::uint16_t raw);
 void publish_say_done();
 // conversation_state is published internally by the monitor task on change.
 

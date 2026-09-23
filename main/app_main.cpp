@@ -672,6 +672,20 @@ extern "C" void app_main()
                                        std::memory_order_relaxed);
     g_state->barge_in_enabled.store(cfg.barge_in_enabled,
                                     std::memory_order_relaxed);
+    g_state->proximity.enabled.store(cfg.proximity_enabled, std::memory_order_relaxed);
+    g_state->proximity.near_threshold.store(cfg.proximity_near, std::memory_order_relaxed);
+    g_state->proximity.far_threshold.store(cfg.proximity_far, std::memory_order_relaxed);
+    g_state->proximity.hold_ms.store(cfg.proximity_hold_ms, std::memory_order_relaxed);
+    g_state->proximity.cooldown_s.store(cfg.proximity_cooldown_s, std::memory_order_relaxed);
+    g_state->proximity.available.store(board.proximity_sensor() != nullptr, std::memory_order_relaxed);
+    g_state->proximity.gain.store(cfg.proximity_gain, std::memory_order_relaxed);
+    g_state->proximity.led_freq.store(cfg.proximity_led_freq, std::memory_order_relaxed);
+    g_state->proximity.led_duty.store(cfg.proximity_led_duty, std::memory_order_relaxed);
+    g_state->proximity.led_current.store(cfg.proximity_led_current, std::memory_order_relaxed);
+    g_state->proximity.pulses.store(cfg.proximity_pulses, std::memory_order_relaxed);
+    g_state->proximity.meas_rate.store(cfg.proximity_meas_rate, std::memory_order_relaxed);
+    g_state->proximity.offset.store(cfg.proximity_offset, std::memory_order_relaxed);
+    g_state->proximity.sensor_dirty.store(true, std::memory_order_release);
     stackchan::app::settings_sinks::register_ble_sinks(
         static_cast<std::uint8_t>(board.kind()));
     // BLE OtaControl {"op":"fetch","tag":...}: 機体が自分でリリースを取りに行く。
@@ -1210,6 +1224,7 @@ extern "C" void app_main()
         .state = g_state,
         .board = &board,
         .touch = head_touch,
+        .proximity = board.proximity_sensor(),
         .jtts_config_json = cfg.jtts_config_json,
         .has_battery = board.has_battery(),
         .btn_a_toggles_ui = profile.btn_a_toggles_ui,

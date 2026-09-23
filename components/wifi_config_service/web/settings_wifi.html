@@ -721,6 +721,9 @@
         <option value="random">ランダム (毎回どれかを選ぶ)</option>
         <option value="sequential">連続 (上の行から順に、最後まで行ったら先頭へ)</option>
       </select>
+      <label for="jtts-prox-phrases" style="margin-top:0.75rem">近接時の発話フレーズ (一行 1 つ、CoreS3)</label>
+      <p class="hint" style="margin:0.2rem 0">手を近づけたときに 1 つ選んで話します (形式は上と同じ)。空なら吹き出しだけ出します。</p>
+      <textarea id="jtts-prox-phrases" rows="3" placeholder="なあに？ | なあに&#10;ちかいよ&#10;..."></textarea>
     </div>
     <div id="lt-section">
       <h2 class="section-title">LT タイムキーパー</h2>
@@ -815,6 +818,7 @@
         <span>頭タッチで会話を中断する (バージイン)</span>
       </label>
       <p class="hint">応答再生中にアバター画面 (頭) をタップで AI 応答を中断します。タッチ センサが敏感で誤動作しやすいので、初期値はオフです。なでなで (前→中→後の連続タッチ) は本トグルとは独立で常に有効です。即時反映（再起動不要）。</p>
+      <div id="prox-anchor"></div>
     </div>
   </section><!-- /tab-panel "chat" -->
 
@@ -1150,6 +1154,8 @@ function readJttsForm() {
   const phrases = StackchanSettings.jttsPhrasesFromText($('jtts-phrases').value);
   if (phrases.length) obj.phrases = phrases;
   if ($('jtts-phrase-order').value === 'sequential') obj.phrase_order = 'sequential';
+  const proxPhrases = StackchanSettings.jttsPhrasesFromText($('jtts-prox-phrases').value);
+  if (proxPhrases.length) obj.proximity_phrases = proxPhrases;
   return Object.keys(obj).length ? JSON.stringify(obj) : '';
 }
 
@@ -1169,6 +1175,8 @@ function applyJttsToForm(json) {
     $('jtts-phrases').value = StackchanSettings.jttsPhrasesToText(obj.phrases);
   }
   $('jtts-phrase-order').value = obj.phrase_order === 'sequential' ? 'sequential' : 'random';
+  $('jtts-prox-phrases').value = Array.isArray(obj.proximity_phrases)
+      ? StackchanSettings.jttsPhrasesToText(obj.proximity_phrases) : '';
 }
 
 // --- Servo limits + range-setting calibration ---
@@ -1527,6 +1535,7 @@ function applyBoardGating(kind) {
   if (batToggle) batToggle.style.display = noBattery ? 'none' : '';
   const batHint = batToggle ? batToggle.nextElementSibling : null;
   if (batHint && batHint.tagName === 'P') batHint.style.display = noBattery ? 'none' : '';
+  StackchanSettings.proxSetVisible(cap ? !!cap.proximity : true);
   const boardEl = document.getElementById('dis-board');
   if (boardEl) {
     boardEl.textContent = (kind == null) ? '(unknown)'
@@ -1586,6 +1595,11 @@ async function refresh() {
       $('audio-output').value = String(s.audio_output);
     }
     $('barge-in-enabled').checked = !!s.barge_in_enabled; // default false if absent
+    if (typeof s.proximity_near === 'number') {
+      StackchanSettings.proxFillForm({ enabled: !!s.proximity_enabled, near: s.proximity_near,
+        far: s.proximity_far, hold_ms: s.proximity_hold_ms, cooldown_s: s.proximity_cooldown_s });
+      if (!s.proximity_available) StackchanSettings.proxSetVisible(false);
+    }
     $('rtp-enabled').checked = (s.rtp_audio_enabled !== false); // default on if absent
     $('jtts-idle-enabled').checked = (s.jtts_idle_enabled !== false); // default on if absent
     $('led-mouth-sync').checked = !!s.led_mouth_sync_enabled; // default off if absent
@@ -1705,6 +1719,12 @@ async function apply() {
     await postText('/api/operation-mode', $('operation-mode').value);
     await postText('/api/audio-output', $('audio-output').value);
     await postText('/api/barge-in', $('barge-in-enabled').checked ? '1' : '0');
+    if (document.getElementById('prox-section') && document.getElementById('prox-section').style.display !== 'none') {
+      const pr = await fetch('/api/proximity', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(StackchanSettings.proxFormValues()) });
+      if (!pr.ok) throw new Error(`/api/proximity → ${pr.status}`);
+    }
     // Device name: only push when it actually changed (so leaving the field
     // untouched preserves the current value across saves).
     const devName = $('device-name').value;
@@ -2204,6 +2224,11 @@ const BADGE_FIELDS = {
   'openai-enabled':'openai-enabled', 'rtp-enabled':'rtp-enabled',
   'jtts-idle-enabled':'jtts-idle-enabled', 'auth-password':'auth-password',
   'mcp-token':'mcp-token', 'system-prompt':'system-prompt', 'mic-lip-agc':'mic-lip-agc',
+  'prox-enabled':'prox-enabled', 'prox-near':'prox-near', 'prox-far':'prox-far',
+  'prox-hold-ms':'prox-hold', 'prox-cooldown-s':'prox-cooldown',
+  'prox-gain':'prox-gain', 'prox-led-freq':'prox-led-freq', 'prox-led-duty':'prox-led-duty',
+  'prox-led-current':'prox-led-current', 'prox-pulses':'prox-pulses', 'prox-meas-rate':'prox-meas-rate',
+  'prox-offset':'prox-offset',
 };
 async function stampRebootBadges() {
   let reboot;
@@ -2381,6 +2406,21 @@ $('jtts-say-text').addEventListener('keydown', (e) => {
 // section IDs (#jtts-section, #servo-section etc.) live inside their panels
 // so no JS wiring needs to be touched.
 StackchanSettings.setupTabs('stackchan.settings.wifi.activeTab');
+StackchanSettings.proxInsertSection(document.getElementById('prox-anchor'));
+StackchanSettings.proxLivePolling(async () => {
+  const r = await fetch('/api/proximity', { cache: 'no-store' });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return await r.json();
+});
+StackchanSettings.proxSetupTuning(async (v) => {
+  const r = await fetch('/api/proximity', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                             body: JSON.stringify(v) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  log(`近接センサー調整を適用 (gain=${['x16','x32','x64'][v.gain]} LED=${[5,10,20,50,100][v.led_current]}mA pulses=${v.pulses} offset=${v.offset})`, 'ok');
+});
+// Seed the tuning form from the device once at load (status has only the thresholds).
+fetch('/api/proximity', { cache: 'no-store' }).then(r => r.ok ? r.json() : null)
+  .then(v => { if (v) StackchanSettings.proxFillTuning(v); }).catch(() => {});
 </script>
 </body>
 </html>

@@ -146,6 +146,7 @@ VoiceDbStatusGetter g_voice_db_status_getter = nullptr;
 HmmVoiceSink g_hmm_voice_sink = nullptr;
 SanoWeightsSink g_sano_weights_sink = nullptr;
 SanoWeightsStatusGetter g_sano_weights_status_getter = nullptr;
+ProximityStatusGetter g_proximity_status_getter = nullptr;
 
 // sanoTTS 取得ジョブ (BLE / HTTP 共用)。g_mutex で保護。
 enum class SanoFetchState : std::uint8_t { Idle, Running, Done, Error };
@@ -467,6 +468,8 @@ esp_err_t handle_status_get(httpd_req_t* req)
     const std::string idf_ver = desc ? desc->idf_ver : "unknown";
     const std::string ip = current_wifi_ip();
 
+    ProximityStatus prox;
+    if (ProximityStatusGetter pg = g_proximity_status_getter; pg) prox = pg();
     std::string body = "{";
     body += "\"firmware\":\"" + escape_json(fw) + "\",";
     body += "\"idf\":\"" + escape_json(idf_ver) + "\",";
@@ -492,6 +495,12 @@ esp_err_t handle_status_get(httpd_req_t* req)
     body += "\"lip_sync_mode\":" + std::to_string(static_cast<int>(cfg.lip_sync_mode)) + ",";
     body += "\"mic_lip_agc_enabled\":" + std::string(cfg.mic_lip_agc_enabled ? "true" : "false") + ",";
     body += "\"barge_in_enabled\":" + std::string(cfg.barge_in_enabled ? "true" : "false") + ",";
+    body += "\"proximity_enabled\":" + std::string(cfg.proximity_enabled ? "true" : "false") + ",";
+    body += "\"proximity_near\":" + std::to_string(cfg.proximity_near) + ",";
+    body += "\"proximity_far\":" + std::to_string(cfg.proximity_far) + ",";
+    body += "\"proximity_hold_ms\":" + std::to_string(cfg.proximity_hold_ms) + ",";
+    body += "\"proximity_cooldown_s\":" + std::to_string(cfg.proximity_cooldown_s) + ",";
+    body += "\"proximity_available\":" + std::string(prox.available ? "true" : "false") + ",";
     body += "\"device_name\":\"" + escape_json(cfg.device_name) + "\",";
     body += "\"has_auth_password\":" + std::string(cfg.auth_password.empty() ? "false" : "true") + ",";
     // Token itself is never returned; the UI only needs to know whether the
@@ -698,6 +707,84 @@ esp_err_t handle_mic_lip_agc_post(httpd_req_t* req)
     g_staging.set_num("mic-lip-agc", enabled ? 1 : 0);
     xSemaphoreGive(g_mutex);
     return send_empty(req);
+}
+
+// GET /api/proximity — live sensor reading + the current tunables (light
+// enough to poll at a few Hz while the user adjusts thresholds).
+// POST /api/proximity — JSON with any subset of
+//   {"enabled":bool,"near":0..2047,"far":0..2047,"hold_ms":0..5000,"cooldown_s":0..120}
+// Each present key is applied immediately (SharedState via the change hook)
+// and persisted on its own. far >= near is accepted; demo_loop clamps far
+// below near at use time.
+std::string proximity_json()
+{
+    ProximityStatus st;
+    if (ProximityStatusGetter getter = g_proximity_status_getter; getter) st = getter();
+    xSemaphoreTake(g_mutex, portMAX_DELAY);
+    const config::DeviceConfig cfg = g_active;
+    xSemaphoreGive(g_mutex);
+    std::string body = "{";
+    body += "\"available\":" + std::string(st.available ? "true" : "false") + ",";
+    body += "\"raw\":" + std::to_string(st.raw) + ",";
+    body += "\"near_now\":" + std::string(st.near ? "true" : "false") + ",";
+    body += "\"enabled\":" + std::string(cfg.proximity_enabled ? "true" : "false") + ",";
+    body += "\"near\":" + std::to_string(cfg.proximity_near) + ",";
+    body += "\"far\":" + std::to_string(cfg.proximity_far) + ",";
+    body += "\"hold_ms\":" + std::to_string(cfg.proximity_hold_ms) + ",";
+    body += "\"cooldown_s\":" + std::to_string(cfg.proximity_cooldown_s) + ",";
+    body += "\"saturated\":" + std::string(st.saturated ? "true" : "false") + ",";
+    body += "\"gain\":" + std::to_string(cfg.proximity_gain) + ",";
+    body += "\"led_freq\":" + std::to_string(cfg.proximity_led_freq) + ",";
+    body += "\"led_duty\":" + std::to_string(cfg.proximity_led_duty) + ",";
+    body += "\"led_current\":" + std::to_string(cfg.proximity_led_current) + ",";
+    body += "\"pulses\":" + std::to_string(cfg.proximity_pulses) + ",";
+    body += "\"meas_rate\":" + std::to_string(cfg.proximity_meas_rate) + ",";
+    body += "\"offset\":" + std::to_string(cfg.proximity_offset);
+    body += "}";
+    return body;
+}
+
+esp_err_t handle_proximity_get(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    return send_json(req, proximity_json());
+}
+
+esp_err_t handle_proximity_post(httpd_req_t* req)
+{
+    if (!require_auth(req)) return ESP_OK;
+    std::string body;
+    if (read_body_str(req, body, 256) != ESP_OK) return ESP_OK;
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (root == nullptr) return send_error(req, "400 Bad Request", "invalid JSON");
+    struct Key { const char* json; const char* id; bool is_bool; };
+    static constexpr Key kKeys[] = {
+        {"enabled", "prox-enabled", true},
+        {"near", "prox-near", false},
+        {"far", "prox-far", false},
+        {"hold_ms", "prox-hold-ms", false},
+        {"cooldown_s", "prox-cooldown-s", false},
+        // 調整モード (sensor front-end); demo_loop re-programs the chip.
+        {"gain", "prox-gain", false},
+        {"led_freq", "prox-led-freq", false},
+        {"led_duty", "prox-led-duty", false},
+        {"led_current", "prox-led-current", false},
+        {"pulses", "prox-pulses", false},
+        {"meas_rate", "prox-meas-rate", false},
+        {"offset", "prox-offset", false},
+    };
+    for (const auto& k : kKeys) {
+        const cJSON* v = cJSON_GetObjectItemCaseSensitive(root, k.json);
+        if (v == nullptr) continue;
+        if (k.is_bool) {
+            if (cJSON_IsBool(v)) apply_immediate_num(k.id, cJSON_IsTrue(v) ? 1 : 0);
+            else if (cJSON_IsNumber(v)) apply_immediate_num(k.id, v->valuedouble != 0 ? 1 : 0);
+        } else if (cJSON_IsNumber(v) && v->valuedouble >= 0) {
+            apply_immediate_num(k.id, static_cast<std::uint32_t>(v->valuedouble));  // registry clamps
+        }
+    }
+    cJSON_Delete(root);
+    return send_json(req, proximity_json());
 }
 
 esp_err_t handle_barge_in_enabled_post(httpd_req_t* req)
@@ -2124,6 +2211,8 @@ void register_handlers(httpd_handle_t server, const config::DeviceConfig& curren
     add(server, "/api/lip-sync-mode",   HTTP_POST, handle_lip_sync_mode_post);
     add(server, "/api/mic-lip-agc",     HTTP_POST, handle_mic_lip_agc_post);
     add(server, "/api/barge-in",        HTTP_POST, handle_barge_in_enabled_post);
+    add(server, "/api/proximity",       HTTP_GET,  handle_proximity_get);
+    add(server, "/api/proximity",       HTTP_POST, handle_proximity_post);
     add(server, "/api/battery-gauge",   HTTP_POST, handle_battery_gauge_post);
     add(server, "/api/startup-arpeggio",HTTP_POST, handle_startup_arpeggio_post);
     add(server, "/api/servo-enabled",   HTTP_POST, handle_servo_enabled_post);
@@ -2500,6 +2589,11 @@ const char* sano_command_json(std::string_view json)
     }
     cJSON_Delete(root);
     return err;
+}
+
+void set_proximity_status_getter(ProximityStatusGetter getter)
+{
+    g_proximity_status_getter = std::move(getter);
 }
 
 void set_sano_weights_status_getter(SanoWeightsStatusGetter getter)
