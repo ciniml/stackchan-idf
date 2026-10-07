@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>もう一つのｽﾀｯｸﾁｬﾝファームウェア stackchan-idf</title>
+<!--
+  SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
+  SPDX-License-Identifier: BSL-1.0
+
+  トランジスタ技術オフ会「M5Stack を使った電子工作・開発・魅力について語り合おう！」(2026-10-07, CQ出版) LT。
+  M5 Japan Tour 2026 Autumn 東京版 (lt-m5meetup-stackchan-idf-slides.html) を更新したもの。
+  操作: → / Space / クリック右半分 = 次、← / クリック左半分 = 前、Home / End。
+        T = カラーテーマ切替 (URL に ?theme=NAME でも指定可)。
+  PDF 化: ブラウザ印刷 (1 スライド = 1 ページ、1920×1080)。印刷時のテーマは
+        その時 body に付いているもの (= T で選んだ / ?theme= 指定) が使われる。
+        CLI: chromium --headless=new --print-to-pdf=out.pdf --no-pdf-header-footer \
+               "file://$PWD/lt-toragi-stackchan-idf-slides.html?theme=lcd"
+  画像: .placeholder 枠は素材が揃い次第 <img> に差し替える。
+  顔画像: tools/avatar_dsl でコンパイルした assets/*.avdsl を wasm (avatar_module.js)
+        で描画したもの (実機とピクセル等価)。
+-->
+<style>
+  /* ---------- カラーテーマ (T キーで切替) ---------- */
+  /* night: 元の rust-dap 系ダーク (amber / cyan) */
+  :root, body[data-deck-theme="night"] {
+    --bg: #10141c; --surface: #1a2130; --surface2: #232c40;
+    --text: #e8ecf4; --muted: #8b96ac; --border: #333f58;
+    --accent: #ffb454; --accent2: #5cc8ff; --accent3: #7ee787; --warn: #ff7b72;
+    --on-accent: #10141c;
+    --glow1: rgba(255,180,84,0.07); --glow2: rgba(92,200,255,0.06);
+    --face-frame: #000;
+  }
+  /* lcd: ｽﾀｯｸﾁｬﾝの顔 = 黒画面に白。差し色は M5 のオレンジ 1 色だけ */
+  body[data-deck-theme="lcd"] {
+    --bg: #0a0a0a; --surface: #161616; --surface2: #222222;
+    --text: #f4f4f4; --muted: #9a9a9a; --border: #333333;
+    --accent: #ff8a1f; --accent2: #f4f4f4; --accent3: #9be564; --warn: #ff6b6b;
+    --on-accent: #0a0a0a;
+    --glow1: rgba(255,138,31,0.08); --glow2: rgba(255,255,255,0.03);
+    --face-frame: #000;
+  }
+  /* paper: 明るい会場向けのライト。生成り地 + 濃紺の文字 + 朱の差し色 */
+  body[data-deck-theme="paper"] {
+    --bg: #f6f3ec; --surface: #ffffff; --surface2: #ece7db;
+    --text: #1c2333; --muted: #6a7184; --border: #d6d0c2;
+    --accent: #d9532b; --accent2: #1f6feb; --accent3: #2e8b57; --warn: #c0392b;
+    --on-accent: #ffffff;
+    --glow1: rgba(217,83,43,0.07); --glow2: rgba(31,111,235,0.06);
+    --face-frame: #000;
+  }
+  /* ink: 濃紺 + ミント。M5 の "Tech" 寄り、寒色一本で落ち着いた印象 */
+  body[data-deck-theme="ink"] {
+    --bg: #0b1220; --surface: #121c30; --surface2: #1a2740;
+    --text: #e6edf7; --muted: #8fa1bd; --border: #2a3a58;
+    --accent: #5ee6c9; --accent2: #8ab4ff; --accent3: #a3e635; --warn: #ff8080;
+    --on-accent: #0b1220;
+    --glow1: rgba(94,230,201,0.08); --glow2: rgba(138,180,255,0.06);
+    --face-frame: #000;
+  }
+  /* mono: 白黒のみ。強調は白 + 太字、階層はグレーの濃淡だけで作る */
+  body[data-deck-theme="mono"] {
+    --bg: #000000; --surface: #111111; --surface2: #1c1c1c;
+    --text: #ffffff; --muted: #8c8c8c; --border: #3a3a3a;
+    --accent: #ffffff; --accent2: #ffffff; --accent3: #ffffff; --warn: #ffffff;
+    --on-accent: #000000;
+    --glow1: transparent; --glow2: transparent;
+    --face-frame: #000;
+  }
+  /* mono-light: 白地に黒。印刷・明るい会場向けの白黒 */
+  body[data-deck-theme="mono-light"] {
+    --bg: #ffffff; --surface: #f4f4f4; --surface2: #e9e9e9;
+    --text: #111111; --muted: #6e6e6e; --border: #c8c8c8;
+    --accent: #111111; --accent2: #111111; --accent3: #111111; --warn: #111111;
+    --on-accent: #ffffff;
+    --glow1: transparent; --glow2: transparent;
+    --face-frame: #000;
+  }
+  /* 白黒テーマでは色分けで区別していた箇所を線種・太さで区別する */
+  body[data-deck-theme^="mono"] .card { border-width: 2px; }
+  body[data-deck-theme^="mono"] table.spec tr.me td { background: transparent; font-weight: 800; }
+  body[data-deck-theme^="mono"] table.spec tr.official td { background: transparent; }
+  body[data-deck-theme^="mono"] table.spec tr.me td:first-child { text-decoration: underline; text-underline-offset: 8px; text-decoration-thickness: 3px; }
+  body[data-deck-theme^="mono"] .step .tag { border: 2px solid var(--text); background: transparent; color: var(--text); }
+  body[data-deck-theme^="mono"] .step .tag.solution { background: var(--text); color: var(--bg); }
+  body[data-deck-theme^="mono"] .callout { border-left-width: 6px; }
+  body[data-deck-theme^="mono"] pre .kw { font-weight: 800; }
+  body[data-deck-theme^="mono"] pre .fn { text-decoration: underline; }
+  :root { --mono: "Cascadia Code", "JetBrains Mono", Consolas, "Noto Sans Mono CJK JP", monospace; }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: var(--bg); overflow: hidden; }
+  body {
+    font-family: "Hiragino Sans", "Noto Sans CJK JP", "Yu Gothic UI", "Meiryo", sans-serif;
+    color: var(--text);
+  }
+  #stage {
+    position: absolute; left: 50%; top: 50%;
+    width: 1920px; height: 1080px;
+    transform-origin: center center;
+  }
+  .slide {
+    position: absolute; inset: 0;
+    width: 1920px; height: 1080px;
+    padding: 90px 120px;
+    display: none;
+    flex-direction: column;
+    background:
+      radial-gradient(1200px 600px at 85% -10%, var(--glow1), transparent 60%),
+      radial-gradient(1000px 500px at -5% 110%, var(--glow2), transparent 60%),
+      var(--bg);
+  }
+  .slide.active { display: flex; }
+
+  h1 { font-size: 72px; font-weight: 800; line-height: 1.25; }
+  h2 {
+    font-size: 56px; font-weight: 800; margin-bottom: 40px;
+    padding-bottom: 20px; border-bottom: 4px solid var(--accent);
+    align-self: flex-start; padding-right: 60px;
+  }
+  h2 .no { color: var(--accent); font-family: var(--mono); font-size: 40px; margin-right: 24px; }
+  ul.big { font-size: 40px; line-height: 1.7; list-style: none; }
+  ul.big > li { padding-left: 52px; position: relative; margin-bottom: 26px; }
+  ul.big > li::before { content: "▸"; position: absolute; left: 8px; color: var(--accent); }
+  ul.big ul { list-style: none; font-size: 34px; margin-top: 12px; color: var(--muted); }
+  ul.big ul li { padding-left: 44px; position: relative; margin-bottom: 10px; }
+  ul.big ul li::before { content: "–"; position: absolute; left: 12px; color: var(--border); }
+  strong { color: var(--accent); font-weight: 800; }
+  .cyan { color: var(--accent2); }
+  .green { color: var(--accent3); }
+  .warn { color: var(--warn); }
+  .muted { color: var(--muted); }
+  code {
+    font-family: var(--mono); font-size: 0.92em;
+    background: var(--surface2); padding: 2px 14px; border-radius: 8px;
+  }
+  pre {
+    font-family: var(--mono); font-size: 26px; line-height: 1.5;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 16px; padding: 24px 32px; overflow: hidden;
+  }
+  pre .kw { color: var(--accent2); } pre .cm { color: var(--muted); } pre .fn { color: var(--accent3); }
+  .cols { display: flex; gap: 60px; flex: 1; min-height: 0; }
+  .col { flex: 1; min-width: 0; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 20px; padding: 36px 44px;
+  }
+  .card .hd { font-size: 36px; font-weight: 800; margin-bottom: 16px; }
+  .card .bd { font-size: 30px; line-height: 1.6; }
+  .placeholder {
+    border: 3px dashed var(--border); border-radius: 20px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 30px; text-align: center; line-height: 1.6;
+    background: rgba(127,127,127,0.05);
+  }
+  .foot {
+    position: absolute; bottom: 36px; left: 120px; right: 120px;
+    display: flex; justify-content: space-between;
+    color: var(--muted); font-size: 24px; font-family: var(--mono);
+  }
+  .callout {
+    margin-top: auto; background: var(--surface); border-left: 10px solid var(--accent);
+    border-radius: 0 16px 16px 0; padding: 28px 44px; font-size: 34px;
+  }
+  table.spec { border-collapse: collapse; width: 100%; font-size: 34px; }
+  table.spec th, table.spec td { padding: 16px 28px; text-align: left; border-bottom: 1px solid var(--border); }
+  table.spec th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+  table.spec tr.me td { background: color-mix(in srgb, var(--accent2) 12%, transparent); }
+  table.spec tr.official td { background: color-mix(in srgb, var(--warn) 10%, transparent); }
+
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px; flex: 1; min-height: 0; }
+  .grid3 .card { display: flex; flex-direction: column; }
+  .compact .card { padding: 24px 36px; }
+  .compact .card .hd { font-size: 32px; margin-bottom: 10px; }
+  .compact .card .bd { font-size: 27px; line-height: 1.5; }
+
+  /* 横長カード (04 設定方法) */
+  .card.row { display: grid; grid-template-columns: 300px 1fr; column-gap: 24px; padding: 22px 36px; align-items: center; }
+  .card.row .hd { font-size: 36px; margin: 0; }
+  .card.row ul.big { font-size: 28px; line-height: 1.45; }
+  .card.row ul.big > li { margin-bottom: 4px; padding-left: 40px; }
+  .card.row .note { grid-column: 1 / -1; font-size: 22px; color: var(--muted); margin-top: 8px; }
+
+  /* 課題 → 対策 */
+  .step { display: flex; gap: 28px; align-items: flex-start; }
+  .step .tag {
+    flex: 0 0 auto; font-size: 26px; font-weight: 800; letter-spacing: 2px;
+    padding: 6px 18px; border-radius: 10px; margin-top: 10px;
+  }
+  .step .tag.problem { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+  .step .tag.solution { background: color-mix(in srgb, var(--accent3) 18%, transparent); color: var(--accent3); }
+  .step .body { font-size: 38px; line-height: 1.55; }
+  .step .body small { display: block; font-size: 30px; color: var(--muted); margin-top: 6px; }
+
+  /* 顔画像 */
+  .face { border-radius: 16px; background: var(--face-frame); border: 2px solid var(--border); overflow: hidden; }
+  .face img { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+  .face .cap { font-size: 24px; color: var(--muted); text-align: center; padding: 8px 0; font-family: var(--mono); background: var(--surface); }
+
+  a.url { font-family: var(--mono); font-size: 21px; color: var(--accent2); text-decoration: underline; text-underline-offset: 5px; white-space: nowrap; }
+  a.url:hover, a.url:focus-visible { color: var(--accent); outline: none; }
+
+  /* タイトル */
+  .title-slide { justify-content: center; gap: 44px; }
+  .title-slide .chip { font-family: var(--mono); font-size: 30px; color: var(--accent); letter-spacing: 2px; }
+  .title-slide h1 span { color: var(--accent2); }
+  .title-slide .who { font-size: 36px; color: var(--muted); margin-top: 30px; }
+
+  #pageno {
+    position: fixed; right: 28px; bottom: 20px; z-index: 10;
+    color: var(--muted); font-family: var(--mono); font-size: 16px;
+  }
+  #themename {
+    position: fixed; left: 28px; bottom: 20px; z-index: 10;
+    color: var(--muted); font-family: var(--mono); font-size: 16px; opacity: 0; transition: opacity .3s;
+  }
+  #themename.show { opacity: 1; }
+
+  @page { size: 1920px 1080px; margin: 0; }
+  @media print {
+    html, body { height: auto; overflow: visible; background: var(--bg);
+                 -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    #stage { position: static; transform: none !important; width: 1920px; height: auto; }
+    .slide { display: flex !important; position: relative; overflow: hidden; break-after: page; page-break-after: always; }
+    .slide:last-child { break-after: auto; page-break-after: auto; }
+    #pageno, #themename { display: none; }
+  }
+</style>
+</head>
+<body data-deck-theme="night">
+<div id="stage">
+
+  <!-- 0: タイトル (15秒) -->
+  <section class="slide title-slide active">
+    <div class="cols" style="align-items:center;">
+      <div class="col" style="display:flex; flex-direction:column; gap:44px;">
+        <div class="chip">トランジスタ技術オフ会 2026-10-07</div>
+        <h1>もう一つの<br>ｽﾀｯｸﾁｬﾝファームウェア<br><span>stackchan-idf</span></h1>
+        <div style="font-size:36px; color:var(--muted); line-height:1.5;">簡単につかえるｽﾀｯｸﾁｬﾝファームウェア</div>
+        <div class="who">井田 健太 / <span style="color:var(--accent2);">@ciniml</span></div>
+      </div>
+      <div class="col" style="flex:0 0 640px; display:flex; justify-content:center;">
+        <img src="figure/stackchan_nekomimi.jpg" alt="CoreS3 ｽﾀｯｸﾁｬﾝ + ネコミミ" style="height:800px; width:auto; border-radius:24px;">
+      </div>
+    </div>
+  </section>
+
+  <!-- 1: 立ち位置 (30秒) -->
+  <section class="slide">
+    <h2><span class="no">01</span>代表的なｽﾀｯｸﾁｬﾝファームウェア</h2>
+    <div style="font-size:30px; color:var(--muted); margin:-10px 0 18px;">ｽﾀｯｸﾁｬﾝ = M5Stack を頭にした手のひらサイズの卓上ロボット (ししかわさん作のオープンハード)。ハードが公開されているので<strong style="color:var(--text);">ファームウェアもいろいろ</strong>ある</div>
+    <table class="spec" style="font-size:32px;">
+      <tr><th>ファームウェア</th><th>ベース</th><th style="white-space:nowrap;">作者</th></tr>
+      <tr><td>Arduino 版</td><td>Arduino</td><td style="white-space:nowrap;">ししかわ さん</td></tr>
+      <tr><td>Moddable 版</td><td>Moddable SDK / JavaScript</td><td style="white-space:nowrap;">ししかわ さん</td></tr>
+      <tr><td>AIｽﾀｯｸﾁｬﾝ / AIｽﾀｯｸﾁｬﾝEx</td><td>Arduino</td><td style="white-space:nowrap;">robo8080 さん / motoh さん</td></tr>
+      <tr class="official"><td><strong class="warn">M5Stack 公式ファーム</strong> (製品版に搭載)</td><td>ESP-IDF 5.5</td><td>M5Stack</td></tr>
+      <tr class="me"><td><strong class="cyan">stackchan-idf</strong></td><td><strong>ESP-IDF 5.5 / C++20</strong></td><td>私 (Kenta Ida)</td></tr>
+    </table>
+    <div class="callout">
+      <strong>公式ファームとは別物・フォークでもない</strong>、フルスクラッチの「もう一つの」ファームウェア
+    </div>
+    <div class="foot"><span>01 / 立ち位置</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+  </section>
+
+  <!-- 2: システム構成と機能 (30秒) -->
+  <section class="slide">
+    <h2><span class="no">02</span>システム構成と機能</h2>
+    <div class="cols">
+      <div class="col" style="flex: 1.5; display:flex; align-items:center; justify-content:center; background:#fff; border-radius:20px; padding:20px;">
+        <img src="architecture.drawio.svg" alt="stackchan-idf アーキテクチャ" style="max-width:100%; max-height:100%;">
+      </div>
+      <div class="col" style="display:flex; flex-direction:column; justify-content:center;">
+        <ul class="big" style="font-size:34px; line-height:1.5;">
+          <li style="margin-bottom:18px;">OpenAI Realtime / Gemini Live / XiaoZhi <strong>対話応答</strong></li>
+          <li style="margin-bottom:18px;">ローカル音声合成による<strong>ランダム発話</strong></li>
+          <li style="margin-bottom:18px;">マイク入力による<strong>口パク</strong></li>
+          <li style="margin-bottom:18px;"><strong>LT タイマー</strong></li>
+          <li style="margin-bottom:18px;"><strong>表情のカスタマイズ</strong></li>
+          <li style="margin-bottom:18px;"><strong>無線経由の設定</strong>機能</li>
+          <li style="margin-bottom:18px;"><strong>アップデート</strong>機能</li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot"><span>02 / 構成と機能</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+  </section>
+
+  <!-- 3: Web Flasher (30秒) -->
+  <section class="slide">
+    <h2><span class="no">03</span>ブラウザから簡単に書き込み</h2>
+    <div class="cols">
+      <div class="col" style="display:flex; flex-direction:column; gap:44px; justify-content:center;">
+        <div class="step">
+          <div class="tag problem">課題</div>
+          <div class="body">ファームウェアの書き込みが難しい<small>ESP-IDF / ツールチェーンのセットアップが必要</small></div>
+        </div>
+        <div class="step">
+          <div class="tag solution">対策</div>
+          <div class="body">ブラウザからファームウェアを書き込み<small>ユーザーは ESP-IDF のセットアップなしで使える (Web Serial / Chrome・Edge)</small></div>
+        </div>
+        <ul class="big" style="font-size:34px; margin-top:10px;">
+          <li>GitHub Pages で書き込みページをホスト<ul>
+            <li>CI が <code>vX.Y.Z</code> タグでボード別にビルド・配置</li>
+            <li><code>ciniml.github.io/stackchan-idf/</code></li>
+          </ul></li>
+        </ul>
+      </div>
+      <div class="col" style="flex:0 0 700px; display:flex; flex-direction:column; justify-content:center; gap:14px;">
+        <img src="figure/web_flasher.png" alt="Web Flasher: 接続 → リリース/ボード選択 → Flash" style="width:100%; height:auto; border-radius:16px; border:2px solid var(--border); background:#fff;">
+        <div style="font-size:24px; color:var(--muted); text-align:center; font-family:var(--mono);">Connect → Select release → Flash の 3 ステップ</div>
+      </div>
+    </div>
+    <div class="foot"><span>03 / 書き込み</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+  </section>
+
+  <!-- 4: 複数の設定方法 (40秒) -->
+  <section class="slide">
+    <h2><span class="no">04</span>複数の設定方法</h2>
+    <div class="cols" style="gap:48px;">
+      <div class="col" style="display:flex; flex-direction:column; gap:22px; justify-content:center;">
+        <div class="card row" style="border-left:10px solid var(--accent2);">
+          <div class="hd cyan">Bluetooth</div>
+          <ul class="big">
+            <li>基本的な設定が可能</li>
+            <li>Wi-Fi の接続設定も Bluetooth 経由</li>
+          </ul>
+          <div class="note">Web Bluetooth の設定ページから。X25519 + AES-256-GCM でアプリ層暗号化</div>
+        </div>
+        <div class="card row" style="border-left:10px solid var(--accent3);">
+          <div class="hd green">Wi-Fi</div>
+          <ul class="big">
+            <li>Bluetooth の設定項目とほぼ同等</li>
+            <li>高速・安定した通信</li>
+            <li>ファームウェア アップデートなど大きいデータの転送</li>
+          </ul>
+          <div class="note">機体の HTTP サーバ + mDNS <code>stackchan-XXXXXX.local</code></div>
+        </div>
+        <div class="card row" style="border-left:10px solid var(--accent);">
+          <div class="hd" style="color:var(--accent);">SoftAP + QR</div>
+          <ul class="big">
+            <li>ブラウザで Bluetooth が使えない <strong>iOS 向け</strong></li>
+            <li>QR を読むと自動で接続先切替・設定ページ表示</li>
+          </ul>
+          <div class="note">未設定時は AP を立てて LCD に Wi-Fi QR (キャプティブポータル)</div>
+        </div>
+      </div>
+      <div class="col" style="flex:0 0 560px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px;">
+        <img src="figure/ap_mode_qr.png" alt="LCD に表示された Wi-Fi 設定モードの QR" style="height:720px; width:auto;">
+        <div style="font-size:24px; color:var(--muted); text-align:center;">未設定時の LCD — SSID / PW / URL 入りの Wi-Fi QR</div>
+      </div>
+    </div>
+    <div class="foot"><span>04 / 設定</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+  </section>
+
+  <!-- 5: 表情のカスタマイズ (40秒) -->
+  <section class="slide">
+    <h2><span class="no">05</span>表情のカスタマイズ</h2>
+    <div class="cols">
+      <div class="col" style="display:flex; flex-direction:column; gap:20px;">
+        <ul class="big" style="font-size:34px; line-height:1.55;">
+          <li>顔の各パーツの<strong>位置・大きさ</strong>を調整可能</li>
+          <li>スクリプト (<strong>Avatar DSL</strong>) 変更により<br>顔の図形変更も柔軟に可能<ul>
+            <li>図形描画処理を記述する <strong>Lua 風 DSL</strong></li>
+            <li>BLE / Wi-Fi 経由で設定・<strong>即時変更</strong></li>
+            <li>文法仕様を置いてあるので <strong>AI に書いてもらう</strong>といい</li>
+          </ul></li>
+        </ul>
+<pre><span class="cm">-- assets/omega_mouth.avdsl (抜粋)</span>
+<span class="kw">fn</span> <span class="fn">eye</span>(center_x, center_y, r, is_left, bo)
+  <span class="kw">let</span> cx = center_x + gaze_h * 3
+  <span class="kw">if</span> eye_open &lt;= 0 <span class="kw">then</span>
+    fill_rect(cx - r, cy - 2, r * 2, 4, primary)
+  <span class="kw">else</span>
+    fill_circle(cx, cy, r, primary)</pre>
+      </div>
+      <div class="col" style="flex:0 0 700px; display:flex; flex-direction:column; gap:18px; justify-content:center;">
+        <div class="face"><img src="figure/face_default.png" alt="デフォルト顔"><div class="cap">default_face.avdsl (標準)</div></div>
+        <div style="display:flex; gap:18px;">
+          <div class="face" style="flex:1;"><img src="figure/face_omega.png" alt="ω 口"><div class="cap">omega_mouth.avdsl</div></div>
+          <div class="face" style="flex:1;"><img src="figure/face_aokko.png" alt="あおっこ顔"><div class="cap">aokko_face.avdsl</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>05 / 表情</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+  </section>
+
+  <!-- 6: ローカル音声合成 (30秒) -->
+  <section class="slide">
+    <h2><span class="no">06</span>ローカル音声合成</h2>
+    <div class="cols">
+      <div class="col">
+        <ul class="big">
+          <li>日本語の音声合成を <strong>ESP32-S3 上に実装</strong><ul>
+            <li>フォルマント合成</li>
+            <li>HMM ベース音声合成</li>
+            <li><strong>ニューラル音声合成 (sanoTTS-jp)</strong> <span class="muted">NEW</span></li>
+          </ul></li>
+          <li>用途<ul>
+            <li>待機中のひとりごと</li>
+            <li>タイマーの読み上げ</li>
+          </ul></li>
+        </ul>
+      </div>
+      <div class="col compact" style="display:flex; flex-direction:column; justify-content:center; gap:16px;">
+        <div class="card" style="border-left:10px solid var(--accent2);">
+          <div class="hd cyan">フォルマント合成</div>
+          <div class="bd" style="font-size:27px;">軽量・即応。短い返事や合図向け</div>
+        </div>
+        <div class="card" style="border-left:10px solid var(--accent);">
+          <div class="hd" style="color:var(--accent);">HMM ベース音声合成</div>
+          <div class="bd" style="font-size:27px;">HTS ボイス + MLSA ボコーダ。自然な読み上げ。声を差し替え可能</div>
+        </div>
+        <div class="card" style="border-left:10px solid var(--accent3);">
+          <div class="hd green">ニューラル音声合成 sanoTTS-jp <span class="muted" style="font-size:24px;">NEW</span></div>
+          <div class="bd" style="font-size:27px;">int8 の小さな TTS モデルを ESP32-S3 で推論。重みは設定ページの 1 クリックで機体が取得</div>
+        </div>
+      </div>
+    </div>
+    <div class="callout" style="font-size:30px;">AI 対話応答とは<strong>独立した機能</strong> — クラウド無しでも喋る。句ごとに合成して<strong>喋りながら次を合成</strong>、母音で口が動く</div>
+    <div class="foot"><span>06 / 音声合成</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+  </section>
+
+  <!-- 7: 複数の M5Stack コアに対応 (30秒) -->
+  <section class="slide">
+    <h2><span class="no">07</span>複数の M5Stack コアに対応</h2>
+    <div class="grid3 compact">
+      <div class="card">
+        <div style="height:330px; margin-bottom:20px; border-radius:16px; overflow:hidden; background:#fff; display:flex; justify-content:center;"><img src="figure/stackchan_nekomimi.jpg" alt="CoreS3 ｽﾀｯｸﾁｬﾝ + ネコミミ" style="height:100%; width:auto;"></div>
+        <div class="hd cyan">ｽﾀｯｸﾁｬﾝ</div>
+        <div class="bd">▸ CoreS3<br>▸ M5 公式キット / タカオ版 両対応</div>
+      </div>
+      <div class="card">
+        <div style="height:330px; margin-bottom:20px; border-radius:16px; overflow:hidden; background:#fff; display:flex; justify-content:center;"><img src="figure/atom_nyan.png" alt="ｱﾄﾑﾆｬﾝ (AtomS3R + Voice Base)" style="height:100%; width:auto;"></div>
+        <div class="hd cyan">ｱﾄﾑﾆｬﾝ</div>
+        <div class="bd">▸ AtomS3R + Voice Base</div>
+      </div>
+      <div class="card">
+        <div style="height:330px; margin-bottom:20px; border-radius:16px; overflow:hidden; background:#fff; display:flex; justify-content:center;"><img src="figure/stopwatch_chan.jpg" alt="M5 StopWatch" style="height:100%; width:auto;"></div>
+        <div class="hd cyan">StopWatch</div>
+        <div class="bd">▸ M5 StopWatch (C152)<br>▸ 丸 AMOLED 466×466</div>
+      </div>
+    </div>
+    <div class="callout" style="margin-top:28px; font-size:30px;">起動時にボード自動判別。無い機能はグレーアウト — <strong>サーボが無い機体でも顔 + 声 + LED として動く</strong></div>
+    <div class="foot"><span>07 / 対応ボード</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+  </section>
+
+  <!-- 8: 前回からのアップデート (40秒) -->
+  <section class="slide">
+    <h2><span class="no">08</span>前回 (9 月の M5 Japan Tour) からのアップデート</h2>
+    <div style="font-size:28px; color:var(--muted); margin:-10px 0 16px;">v0.13 → <strong style="color:var(--text);">v0.15.0-alpha.2</strong> (2026-09)。すべて既存機体にブラウザから入れられます</div>
+    <div class="grid3 compact" style="grid-template-rows:1fr 1fr; gap:22px;">
+      <div class="card">
+        <div class="hd cyan">ニューラル音声合成 sanoTTS-jp</div>
+        <div class="bd" style="font-size:26px;">ESP32-S3 上で動く小さな日本語 TTS。重みは機体が公式サイトから自分で取得 (再ビルド不要)</div>
+      </div>
+      <div class="card">
+        <div class="hd cyan">リップシンクとストリーミング発話</div>
+        <div class="bd" style="font-size:26px;">句ごとに合成して話し始め、母音で口の形が変わり、吹き出しの字幕が同期。<span class="muted">by @mongonta0716 (PR)</span></div>
+      </div>
+      <div class="card">
+        <div class="hd cyan">近接センサーで反応 (CoreS3)</div>
+        <div class="bd" style="font-size:26px;">手を近づけるとうれしい顔で一言。閾値やセンサー前段 (ゲイン / LED) を設定ページで<strong>値を見ながら調整</strong></div>
+      </div>
+      <div class="card">
+        <div class="hd cyan">アクセサリ</div>
+        <div class="bd" style="font-size:26px;">顔 DSL から参照できるアクセサリ スロット。標準の顔は首輪と鈴を描く (ON/OFF 可)</div>
+      </div>
+      <div class="card">
+        <div class="hd cyan">更新の仕組みを刷新</div>
+        <div class="bd" style="font-size:26px;">専用の Recovery 領域経由で更新。設定ページでリリースを選ぶと<strong>機体が Wi-Fi で取りに行く</strong> (BLE から指示可)</div>
+      </div>
+      <div class="card">
+        <div class="hd cyan">アルファ版チャンネル</div>
+        <div class="bd" style="font-size:26px;">Web Flasher / 設定ページの「チャンネル」で alpha を選ぶと検証版を入れられる。正式版は既定のまま</div>
+      </div>
+    </div>
+    <div class="foot"><span>08 / アップデート</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+  </section>
+
+  <!-- 9: その他・これから (30秒 / バッファ) -->
+  <section class="slide">
+    <h2><span class="no">09</span>その他の機能・これからの機能</h2>
+    <div class="cols">
+      <div class="col" style="display:grid; grid-template-columns:1fr 1fr; gap:28px; align-content:start;">
+        <div class="card">
+          <div class="hd cyan">ESP-NOW 公式リモコン互換</div>
+          <div class="bd">公式リモコンのパケットを受けて首が動く。<br>
+            <strong>Sender モード</strong>で 2 台ミラーリングも。<br>
+            <span class="muted">公式リモコンが無かったので AtomS3 Lite でブリッジ機を自作して検証</span></div>
+        </div>
+        <div class="card">
+          <div class="hd cyan">ダンス</div>
+          <div class="bd">フラッシュ上の音声 + キーフレーム (時刻 / 移動秒 / yaw・pitch %) で音楽同期の首振り。HTTP / BLE / 画面からトリガ</div>
+        </div>
+        <div class="card" style="border-style:dashed; grid-column:1 / -1;">
+          <div class="hd" style="color:var(--accent);">これから: ウェイクワード</div>
+          <div class="bd">esp-sr WakeNet + 自前 KWS を実験中。<span class="muted">「名前を呼んだら振り向く」を目指す</span>。近接・音声合成を含む <strong>v0.15.0 正式版</strong>は alpha の反応を見て近日</div>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>09 / その他</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+  </section>
+
+  <!-- 10: まとめ (15秒) -->
+  <section class="slide">
+    <h2><span class="no">10</span>まとめ</h2>
+    <div class="cols">
+      <div class="col">
+        <ul class="big" style="font-size:35px; line-height:1.6;">
+          <li>stackchan-idf = <strong>公式とは別の</strong>、ESP-IDF 製のｽﾀｯｸﾁｬﾝファームウェア</li>
+          <li>手元の <span class="cyan">CoreS3 / AtomS3R / StopWatch</span> で試せます<ul>
+            <li>ブラウザで簡単に入れられるので是非お試しください</li>
+          </ul></li>
+          <li>Boost Software License 1.0 — Issue / PR 歓迎<ul>
+            <li>使いやすいライセンス。fork して魔改造のベースとしてもどうぞ</li>
+            <li>適当に X や Issue に書いてもらえれば機能追加します</li>
+          </ul></li>
+        </ul>
+      </div>
+      <div class="col" style="flex:0 0 720px; display:flex; flex-direction:column; gap:28px; justify-content:center;">
+        <div class="card" style="display:flex; gap:28px; align-items:center;">
+          <img src="figure/qr_repo.png" alt="QR: リポジトリ" style="width:220px; height:220px; border-radius:12px; image-rendering:pixelated;">
+          <div style="font-size:28px; line-height:1.5; min-width:0;">リポジトリ<br><a class="url" href="https://github.com/ciniml/stackchan-idf" target="_blank" rel="noopener">github.com/ciniml/stackchan-idf</a></div>
+        </div>
+        <div class="card" style="display:flex; gap:28px; align-items:center;">
+          <img src="figure/qr_flasher.png" alt="QR: Web Flasher" style="width:220px; height:220px; border-radius:12px; image-rendering:pixelated;">
+          <div style="font-size:28px; line-height:1.5; min-width:0;">Web Flasher<br><a class="url" href="https://ciniml.github.io/stackchan-idf/" target="_blank" rel="noopener">ciniml.github.io/stackchan-idf/</a></div>
+        </div>
+        <div style="text-align:right; font-size:32px; color:var(--muted);">井田 健太 / <span class="cyan">@ciniml</span></div>
+      </div>
+    </div>
+    <div class="foot"><span>10 / まとめ</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+  </section>
+
+</div>
+<div id="pageno"></div>
+<div id="themename"></div>
+<script>
+  const slides = [...document.querySelectorAll('.slide')];
+  let cur = 0;
+  const pageno = document.getElementById('pageno');
+  function show(i) {
+    cur = Math.max(0, Math.min(slides.length - 1, i));
+    slides.forEach((s, k) => s.classList.toggle('active', k === cur));
+    pageno.textContent = (cur + 1) + ' / ' + slides.length;
+    const h = '#' + (cur + 1);
+    if (location.hash !== h) history.replaceState(null, '', h);
+  }
+  function fromHash() {
+    const n = parseInt(location.hash.slice(1), 10);
+    return Number.isFinite(n) ? n - 1 : 0;
+  }
+  addEventListener('hashchange', () => show(fromHash()));
+  function fit() {
+    const s = Math.min(innerWidth / 1920, innerHeight / 1080);
+    document.getElementById('stage').style.transform = 'translate(-50%, -50%) scale(' + s + ')';
+  }
+  // ---- テーマ切替 (T キー / ?theme=) ----
+  const THEMES = ['night', 'lcd', 'paper', 'ink', 'mono', 'mono-light'];
+  const tn = document.getElementById('themename');
+  let tnTimer = null;
+  function setTheme(name, announce) {
+    if (!THEMES.includes(name)) name = THEMES[0];
+    document.body.dataset.deckTheme = name;
+    try { localStorage.setItem('deck-theme', name); } catch (e) {}
+    if (announce) {
+      tn.textContent = 'theme: ' + name + '  (T で切替)';
+      tn.classList.add('show');
+      clearTimeout(tnTimer); tnTimer = setTimeout(() => tn.classList.remove('show'), 1800);
+    }
+  }
+  (function initTheme() {
+    const q = new URLSearchParams(location.search).get('theme');
+    let saved = null; try { saved = localStorage.getItem('deck-theme'); } catch (e) {}
+    setTheme(q || saved || 'night', false);
+  })();
+  addEventListener('resize', fit);
+  addEventListener('keydown', e => {
+    if (['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Enter'].includes(e.key)) { show(cur + 1); e.preventDefault(); }
+    else if (['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace'].includes(e.key)) { show(cur - 1); e.preventDefault(); }
+    else if (e.key === 'Home') show(0);
+    else if (e.key === 'End') show(slides.length - 1);
+    else if (e.key === 't' || e.key === 'T') {
+      setTheme(THEMES[(THEMES.indexOf(document.body.dataset.deckTheme) + 1) % THEMES.length], true);
+    }
+  });
+  addEventListener('click', e => { if (e.target.closest('a')) return; show(cur + (e.clientX > innerWidth / 2 ? 1 : -1)); });
+  fit(); show(fromHash());
+</script>
+</body>
+</html>
