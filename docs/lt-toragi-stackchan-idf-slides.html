@@ -482,18 +482,18 @@
   <section class="slide">
     <h2><span class="no">09</span>紹介: バイブコーディングでｽﾀｯｸﾁｬﾝ開発 (CodeZine 連載)</h2>
     <div class="cols" style="gap:48px;">
-      <div class="col" style="display:flex; flex-direction:column; gap:24px; justify-content:center;">
+      <div class="col" style="display:flex; flex-direction:column; gap:22px; justify-content:center;">
         <div class="card" style="border-left:10px solid var(--accent2);">
-          <div class="hd cyan" style="font-size:34px; line-height:1.4;">バイブコーディングで始める組み込み開発<br>── Codex で動かすｽﾀｯｸﾁｬﾝ (環境構築 &amp; Lチカ編)</div>
-          <div class="bd" style="font-size:28px;">湊川 あい さん / 石川 真也 (<strong>ししかわ</strong>) さん — ｽﾀｯｸﾁｬﾝ生みの親による CodeZine 連載</div>
+          <div class="hd cyan" style="font-size:33px; line-height:1.4;">バイブコーディングで始める組み込み開発<br>── Codex で動かすｽﾀｯｸﾁｬﾝ (環境構築 &amp; Lチカ編)</div>
+          <div class="bd" style="font-size:27px;">連載「AI と叶える『あなただけのスタックチャン』開発入門」第 2 回 (2026-09-07)<br>石川 真也 (<strong>ししかわ</strong>) さん — ｽﾀｯｸﾁｬﾝ生みの親</div>
         </div>
-        <ul class="big" style="font-size:32px; line-height:1.55;">
-          <li>生成 AI (Codex) を相棒に、ｽﾀｯｸﾁｬﾝの個人開発に挑む入門連載</li>
-          <li>題材のファームウェアとして <strong class="cyan">stackchan-idf</strong> を使っていただいています<ul>
-            <li>環境構築 → Lチカ → 「拍手で踊る」機能を 1 つずつ実装して合体</li>
-            <li>ESP-IDF / C++ を知らなくても、AI と対話しながら機体を育てる</li>
+        <ul class="big" style="font-size:31px; line-height:1.5;">
+          <li><strong>「バイブコーディング縛り」</strong>: 実装は Codex (gpt-5.6) に丸ごと任せ、人は要件整理・差分確認・実機操作・動作確認を担当。題材は「手拍子に合わせて踊るｽﾀｯｸﾁｬﾝ」</li>
+          <li>題材のファームウェアに <strong class="cyan">stackchan-idf</strong> を選んでいただいた理由 (記事より)<ul>
+            <li>ESP-IDF 上の C++ で、画面描画〜LED までの<strong>呼び出し構造を追いやすい</strong></li>
+            <li>Espressif の一次資料が充実。<strong>最初から AI エージェントと開発されてきた</strong>プロジェクト</li>
           </ul></li>
-          <li>stackchan-idf は <strong>仕様書・DSL 文法・設定 API を docs に置いてある</strong>ので AI に読ませやすい — こういう使い方は大歓迎</li>
+          <li>内容: <code>/plan</code> で安全なセットアップ計画 → 非常停止手順 → 吹き出しに Hello World → 画面タッチで背面 LED 点滅</li>
         </ul>
       </div>
       <div class="col" style="flex:0 0 520px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px;">
