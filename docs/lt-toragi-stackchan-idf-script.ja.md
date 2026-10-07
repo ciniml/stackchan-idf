@@ -4,11 +4,21 @@
 
 - 場: トランジスタ技術オフ会「M5Stack を使った電子工作・開発・魅力について語り合おう！」
   (2026-10-07 18:00–21:00、CQ出版社。ゲスト LT 18:10–19:40 / 参加者ミニ発表 19:40–20:20)
-- スライド: `lt-toragi-stackchan-idf-slides.html` (11 枚、PDF は `lt-toragi-stackchan-idf-slides-paper.pdf`)
+- スライド: `lt-toragi-stackchan-idf-slides.html` v1.1 (12 枚、PDF は `lt-toragi-stackchan-idf-slides-paper.pdf`)
 - ベース原稿は `lt-m5meetup-stackchan-idf-script.ja.md`。**変わった枚だけ**ここに書く。
   聴衆は雑誌読者・初心者も含むので、01 の冒頭でｽﾀｯｸﾁｬﾝ自体を一言説明する。
 - 08 (アップデート) が 40 秒、09 (CodeZine 連載の紹介) が 30 秒。元の「その他・これから」は削除。
   5 分に収めるなら 03 (書き込み) か 07 (対応ボード) を短く言う。
+
+---
+
+## 1b. 自己紹介 (0:15–0:35) ★新規 (番号は 01、以降 1 つずつ繰り下がる)
+
+> 井田健太です。X と GitHub は ciniml。組込みソフトや FPGA をやっていて、
+> 組込み Rust と、MCU 向けのファームウェア開発をしています。
+> ｽﾀｯｸﾁｬﾝは最初 Rust で書いて、今日話す ESP-IDF 版に移りました。
+> 本は『基礎から学ぶ 組込みRust』を中林さんと書いています。CQ出版さんでは
+> Interface 2025 年 12 月号の別冊付録「FPGA デザイン集」を書きました。
 
 ---
 

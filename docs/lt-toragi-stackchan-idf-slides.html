@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>もう一つのｽﾀｯｸﾁｬﾝファームウェア stackchan-idf</title>
+<title>もう一つのｽﾀｯｸﾁｬﾝファームウェア stackchan-idf (v1.1)</title>
 <!--
   SPDX-FileCopyrightText: 2026 Kenta IDA <fuga@fugafuga.org>
   SPDX-License-Identifier: BSL-1.0
@@ -235,8 +235,8 @@
   <section class="slide title-slide active">
     <div class="cols" style="align-items:center;">
       <div class="col" style="display:flex; flex-direction:column; gap:44px;">
-        <div class="chip">トランジスタ技術オフ会 2026-10-07</div>
-        <h1>もう一つの<br>ｽﾀｯｸﾁｬﾝファームウェア<br><span>stackchan-idf</span></h1>
+        <div style="display:flex; gap:16px; align-items:center;"><div class="chip">トランジスタ技術オフ会 2026-10-07</div><div class="chip" style="background:transparent; border:2px solid var(--border); color:var(--muted);">v1.1 — 2026-10 更新版</div></div>
+        <h1>もう一つの<br>ｽﾀｯｸﾁｬﾝファームウェア<br><span>stackchan-idf</span> <span style="font-size:0.45em; color:var(--muted); font-weight:600;">v1.1</span></h1>
         <div style="font-size:36px; color:var(--muted); line-height:1.5;">簡単につかえるｽﾀｯｸﾁｬﾝファームウェア</div>
         <div class="who">井田 健太 / <span style="color:var(--accent2);">@ciniml</span></div>
       </div>
@@ -246,9 +246,43 @@
     </div>
   </section>
 
-  <!-- 1: 立ち位置 (30秒) -->
+
+  <!-- 1: 自己紹介 (20秒) -->
   <section class="slide">
-    <h2><span class="no">01</span>代表的なｽﾀｯｸﾁｬﾝファームウェア</h2>
+    <h2><span class="no">01</span>自己紹介</h2>
+    <div class="cols" style="gap:56px; align-items:center;">
+      <div class="col" style="flex:0 0 420px; display:flex; flex-direction:column; align-items:center; gap:22px;">
+        <img src="figure/avatar_ciniml.png" alt="@ciniml のアイコン" style="width:300px; height:300px; border-radius:50%; border:6px solid var(--border);">
+        <div style="font-size:40px; font-weight:800;">井田 健太</div>
+        <div style="font-size:28px; color:var(--muted); font-family:var(--mono); line-height:1.6; text-align:center;">X: <span class="cyan">@ciniml</span><br>GitHub: <span class="cyan">github.com/ciniml</span></div>
+      </div>
+      <div class="col" style="display:flex; flex-direction:column; gap:24px; justify-content:center;">
+        <ul class="big" style="font-size:33px; line-height:1.55;">
+          <li>組込みソフト / FPGA の人。<strong>組込み Rust</strong> と <strong>MCU 向けファームウェア開発</strong></li>
+          <li>ｽﾀｯｸﾁｬﾝ歴: Rust 版 (stackchan-rs) → ESP-IDF 版 (今日の話)</li>
+          <li>自作デバッグプローブ <code>rust-dap</code> など</li>
+        </ul>
+        <div class="card" style="display:flex; gap:28px; align-items:center; border-left:10px solid var(--accent);">
+          <img src="figure/book_embedded_rust.jpg" alt="基礎から学ぶ 組込みRust 表紙" style="height:260px; width:auto; border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,0.25);">
+          <div style="font-size:28px; line-height:1.55; min-width:0;">
+            <div style="font-size:24px; color:var(--muted);">著書</div>
+            <div style="font-size:34px; font-weight:800;">基礎から学ぶ 組込みRust</div>
+            <div>中林 智之・井田 健太 共著 / C&amp;R研究所 (2021)</div>
+            <div class="muted" style="font-size:24px;">Wio Terminal で学ぶ組込み Rust 入門。Lチカから LCD・アプリ開発まで</div>
+            <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border);">
+              <div style="font-size:24px; color:var(--muted);">執筆 (CQ出版)</div>
+              <div style="font-size:28px; font-weight:700;">Interface 2025 年 12 月号 別冊付録<br><span class="cyan">高コスパ・ボードですぐ作れる！FPGA デザイン集</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>01 / 自己紹介</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+  </section>
+
+  <!-- 2: 立ち位置 (30秒) -->
+  <section class="slide">
+    <h2><span class="no">02</span>代表的なｽﾀｯｸﾁｬﾝファームウェア</h2>
     <div style="font-size:30px; color:var(--muted); margin:-10px 0 18px;">ｽﾀｯｸﾁｬﾝ = M5Stack を頭にした手のひらサイズの卓上ロボット (ししかわさん作のオープンハード)。ハードが公開されているので<strong style="color:var(--text);">ファームウェアもいろいろ</strong>ある</div>
     <table class="spec" style="font-size:32px;">
       <tr><th>ファームウェア</th><th>ベース</th><th style="white-space:nowrap;">作者</th></tr>
@@ -261,12 +295,12 @@
     <div class="callout">
       <strong>公式ファームとは別物・フォークでもない</strong>、フルスクラッチの「もう一つの」ファームウェア
     </div>
-    <div class="foot"><span>01 / 立ち位置</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+    <div class="foot"><span>02 / 立ち位置</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
   </section>
 
   <!-- 2: システム構成と機能 (30秒) -->
   <section class="slide">
-    <h2><span class="no">02</span>システム構成と機能</h2>
+    <h2><span class="no">03</span>システム構成と機能</h2>
     <div class="cols">
       <div class="col" style="flex: 1.5; display:flex; align-items:center; justify-content:center; background:#fff; border-radius:20px; padding:20px;">
         <img src="architecture.drawio.svg" alt="stackchan-idf アーキテクチャ" style="max-width:100%; max-height:100%;">
@@ -283,12 +317,12 @@
         </ul>
       </div>
     </div>
-    <div class="foot"><span>02 / 構成と機能</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+    <div class="foot"><span>03 / 構成と機能</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
   </section>
 
   <!-- 3: Web Flasher (30秒) -->
   <section class="slide">
-    <h2><span class="no">03</span>ブラウザから簡単に書き込み</h2>
+    <h2><span class="no">04</span>ブラウザから簡単に書き込み</h2>
     <div class="cols">
       <div class="col" style="display:flex; flex-direction:column; gap:44px; justify-content:center;">
         <div class="step">
@@ -311,12 +345,12 @@
         <div style="font-size:24px; color:var(--muted); text-align:center; font-family:var(--mono);">Connect → Select release → Flash の 3 ステップ</div>
       </div>
     </div>
-    <div class="foot"><span>03 / 書き込み</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+    <div class="foot"><span>04 / 書き込み</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
   </section>
 
   <!-- 4: 複数の設定方法 (40秒) -->
   <section class="slide">
-    <h2><span class="no">04</span>複数の設定方法</h2>
+    <h2><span class="no">05</span>複数の設定方法</h2>
     <div class="cols" style="gap:48px;">
       <div class="col" style="display:flex; flex-direction:column; gap:22px; justify-content:center;">
         <div class="card row" style="border-left:10px solid var(--accent2);">
@@ -350,12 +384,12 @@
         <div style="font-size:24px; color:var(--muted); text-align:center;">未設定時の LCD — SSID / PW / URL 入りの Wi-Fi QR</div>
       </div>
     </div>
-    <div class="foot"><span>04 / 設定</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+    <div class="foot"><span>05 / 設定</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
   </section>
 
   <!-- 5: 表情のカスタマイズ (40秒) -->
   <section class="slide">
-    <h2><span class="no">05</span>表情のカスタマイズ</h2>
+    <h2><span class="no">06</span>表情のカスタマイズ</h2>
     <div class="cols">
       <div class="col" style="display:flex; flex-direction:column; gap:20px;">
         <ul class="big" style="font-size:34px; line-height:1.55;">
@@ -382,12 +416,12 @@
         </div>
       </div>
     </div>
-    <div class="foot"><span>05 / 表情</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+    <div class="foot"><span>06 / 表情</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
   </section>
 
   <!-- 6: ローカル音声合成 (30秒) -->
   <section class="slide">
-    <h2><span class="no">06</span>ローカル音声合成</h2>
+    <h2><span class="no">07</span>ローカル音声合成</h2>
     <div class="cols">
       <div class="col">
         <ul class="big">
@@ -418,12 +452,12 @@
       </div>
     </div>
     <div class="callout" style="font-size:30px;">AI 対話応答とは<strong>独立した機能</strong> — クラウド無しでも喋る。句ごとに合成して<strong>喋りながら次を合成</strong>、母音で口が動く</div>
-    <div class="foot"><span>06 / 音声合成</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+    <div class="foot"><span>07 / 音声合成</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
   </section>
 
   <!-- 7: 複数の M5Stack コアに対応 (30秒) -->
   <section class="slide">
-    <h2><span class="no">07</span>複数の M5Stack コアに対応</h2>
+    <h2><span class="no">08</span>複数の M5Stack コアに対応</h2>
     <div class="grid3 compact">
       <div class="card">
         <div style="height:330px; margin-bottom:20px; border-radius:16px; overflow:hidden; background:#fff; display:flex; justify-content:center;"><img src="figure/stackchan_nekomimi.jpg" alt="CoreS3 ｽﾀｯｸﾁｬﾝ + ネコミミ" style="height:100%; width:auto;"></div>
@@ -442,12 +476,12 @@
       </div>
     </div>
     <div class="callout" style="margin-top:28px; font-size:30px;">起動時にボード自動判別。無い機能はグレーアウト — <strong>サーボが無い機体でも顔 + 声 + LED として動く</strong></div>
-    <div class="foot"><span>07 / 対応ボード</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+    <div class="foot"><span>08 / 対応ボード</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
   </section>
 
   <!-- 8: 前回からのアップデート (40秒) -->
   <section class="slide">
-    <h2><span class="no">08</span>前回 (9 月の M5 Japan Tour) からのアップデート</h2>
+    <h2><span class="no">09</span>前回 (9 月の M5 Japan Tour) からのアップデート</h2>
     <div style="font-size:28px; color:var(--muted); margin:-10px 0 16px;">v0.13 → <strong style="color:var(--text);">v0.15.0-alpha.2</strong> (2026-09)。すべて既存機体にブラウザから入れられます</div>
     <div class="grid3 compact" style="grid-template-rows:1fr 1fr; gap:22px;">
       <div class="card">
@@ -475,12 +509,12 @@
         <div class="bd" style="font-size:26px;">Web Flasher / 設定ページの「チャンネル」で alpha を選ぶと検証版を入れられる。正式版は既定のまま</div>
       </div>
     </div>
-    <div class="foot"><span>08 / アップデート</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+    <div class="foot"><span>09 / アップデート</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
   </section>
 
   <!-- 9: 紹介: CodeZine 連載 (30秒) -->
   <section class="slide">
-    <h2><span class="no">09</span>紹介: バイブコーディングでｽﾀｯｸﾁｬﾝ開発 (CodeZine 連載)</h2>
+    <h2><span class="no">10</span>紹介: バイブコーディングでｽﾀｯｸﾁｬﾝ開発 (CodeZine 連載)</h2>
     <div class="cols" style="gap:48px;">
       <div class="col" style="display:flex; flex-direction:column; gap:22px; justify-content:center;">
         <div class="card" style="border-left:10px solid var(--accent2);">
@@ -501,12 +535,12 @@
         <div style="font-size:26px; line-height:1.5; text-align:center;"><a class="url" href="https://codezine.jp/article/detail/29015" target="_blank" rel="noopener">codezine.jp/article/detail/29015</a></div>
       </div>
     </div>
-    <div class="foot"><span>09 / 紹介</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+    <div class="foot"><span>10 / 紹介</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
   </section>
 
   <!-- 10: まとめ (15秒) -->
   <section class="slide">
-    <h2><span class="no">10</span>まとめ</h2>
+    <h2><span class="no">11</span>まとめ</h2>
     <div class="cols">
       <div class="col">
         <ul class="big" style="font-size:35px; line-height:1.6;">
@@ -532,7 +566,7 @@
         <div style="text-align:right; font-size:32px; color:var(--muted);">井田 健太 / <span class="cyan">@ciniml</span></div>
       </div>
     </div>
-    <div class="foot"><span>10 / まとめ</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+    <div class="foot"><span>11 / まとめ</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
   </section>
 
 </div>
