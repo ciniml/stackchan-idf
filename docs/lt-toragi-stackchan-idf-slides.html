@@ -478,28 +478,30 @@
     <div class="foot"><span>08 / アップデート</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
   </section>
 
-  <!-- 9: その他・これから (30秒 / バッファ) -->
+  <!-- 9: 紹介: CodeZine 連載 (30秒) -->
   <section class="slide">
-    <h2><span class="no">09</span>その他の機能・これからの機能</h2>
-    <div class="cols">
-      <div class="col" style="display:grid; grid-template-columns:1fr 1fr; gap:28px; align-content:start;">
-        <div class="card">
-          <div class="hd cyan">ESP-NOW 公式リモコン互換</div>
-          <div class="bd">公式リモコンのパケットを受けて首が動く。<br>
-            <strong>Sender モード</strong>で 2 台ミラーリングも。<br>
-            <span class="muted">公式リモコンが無かったので AtomS3 Lite でブリッジ機を自作して検証</span></div>
+    <h2><span class="no">09</span>紹介: バイブコーディングでｽﾀｯｸﾁｬﾝ開発 (CodeZine 連載)</h2>
+    <div class="cols" style="gap:48px;">
+      <div class="col" style="display:flex; flex-direction:column; gap:24px; justify-content:center;">
+        <div class="card" style="border-left:10px solid var(--accent2);">
+          <div class="hd cyan" style="font-size:34px; line-height:1.4;">バイブコーディングで始める組み込み開発<br>── Codex で動かすｽﾀｯｸﾁｬﾝ (環境構築 &amp; Lチカ編)</div>
+          <div class="bd" style="font-size:28px;">湊川 あい さん / 石川 真也 (<strong>ししかわ</strong>) さん — ｽﾀｯｸﾁｬﾝ生みの親による CodeZine 連載</div>
         </div>
-        <div class="card">
-          <div class="hd cyan">ダンス</div>
-          <div class="bd">フラッシュ上の音声 + キーフレーム (時刻 / 移動秒 / yaw・pitch %) で音楽同期の首振り。HTTP / BLE / 画面からトリガ</div>
-        </div>
-        <div class="card" style="border-style:dashed; grid-column:1 / -1;">
-          <div class="hd" style="color:var(--accent);">これから: ウェイクワード</div>
-          <div class="bd">esp-sr WakeNet + 自前 KWS を実験中。<span class="muted">「名前を呼んだら振り向く」を目指す</span>。近接・音声合成を含む <strong>v0.15.0 正式版</strong>は alpha の反応を見て近日</div>
-        </div>
+        <ul class="big" style="font-size:32px; line-height:1.55;">
+          <li>生成 AI (Codex) を相棒に、ｽﾀｯｸﾁｬﾝの個人開発に挑む入門連載</li>
+          <li>題材のファームウェアとして <strong class="cyan">stackchan-idf</strong> を使っていただいています<ul>
+            <li>環境構築 → Lチカ → 「拍手で踊る」機能を 1 つずつ実装して合体</li>
+            <li>ESP-IDF / C++ を知らなくても、AI と対話しながら機体を育てる</li>
+          </ul></li>
+          <li>stackchan-idf は <strong>仕様書・DSL 文法・設定 API を docs に置いてある</strong>ので AI に読ませやすい — こういう使い方は大歓迎</li>
+        </ul>
+      </div>
+      <div class="col" style="flex:0 0 520px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px;">
+        <img src="figure/qr_codezine_vibe.png" alt="QR: CodeZine 記事" style="width:360px; height:360px; border-radius:16px; image-rendering:pixelated; background:#fff; padding:12px;">
+        <div style="font-size:26px; line-height:1.5; text-align:center;"><a class="url" href="https://codezine.jp/article/detail/29015" target="_blank" rel="noopener">codezine.jp/article/detail/29015</a></div>
       </div>
     </div>
-    <div class="foot"><span>09 / その他</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
+    <div class="foot"><span>09 / 紹介</span><span>トランジスタ技術オフ会 2026-10-07</span></div>
   </section>
 
   <!-- 10: まとめ (15秒) -->
