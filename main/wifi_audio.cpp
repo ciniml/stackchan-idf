@@ -17,6 +17,7 @@
 #include <M5Unified.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
+#include <esp_wifi.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -50,10 +51,14 @@ constexpr std::uint32_t kSampleRate = 48000;
 // never collides with the conversation task's channel 0 or the demo babble.
 constexpr std::uint8_t kSpeakerChannel = 2;
 
-// Live jitter buffer: ~100 ms pre-roll before playback starts, ~500 ms ring.
+// Live jitter buffer: ~200 ms pre-roll before playback starts, ~500 ms ring.
 // Small on purpose — this is live audio, latency matters more than smoothing.
+// 100 ms was not enough against the Wi-Fi jitter right after a sender
+// starts (2026-10-09: ~28 ten-millisecond dropouts in the first 2 s, none
+// after); 200 ms rides that out and still keeps latency under a quarter second.
 constexpr std::size_t kChunkSamples = 480;        // 10 ms @ 48 kHz, one playRaw chunk
-constexpr std::size_t kPrerollSamples = 4800;     // 100 ms before first playRaw
+constexpr std::size_t kPrerollSamples = 9600;     // 200 ms before first playRaw
+constexpr std::size_t kRingTarget = 9600;         // steady-state level the rate trim steers to
 constexpr std::size_t kRingSamples = 24000;       // 500 ms cap
 constexpr std::size_t kScratchBuffers = 4;        // > speaker queue depth (2)
 
@@ -138,6 +143,7 @@ struct Ring {
         if (n > tail) std::memset(data, 0, (n - tail) * sizeof(std::int16_t));
         write += n;
     }
+    std::int16_t at(std::size_t i) const { return data[(read + i) % capacity]; }
     void pop(std::int16_t* dst, std::size_t n)
     {
         const std::size_t rpos = read % capacity;
@@ -174,9 +180,17 @@ public:
         g_mouth_smoothed = 0.0f;
         g_db_baseline_init = false;
         if (g_state != nullptr) g_state->audio_stream_active.store(true, std::memory_order_release);
+        overruns_ = underruns_ = resyncs_ = 0;
+        ratio_ = 1.0f; phase_ = 0.0f; level_lp_ = static_cast<float>(kRingTarget);
+        // Live audio can't ride out modem-sleep wake-ups (DTIM-spaced RX
+        // gaps show up as dropouts), so hold the radio awake for the stream
+        // and hand power save back at end_session().
+        esp_wifi_set_ps(WIFI_PS_NONE);
+        wifi_ap_record_t ap{};
+        const int rssi = esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : 0;
         const bool spk_ok = M5.Speaker.begin();
-        ESP_LOGI(kTag, "stream begin (%u Hz mono, speaker=%d)", static_cast<unsigned>(kSampleRate),
-                 spk_ok ? 1 : 0);
+        ESP_LOGI(kTag, "stream begin (%u Hz mono, speaker=%d, rssi=%d, ps=none)",
+                 static_cast<unsigned>(kSampleRate), spk_ok ? 1 : 0, rssi);
     }
 
     void end_session()
@@ -188,14 +202,22 @@ public:
             g_state->face.mouth_open.store(0.0f, std::memory_order_relaxed);
             g_state->audio_stream_active.store(false, std::memory_order_release);
         }
-        ESP_LOGI(kTag, "stream end");
+        esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+        ESP_LOGI(kTag, "stream end: chunks=%u overruns=%u resyncs=%u underruns=%u lost_pkts=%u",
+                 static_cast<unsigned>(chunks_played_), static_cast<unsigned>(overruns_),
+                 static_cast<unsigned>(resyncs_), static_cast<unsigned>(underruns_),
+                 static_cast<unsigned>(lost_packets));
+        lost_packets = 0;
     }
+
+    // Packets the receive loop saw skipped in the RTP sequence (summed per session).
+    std::uint32_t lost_packets = 0;
 
     // PcmSink — called from the depacketizer (same task).
     void push(const std::int16_t* samples, std::size_t n) override
     {
         if (n > ring_.capacity) { samples += (n - ring_.capacity); n = ring_.capacity; }
-        if (ring_.available_write() < n) ring_.read += (n - ring_.available_write()); // drop oldest
+        if (ring_.available_write() < n) { ring_.read += (n - ring_.available_write()); ++overruns_; } // drop oldest
         ring_.push(samples, n);
     }
     void push_silence(std::size_t n) override
@@ -211,14 +233,72 @@ public:
     {
         if (!playing_) {
             if (ring_.available_read() < kPrerollSamples) return;
+            // Packets queued in the socket before the first service() call
+            // (sender start burst) would otherwise leave the ring sitting
+            // near full for the whole stream, where every sender-side jitter
+            // burst overruns it (= audible clicks). Start at the design
+            // pre-roll and let the ring run at low latency.
+            const std::size_t excess = ring_.available_read() - kPrerollSamples;
+            if (excess > 0) ring_.read += excess;
             playing_ = true;
-            ESP_LOGI(kTag, "playback started (%u samples pre-rolled)",
-                     static_cast<unsigned>(ring_.available_read()));
+            ESP_LOGI(kTag, "playback %s (%u samples pre-rolled, %u skipped)", chunks_played_ ? "resumed" : "started",
+                     static_cast<unsigned>(ring_.available_read()), static_cast<unsigned>(excess));
         }
-        while (M5.Speaker.isPlaying(kSpeakerChannel) < 2 && ring_.available_read() >= kChunkSamples) {
+        // Drift / burst guard: the sender's clock or pacing can run slightly
+        // ahead of the speaker. Rather than dropping a few samples on every
+        // overrun (clicks), resync once to half the ring when it comes within
+        // a chunk of full, and count it so the stream-end log shows it.
+        if (ring_.available_read() > ring_.capacity - kPrerollSamples) {
+            const std::size_t drop = ring_.available_read() - ring_.capacity / 2;
+            ring_.read += drop;
+            ++resyncs_;
+            ESP_LOGW(kTag, "ring near full — resync (dropped %u samples)", static_cast<unsigned>(drop));
+        }
+        if (M5.Speaker.isPlaying(kSpeakerChannel) == 0 && ring_.available_read() < kChunkSamples) {
+            // Speaker ran dry before the next packet landed. Don't resume on
+            // the very next chunk (that turns one late packet into a burst of
+            // 10 ms stutters); re-prime to the pre-roll first.
+            ++underruns_;
+            playing_ = false;
+            return;
+        }
+        // Rate trim. The sender's clock and the speaker's clock differ by up
+        // to ~1 % either way (measured: gst → ring drains ~0.9 %, ffmpeg -re
+        // → ring fills ~2 %); untreated that is a 200 ms re-buffer or a drop
+        // every few tens of seconds. Steer the ring toward kRingTarget by
+        // reading the ring at a slightly off-unity rate (linear interpolation).
+        // Proportional on a heavily low-passed level, ±0.5 % clamp. Two
+        // lessons from 2026-10-09 (test tone, which is the worst case):
+        //   - any integral term makes the loop hunt (the level is already the
+        //     integral of the rate error) → slow pitch wobble;
+        //   - feeding the raw level to the gain turns packet jitter (±40 ms
+        //     of level) straight into pitch jitter → "unstable frequency".
+        // The real clock mismatch is only ~0.1–0.3 %, so filter the level
+        // with a ~10 s time constant and use a small gain: the ratio moves
+        // by well under 0.1 % per second, which is inaudible, and the 500 ms
+        // ring absorbs the slow response.
+        {
+            const float level = static_cast<float>(ring_.available_read());
+            level_lp_ += 0.001f * (level - level_lp_);  // α = 1e-3 per 10 ms chunk → τ ≈ 10 s
+            const float err = (level_lp_ - static_cast<float>(kRingTarget)) / static_cast<float>(kRingTarget);
+            ratio_ = 1.0f + std::clamp(0.01f * err, -0.005f, 0.005f);
+        }
+        while (M5.Speaker.isPlaying(kSpeakerChannel) < 2) {
+            const std::size_t need = static_cast<std::size_t>(phase_ + kChunkSamples * ratio_) + 2;
+            if (ring_.available_read() < need) break;
             auto* buf = scratch_[scratch_idx_];
             scratch_idx_ = (scratch_idx_ + 1) % scratch_.size();
-            ring_.pop(buf, kChunkSamples);
+            float pos = phase_;
+            for (std::size_t k = 0; k < kChunkSamples; ++k) {
+                const std::size_t i = static_cast<std::size_t>(pos);
+                const float frac = pos - static_cast<float>(i);
+                const float a = ring_.at(i), b = ring_.at(i + 1);
+                buf[k] = static_cast<std::int16_t>(a + (b - a) * frac);
+                pos += ratio_;
+            }
+            const std::size_t consumed = static_cast<std::size_t>(pos);
+            phase_ = pos - static_cast<float>(consumed);
+            ring_.read += consumed;
             update_mouth(buf, kChunkSamples);
             M5.Speaker.playRaw(buf, kChunkSamples, kSampleRate, /*stereo=*/false,
                                /*repeat=*/1, kSpeakerChannel, /*stop_current_sound=*/false);
@@ -229,15 +309,22 @@ public:
         const std::uint32_t t = now_ms();
         if (t - last_diag_ms_ > 2000) {
             last_diag_ms_ = t;
-            ESP_LOGD(kTag, "play diag: chunks=%u ring=%uS spk_q=%d",
+            ESP_LOGI(kTag, "play diag: chunks=%u ring=%uS rate=%.4f spk_q=%d overruns=%u underruns=%u lost_pkts=%u",
                      static_cast<unsigned>(chunks_played_),
-                     static_cast<unsigned>(ring_.available_read()),
-                     M5.Speaker.isPlaying(kSpeakerChannel));
+                     static_cast<unsigned>(ring_.available_read()), static_cast<double>(ratio_),
+                     M5.Speaker.isPlaying(kSpeakerChannel), static_cast<unsigned>(overruns_),
+                     static_cast<unsigned>(underruns_), static_cast<unsigned>(lost_packets));
         }
     }
 
 private:
     Ring ring_{};
+    float ratio_ = 1.0f;   // ring samples consumed per output sample (rate trim)
+    float phase_ = 0.0f;   // fractional read position into the ring
+    float level_lp_ = 0.0f;  // low-passed ring level the rate trim acts on
+    std::uint32_t overruns_ = 0;   // ring full → oldest samples dropped
+    std::uint32_t resyncs_ = 0;    // deliberate drops to re-centre the ring
+    std::uint32_t underruns_ = 0;  // speaker queue empty with nothing to feed
     std::array<std::int16_t*, kScratchBuffers> scratch_{};
     std::size_t scratch_idx_ = 0;
     bool playing_ = false;
@@ -596,6 +683,7 @@ void receiver_task(void* /*arg*/)
             const std::int16_t d = static_cast<std::int16_t>(rtp.seq - last_seq);
             if (d <= 0) return;                       // late / duplicate
             lost = static_cast<std::uint32_t>(d - 1);
+            player->lost_packets += lost;
         }
         last_seq = rtp.seq;
         have_seq = true;

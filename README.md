@@ -51,6 +51,17 @@ Pages サイトに反映されます。
 - **スピーカー / オーディオ**: 起動音 (C5–E5–G5、設定で OFF 可)、jtts ランダム
   babble、AAC 録音再生、BLE オーディオ ストリーム、Wi-Fi RTP (L16 / μ-law / AAC) 受信。
   音量は **0..200%** をライブ制御 (BLE / Wi-Fi / 本体 UI)。
+- **Wi-Fi RTP 音声受信**: 機体の UDP **6970** に L16 (48 kHz mono) / μ-law、**6972** に AAC
+  を送ると、約 200 ms 遅れで再生します (受信中は Wi-Fi のパワーセーブを切り、送受の
+  クロック差は再生側で ±0.5 % 以内のレート補正で吸収)。送信側はクロック駆動で送る
+  GStreamer を推奨:
+  ```sh
+  gst-launch-1.0 pulsesrc ! audioconvert ! audioresample \
+    ! "audio/x-raw,rate=48000,channels=1,format=S16BE" \
+    ! rtpL16pay pt=97 mtu=1400 ! udpsink host=stackchan-XXXXXX.local port=6970
+  ```
+  ffmpeg の `-re` はペーシングが粗く (実測で 2 % 速い)、開始時のバーストと合わせて
+  たまに音が飛ぶことがあります。μ-law (PT 0、8 kHz) は帯域が小さいので無線が弱い環境向け。
 - **NeoPixel**: nekomimi 用 LED ストリップ アニメーション (虹 / 単色 / リップシンク
   レベルメーター モード)。
 - **LT タイマー**: 発表時間アシスト。残り N 秒で予告 → 時刻ぴったり → 超過繰返し

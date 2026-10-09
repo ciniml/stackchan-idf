@@ -163,6 +163,11 @@ CONFIG_BT_NIMBLE_SVC_GAP_PPCP_SUPERVISION_TMO=400
 # internal heap; the real esp-aes fix is the ALWAYSINTERNAL value, not
 # trimming ACL buffers.
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+# lwIP per-socket UDP mailbox (default 6). Wi-Fi hands RTP datagrams up in
+# AMPDU bursts of 8–16; with 6 slots the wifi-audio task can't drain them
+# before lwIP drops the rest (2026-10-09: ~40 lost packets per 15 s L16
+# stream, heard as dropouts). 32 slots cost 32 pointers per UDP socket.
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=32
 # IDF enforces WIFI_RX_BA_WIN <= 2 × WIFI_STATIC_RX_BUFFER_NUM at compile
 # time (esp_wifi/src/wifi_init.c). With static RX dropped to 6 the window
 # must be <= 12; pin it to 6 (the conservative default) so a fresh build

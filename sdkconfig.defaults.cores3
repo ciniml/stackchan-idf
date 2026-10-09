@@ -105,11 +105,12 @@ CONFIG_SR_MN_CN_NONE=y
 CONFIG_SR_MN_EN_NONE=y
 # [ASR] DMA対応内部RAMの予約を増やす (mic I2S DMA + AFE + httpd 同居のため)
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
-# [ASR] WiFi 静的 DMA バッファ削減 (mic I2S DMA の連続ブロック確保のため)。
-# ASR/設定用途では WiFi スループット低下は許容。conversation の音声ストリーム
-# 時のみ余裕が減るが、動作は維持。
-CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=3
-CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=4
+# [ASR] WiFi 静的 DMA バッファは 2026-07 に 3 / 4 まで削っていた (mic I2S DMA の
+# 連続ブロック確保のため) が、静的 RX 3 では Wi-Fi RTP の L16 48 kHz (768 kbps、
+# ~70 pkt/s) を取りこぼして再生がプチプチになる (2026-10-09 実機: μ-law 64 kbps は
+# 正常)。2f7bc82 で内部 RAM を ~40 KB 空けたので共通既定 (RX 6 / TX 10) に戻す。
+# ASR モードで mic DMA が取れなくなったら、ここではなく SPIRAM_MALLOC_RESERVE_INTERNAL
+# で調整すること。
 
 # sanoTTS: PSRAM 上の arena を読む速度を上げる実験 (2026-09-15)。キャッシュ容量は
 # 内部 RAM を食うので据え置き、ライン長だけ 64 B にする。
